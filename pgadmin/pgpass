@@ -1,0 +1,5 @@
+postgres:5432:marketmind_core:marketmind:admin
+host.docker.internal:5432:marketmind_pytrends:marketmind:admin
+host.docker.internal:5433:marketmind_oecd:marketmind:admin
+host.docker.internal:5434:marketmind_worldbank:marketmind:admin
+host.docker.internal:5435:marketmind_united_nations_data:marketmind:admin

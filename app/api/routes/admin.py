@@ -1,0 +1,134 @@
+from dataclasses import asdict
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.session import get_session
+from app.schemas.admin import (
+    BackfillEmbeddingsResponse,
+    EnrichmentReportResponse,
+    MergeReportResponse,
+    ReconciliationReportResponse,
+    RefreshReferenceResponse,
+    RefreshWeightsResponse,
+)
+from app.services.catalog_service import CatalogService
+from app.services.enrichment_service import EnrichmentService
+from app.services.merge_service import MergeService
+from app.services.reconciliation_service import ReconciliationService
+from app.services.reference_calculator_service import ReferenceCalculatorService
+from app.services.weight_calibration_service import WeightCalibrationService
+from app.utils.period import current_month_period_key
+
+router = APIRouter(prefix="/admin", tags=["Admin"])
+
+
+@router.post(
+    "/reconciliation/run",
+    response_model=ReconciliationReportResponse,
+    summary="Run coverage reconciliation",
+    description=(
+        "Compares coverage_index against the 4 services' raw observation "
+        "tables to catch drift. Low-priority/diagnostic — meant to be "
+        "invoked periodically by an external cron/systemd timer, no "
+        "in-process scheduler exists yet. See app/services/reconciliation_service.py "
+        "for the exact scope (WorldBank/OECD/UNData only for Fase 1)."
+    ),
+)
+async def run_reconciliation(session: AsyncSession = Depends(get_session)) -> ReconciliationReportResponse:
+    report = await ReconciliationService(session).reconcile()
+    return ReconciliationReportResponse(
+        checked=report.checked,
+        drift=[asdict(d) for d in report.drift],
+        unmappable=[asdict(d) for d in report.unmappable],
+    )
+
+
+@router.post(
+    "/catalog/enrich-mid",
+    response_model=EnrichmentReportResponse,
+    summary="Best-effort google_mid enrichment",
+    description=(
+        "For up to `limit` entities missing google_mid: asks PyTrends for "
+        "suggestions on canonical_title and picks the best deterministic "
+        "match. Never blocks catalog resolution — see app/services/enrichment_service.py."
+    ),
+)
+async def enrich_mid(limit: int = 20, session: AsyncSession = Depends(get_session)) -> EnrichmentReportResponse:
+    report = await EnrichmentService(session).enrich_missing_mids(limit=limit)
+    return EnrichmentReportResponse(
+        checked=report.checked, enriched=report.enriched, no_match=report.no_match, failed=report.failed
+    )
+
+
+@router.post(
+    "/catalog/merge",
+    response_model=MergeReportResponse,
+    summary="Merge duplicate catalog entities",
+    description=(
+        "Merges entities discovered to share the same (enriched) google_mid. "
+        "Run after /admin/catalog/enrich-mid — see app/services/merge_service.py."
+    ),
+)
+async def merge_catalog(session: AsyncSession = Depends(get_session)) -> MergeReportResponse:
+    report = await MergeService(session).merge_duplicates()
+    return MergeReportResponse(merged_pairs=report.merged_pairs)
+
+
+@router.post(
+    "/catalog/backfill-embeddings",
+    response_model=BackfillEmbeddingsResponse,
+    summary="Backfill missing catalog embeddings",
+    description=(
+        "Computes embeddings for up to `limit` entities created while the "
+        "embedding provider was unavailable or unconfigured. Safe to call "
+        "repeatedly — see app/services/catalog_service.py."
+    ),
+)
+async def backfill_embeddings(
+    limit: int = 50, session: AsyncSession = Depends(get_session)
+) -> BackfillEmbeddingsResponse:
+    updated = await CatalogService(session).backfill_missing_embeddings(limit=limit)
+    return BackfillEmbeddingsResponse(updated=updated)
+
+
+@router.post(
+    "/indicators/refresh-reference",
+    response_model=RefreshReferenceResponse,
+    summary="Refresh normalization reference bounds",
+    description=(
+        "Recomputes normalization_reference (p5/p95 percentile bounds) for "
+        "the 9 empirical country-agnostic indicators against the reference "
+        "population (the seeded countries table). Never overwrites an "
+        "already-closed period — see app/services/reference_calculator_service.py."
+    ),
+)
+async def refresh_reference(
+    period_key: str | None = None, session: AsyncSession = Depends(get_session)
+) -> RefreshReferenceResponse:
+    report = await ReferenceCalculatorService(session).refresh(period_key=period_key)
+    return RefreshReferenceResponse(reference_population_sizes=report)
+
+
+@router.post(
+    "/mos/refresh-weights",
+    response_model=RefreshWeightsResponse,
+    summary="Calibrate MOS dimension weights (Rank Order Centroid)",
+    description=(
+        "Writes all 5 dimension weights for the given period using Rank "
+        "Order Centroid (ROC) over an explicit priority order (Demand > "
+        "Economic Readiness > Market Size > Digital Readiness > "
+        "Demographic Sustainability) — a user decision made 2026-07-03 "
+        "after live testing showed Entropy Weight repeatedly undervaluing "
+        "Demand. Weights are fixed (no indicator data is read), but still "
+        "versioned by period_key and never overwrite an already-closed "
+        "period, consistent with normalization_reference. See "
+        "app/services/mos/roc_weights.py."
+    ),
+)
+async def refresh_weights(
+    period_key: str | None = None, session: AsyncSession = Depends(get_session)
+) -> RefreshWeightsResponse:
+    resolved_period_key = period_key or current_month_period_key()
+    weights = await WeightCalibrationService(session).calibrate(period_key=resolved_period_key)
+    return RefreshWeightsResponse(weights=weights)

@@ -1,0 +1,91 @@
+# MarketMind — Capítulo 5: Cálculo del Market Opportunity Score (MOS)
+
+> Transcrito del PDF `MarketMind_Capitulo5 - MOS.pdf`, adjuntado por el usuario el 2026-07-02. Fuente única de verdad para el motor de MOS (`app/services/mos_engine.py`). Ver `docs/marketmind-implementation-plan.md` sección 8 y memoria `marketmind_mos_engine` para las correcciones arquitecturales adoptadas sobre el texto literal (MOS absoluto, no "no existe un MOS absoluto" como dice la sección 5.8 abajo).
+
+## 5.0 Objetivo
+
+El MOS es el indicador final de MarketMind para medir el potencial comercial de un producto en uno o más mercados. No usa datos crudos de las APIs — todos los datos ya fueron transformados en indicadores determinísticos normalizados 0-100 (Capítulo 4). Este capítulo describe cómo esos indicadores se combinan mediante un método multicriterio para producir el MOS.
+
+## 5.1 Flujo general
+
+```
+Consulta del usuario → Validación de países → Obtención de indicadores (Cap. 4)
+→ Construcción de la matriz → Entropy Weight → TOPSIS → MOS (0-100) → LLM explica
+```
+
+El LLM nunca participa en el cálculo del MOS.
+
+## 5.2 Entrada del algoritmo
+
+El usuario informa: producto + lista de países. Si no se informa ningún país, el cálculo no comienza.
+
+> **Corrección adoptada:** como el MOS pasó a ser absoluto e independiente por país (ver 5.8), la exigencia de múltiples países deja de tener sentido matemáticamente — 1 único país es suficiente. Solo sigue vigente "al menos 1 país".
+
+## 5.3 Validación de disponibilidad
+
+Antes de construir la matriz, el Core verifica si hay datos suficientes por país. Cada país necesita tener todos los indicadores **obligatorios** definidos en el Capítulo 4. Si un indicador obligatorio no está disponible: `availability_status = UNAVAILABLE`, el país queda excluido de la comparación. **Sin imputación de datos, sin estimación vía IA.**
+
+## 5.4 Construcción de la matriz de decisión
+
+Después de validar los países, el Core construye la matriz automáticamente: filas = países, columnas = indicadores, todos ya normalizados 0-100 (Cap. 4). Esa normalización garantiza que ningún indicador tenga mayor influencia solo por usar una escala diferente.
+
+## 5.5 Entropy Weight
+
+Método elegido (junto con TOPSIS) porque calcula automáticamente la importancia de cada indicador sin intervención humana — sin pesos manuales, sin influencia humana.
+
+**Principio:** los indicadores que diferencian poco a los mercados comparados (ej. todos los países con Internet ~95%) reciben peso bajo; los indicadores que diferencian mucho (ej. Growth variando de 18 a 77) reciben peso alto. Al final, cada indicador recibe un peso entre 0 y 1, suma total = 1.
+
+> **Corrección adoptada (ver `marketmind_mos_engine`):** el texto literal calcula los pesos **por consulta**, contra los países comparados en la ejecución actual — eso es exactamente la relatividad que el usuario rechazó (ver 5.8). En la implementación real:
+> 1. **Agregación en 2 etapas:** los ~16 indicadores atómicos se agrupan en 5 dimensiones (Demand, Digital Readiness, Economic Readiness, Market Size, Demographic Sustainability) — sub-score por dimensión primero (promedio de los indicadores disponibles de esa dimensión), Entropy Weight corre sobre las 5 dimensiones, no sobre los indicadores crudos. Evita que Demand sea diluido por tener menos indicadores que el bloque macro.
+> 2. **Pesos calculados periódicamente contra una población de referencia fija** (no en cada consulta), versionados por `period_key`, inmutables después de que el período cierra — tabla `indicator_weights`.
+> 3. **El bloque Demand es por producto** (sus indicadores — Trend/Growth/Stability/Regional/Search Intent — son específicos del producto, no tienen una población de países natural). Decisión del usuario (2026-07-02): al calibrar pesos para un producto, el Core garantiza cobertura de ese producto en los ~27 países de referencia (no solo en los países de la consulta del usuario) y calibra el peso del Demand contra esa base fija — el mismo producto siempre genera el mismo peso de Demand, independientemente de qué países se compararon en la consulta.
+
+## 5.6 TOPSIS
+
+Responde: ¿qué país representa la mejor oportunidad de mercado? Imagina un **mercado ideal** (mejores valores posibles en todos los indicadores simultáneamente) y un **mercado pésimo** (peores valores posibles). Cada país se compara con los dos extremos — TOPSIS calcula la distancia a cada uno. El mejor mercado es el más cercano al ideal y más distante del pésimo. Al final, cada país recibe un coeficiente entre 0 y 1. Proceso completamente determinístico, sin IA.
+
+> **Corrección adoptada:** como los indicadores (ahora dimensiones, ver 5.5) ya están en una escala fija 0-100, el vector ideal es siempre **100 en todo** y el anti-ideal siempre **0 en todo** — ya no el mejor/peor observado entre los países de la consulta actual. Esto también elimina el paso clásico de normalización vectorial del TOPSIS (que divide cada valor por la norma euclidiana entre las alternativas comparadas — reintroduciría la relatividad); solo permanece la distancia ponderada, que es lo que de hecho captura la importancia de cada dimensión.
+
+## 5.7 Cálculo del MOS
+
+```
+MOS = TOPSIS × 100
+```
+
+El MOS no es un promedio de los indicadores — representa la posición relativa de cada país después de considerar simultáneamente todos los indicadores, los pesos del Entropy Weight, y la proximidad al mercado ideal vía TOPSIS.
+
+> **Corrección adoptada (techo no compensatorio, ver `marketmind_mos_engine`):** el Cap. 5 no describe esto — decisión adicional del usuario para impedir que indicadores macro (población, PIB, internet) compensen la ausencia de demanda real:
+> ```
+> MOS_final = min(MOS_topsis, teto(TrendScore))
+> TrendScore < 20   → teto = 39
+> 20 ≤ TS < 40       → teto = 59
+> TS ≥ 40            → sem teto
+> ```
+> Cuando el techo reduce el MOS, la respuesta expone `capped_by`/`mos_before_cap` explícitamente.
+
+## 5.8 Interpretación
+
+| MOS | Interpretación |
+|---|---|
+| 90–100 | Excelente oportunidad |
+| 75–89 | Alta oportunidad |
+| 60–74 | Buena oportunidad |
+| 40–59 | Oportunidad moderada |
+| 20–39 | Baja oportunidad |
+| 0–19 | Oportunidad muy baja |
+
+**Texto literal (original en portugués):** "O MOS sempre deve ser interpretado dentro do conjunto de países comparados. Não existe um MOS absoluto."
+
+> **DECISIÓN DEL USUARIO QUE REEMPLAZA ESTE TEXTO (ver `marketmind_mos_engine`):** el usuario rechazó explícitamente esa relatividad. El MOS es absoluto e independiente por país — un "70" significa lo mismo en cualquier consulta, sin importar qué otros países se compararon junto. Esto es viabilizado por las correcciones de las secciones 5.5/5.6 arriba (bounds/pesos/ideal-anti-ideal fijos, no por consulta). **Pendiente para la disertación:** esta sección necesita ser reescrita para reflejar la decisión de implementación.
+
+## 5.9 Explicabilidad
+
+Después de calculado, el MOS va al módulo de IA, que recibe: indicadores normalizados, pesos calculados, resultado del TOPSIS, MOS final. Función única: generar explicación en lenguaje natural. La IA nunca modifica indicadores, pesos, cálculos o MOS — garantiza reproducibilidad total (misma entrada → mismo MOS siempre).
+
+## 5.10 Salida del Core
+
+Cada ejecución devuelve: indicadores normalizados, pesos calculados, resultado TOPSIS, MOS, estado de disponibilidad de los datos. Se mapea a la tabla `mos_results` (ya creada en la Fase 0): `entity_key, country, period_type, period_key, mos, mos_before_cap, capped_by, topsis_score, availability_status, excluded_reason, computed_at`.
+
+## 5.11 Conclusión
+
+El MOS es el resultado final del proceso analítico de MarketMind: indicadores determinísticos (Cap. 4) → Entropy Weight determina la importancia automáticamente → TOPSIS identifica la proximidad al escenario ideal → MOS resume el potencial comercial en una puntuación 0-100. Proceso completamente determinístico, transparente y reproducible — la IA participa solo en la interpretación, nunca en el cálculo.

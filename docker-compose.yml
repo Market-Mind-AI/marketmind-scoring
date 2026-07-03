@@ -1,0 +1,88 @@
+services:
+  marketmind-core-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: marketmind-core-api
+    ports:
+      - "${APP_PORT:-8004}:8000"
+    env_file:
+      - .env
+    extra_hosts:
+      # Lets the container reach the other 3-4 services' Postgres via their
+      # host-exposed ports. See README "Conectividade entre serviços".
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - marketmind-network
+    restart: unless-stopped
+
+  postgres:
+    # pgvector/pgvector:pg16 (not plain postgres:16-alpine): Fase 2's product
+    # catalog resolution pipeline needs the `vector` extension for semantic
+    # (embedding) similarity search — see migration 004 and
+    # app/services/catalog_service.py. Same Postgres 16 major version as
+    # before, so no data-format change for existing installs.
+    image: pgvector/pgvector:pg16
+    container_name: marketmind-core-postgres
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-marketmind_core}
+      POSTGRES_USER: ${DATABASE_USER:-marketmind}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-marketmind_password}
+    ports:
+      - "${DATABASE_PORT_HOST:-5436}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-marketmind} -d ${DATABASE_NAME:-marketmind_core}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - marketmind-network
+    restart: unless-stopped
+
+  # Única instância de pgAdmin do workspace (consolidada aqui). Aponta para os
+  # 5 bancos: o próprio do Core (via nome interno "postgres") + os 4 dos
+  # serviços de coleta (via host.docker.internal, mesma estratégia de
+  # conectividade usada pela API do Core — ver README "Conectividade entre
+  # serviços"). Os outros 4 docker-compose.yml não têm mais pgAdmin.
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: marketmind-core-pgadmin
+    user: root
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@marketmind.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+    ports:
+      - "${PGADMIN_PORT:-5054}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./pgadmin/pgpass:/tmp/pgpass:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    entrypoint: >
+      /bin/sh -c "
+      cp /tmp/pgpass /pgadmin4/pgpass &&
+      chown 5050:5050 /pgadmin4/pgpass &&
+      chmod 600 /pgadmin4/pgpass &&
+      /entrypoint.sh
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - marketmind-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+networks:
+  marketmind-network:
+    driver: bridge

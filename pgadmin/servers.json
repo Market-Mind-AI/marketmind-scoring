@@ -1,0 +1,59 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "marketmind-core",
+      "Group": "MarketMind",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "marketmind_core",
+      "Username": "marketmind",
+      "SSLMode": "prefer",
+      "PassFile": "/pgadmin4/pgpass",
+      "SavePassword": true
+    },
+    "2": {
+      "Name": "marketmind-pytrends",
+      "Group": "MarketMind",
+      "Host": "host.docker.internal",
+      "Port": 5432,
+      "MaintenanceDB": "marketmind_pytrends",
+      "Username": "marketmind",
+      "SSLMode": "prefer",
+      "PassFile": "/pgadmin4/pgpass",
+      "SavePassword": true
+    },
+    "3": {
+      "Name": "marketmind-oecd",
+      "Group": "MarketMind",
+      "Host": "host.docker.internal",
+      "Port": 5433,
+      "MaintenanceDB": "marketmind_oecd",
+      "Username": "marketmind",
+      "SSLMode": "prefer",
+      "PassFile": "/pgadmin4/pgpass",
+      "SavePassword": true
+    },
+    "4": {
+      "Name": "marketmind-worldbank",
+      "Group": "MarketMind",
+      "Host": "host.docker.internal",
+      "Port": 5434,
+      "MaintenanceDB": "marketmind_worldbank",
+      "Username": "marketmind",
+      "SSLMode": "prefer",
+      "PassFile": "/pgadmin4/pgpass",
+      "SavePassword": true
+    },
+    "5": {
+      "Name": "marketmind-undata",
+      "Group": "MarketMind",
+      "Host": "host.docker.internal",
+      "Port": 5435,
+      "MaintenanceDB": "marketmind_united_nations_data",
+      "Username": "marketmind",
+      "SSLMode": "prefer",
+      "PassFile": "/pgadmin4/pgpass",
+      "SavePassword": true
+    }
+  }
+}
