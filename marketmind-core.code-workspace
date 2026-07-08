@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../marketmind-united-nations-data"
+		},
+		{
+			"path": "../marketmind-oecd"
+		},
+		{
+			"path": "../marketmind-worldbank"
+		},
+		{
+			"path": "../marketmind-pytrends"
+		}
+	],
+	"settings": {}
+}
