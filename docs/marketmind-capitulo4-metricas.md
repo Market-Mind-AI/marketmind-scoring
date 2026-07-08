@@ -164,6 +164,11 @@ Campos comunes: `date`, `value`, `country`, `indicator`, `countryiso3code`.
 | `NY.GDP.MKTP.KD.ZG` | GDP growth (annual %) | Crecimiento económico reciente |
 | `SP.POP.TOTL` | Population, total | Escala poblacional |
 | `SP.URB.TOTL.IN.ZS` | Urban population (% of total population) | Urbanización |
+| `NE.CON.PRVT.ZS` | Households and NPISHs final consumption expenditure (% of GDP) | Estructura de demanda — Consumo (C) |
+| `NE.CON.GOVT.ZS` | General government final consumption expenditure (% of GDP) | Estructura de demanda — Gobierno (G), **solo contexto** |
+| `NE.GDI.FTOT.ZS` | Gross fixed capital formation (% of GDP) | Estructura de demanda — Inversión (I) |
+| `NE.RSB.GNFS.ZS` | External balance on goods and services (% of GDP) | Estructura de demanda — Exportaciones netas (NX) |
+| `NE.TRD.GNFS.ZS` | Trade (% of GDP) | Estructura de demanda — Apertura comercial |
 
 ### 4.3.1 GDP per Capita Score
 `y_latest` = último valor válido (ordenado por `date`, sin conversión de moneda — ya viene en US$ corrientes).
@@ -219,6 +224,71 @@ InflationScore = ((max(X) - InflationRaw) / (max(X) - min(X))) * 100
 ```
 `X` = población de referencia. `max(X)=min(X)` → `50`. **No duplicar con OECD para el mismo país/período.**
 
+### 4.3.8 Consumer Spending Score (añadido 2026-07-08)
+
+**Pregunta de negocio:** ¿cuánto del PIB se explica por el consumo privado de los hogares? Primer término de la
+identidad macroeconómica `PIB = C + I + G + NX`, sugerido en conversación externa con el usuario y su colega de
+proyecto, confirmado contra la API real del World Bank antes de implementar.
+`c_latest` = último valor válido (ya viene en % del PIB, no en valor absoluto — a propósito, para no duplicar la
+señal de GDP per Capita Score, ver 4.3.1).
+```
+ConsumerSpendingRaw = c_latest
+ConsumerSpendingScore = ((ConsumerSpendingRaw - min(X)) / (max(X) - min(X))) * 100
+```
+`X` = población de referencia (percentil p5/p95). `max(X)=min(X)` → `50`. Dimensión: Macro Demand Structure.
+
+### 4.3.9 Government Expenditure Score — CONTEXTO, no entra al MOS (añadido 2026-07-08)
+
+**Pregunta de negocio:** ¿cuánto del PIB se explica por el gasto público? Segundo término de la identidad
+(`G`). **No tiene una dirección mayor/menor defendible** — confirmado contra dato real: Francia y Dinamarca
+(~23-24% del PIB, entre los más altos del mundo) son mercados consumidores maduros y ricos, mientras India
+(~11%) es un mercado en desarrollo con poder de compra bien menor. El gasto público en % del PIB refleja
+*modelo económico* (estado de bienestar vs. economía en desarrollo), no calidad del mercado consumidor privado —
+mismo principio que Median Age Fit (4.5.3): "no existe interpretación universal".
+```
+GovernmentExpenditureRaw = g_latest   (guardado, nunca normalizado)
+```
+No se calcula `GovernmentExpenditureScore`. El `raw_value` se persiste en `indicator_values` únicamente para
+alimentar el contexto de la explicación del LLM (ver 4.8) — nunca entra a `dimension_mapping.py`, nunca se agrupa
+en ninguna dimensión, nunca influye en TOPSIS ni en el MOS.
+
+### 4.3.10 Investment Score (añadido 2026-07-08)
+
+**Pregunta de negocio:** ¿cuánto del PIB se reinvierte en capital fijo? Tercer término de la identidad (`I`) —
+proxy de inversión/infraestructura, ya que pocos países publican "inversión en infraestructura" como campo
+propio. `i_latest` = último valor válido (% del PIB).
+```
+InvestmentRaw = i_latest
+InvestmentScore = ((InvestmentRaw - min(X)) / (max(X) - min(X))) * 100
+```
+`X` = población de referencia. `max(X)=min(X)` → `50`. Dimensión: Macro Demand Structure.
+
+### 4.3.11 Net Exports Score (añadido 2026-07-08)
+
+**Pregunta de negocio:** ¿el país es exportador neto o importador neto? Cuarto término de la identidad (`NX`).
+`nx_latest` = último valor válido (% del PIB, puede ser negativo — déficit comercial).
+```
+NetExportsRaw = nx_latest
+NetExportsScore = ((NetExportsRaw - min(X)) / (max(X) - min(X))) * 100
+```
+`X` = población de referencia. `max(X)=min(X)` → `50`. Dimensión: Macro Demand Structure.
+**Limitación reconocida:** superávit comercial no es necesariamente "mejor" para la pregunta de negocio del MOS
+("¿vende bien este producto aquí?") — un país con déficit comercial puede ser un mercado más abierto a
+productos importados. Se mantiene `mayor=mejor` por convención del Cap. 4, junto a Trade Openness Score (4.3.12)
+como señal complementaria, no sustituta — decisión explícita del usuario 2026-07-08.
+
+### 4.3.12 Trade Openness Score (añadido 2026-07-08)
+
+**Pregunta de negocio:** ¿qué tan integrada está esta economía al comercio global? No es uno de los 4 términos
+de la identidad — es una magnitud complementaria (exportaciones + importaciones, no una participación que
+compite por espacio con C/I/G/NX). `to_latest` = último valor válido (% del PIB).
+```
+TradeOpennessRaw = to_latest
+TradeOpennessScore = ((TradeOpennessRaw - min(X)) / (max(X) - min(X))) * 100
+```
+`X` = población de referencia. `max(X)=min(X)` → `50`. Dimensión: Macro Demand Structure. Mayor apertura
+comercial generalmente implica un camino regulatorio/logístico más fácil para que un producto extranjero entre.
+
 ## 4.4 Indicadores derivados de OECD
 
 CPI/HICP mensual interanual. Filtro de serie: `MEASURE=CPI`, `EXPENDITURE=_T` (total, no subcategoría), `TRANSFORMATION=GY` (growth rate 1 año), `ADJUSTMENT=N` (no ajustado estacionalmente), preferir `FREQ=M`. Campos: `TIME_PERIOD`, `OBS_VALUE`, `REF_AREA`, `FREQ`, `MEASURE`, `UNIT_MEASURE`, `EXPENDITURE`, `TRANSFORMATION`.
@@ -240,6 +310,34 @@ InflationVolatilityRaw = std(π_t últimos k períodos)
 InflationVolatilityScore = ((max(X) - InflationVolatilityRaw) / (max(X) - min(X))) * 100
 ```
 `X` = población de referencia. `max(X)=min(X)` → `50`.
+
+### 4.4.3 Real Estate Growth Score (añadido 2026-07-08, condicional)
+
+**Pregunta de negocio:** ¿el mercado inmobiliario está calentándose o enfriándose? Dataflow
+`DSD_AN_HOUSE_PRICES@DF_HOUSE_PRICES` (agencia `OECD.ECO.MPD`), medida `RHP` (Real House Prices), serie
+trimestral. **Confirmado contra dato real (ESP y USA) que el índice está rebasado a 100 por país en su período
+base (2015)** — el *nivel* no es comparable entre países, misma limitación ya documentada para el Trend Score
+de Google Trends (4.2.1: "100 es el pico dentro del período, no volumen absoluto"). Solo una **tasa de
+crecimiento** calculada dentro de la misma serie es válida — rebasear no afecta una razón entre dos puntos de la
+misma serie, mismo principio ya usado en GDP Growth Score (4.3.4).
+
+Variables: `V` = serie trimestral ordenada por `time_period` descendente, últimos 12 trimestres (~3 años);
+`recent` = promedio de los 4 trimestres más recientes; `old` = promedio de los 4 trimestres más antiguos dentro
+de esa ventana.
+
+Preprocesamiento: **si `n < 8` trimestres (no hay 2 ventanas de 4), indicador `CONDITIONAL` sin valor** — solo
+países OCDE publican este dataflow, nunca es obligatorio.
+```
+RealEstateGrowthRaw = ((recent - old) / max(abs(old), 1)) * 100
+RealEstateGrowthScore = ((RealEstateGrowthRaw - min(X)) / (max(X) - min(X))) * 100
+```
+`X` = población de referencia. `max(X)=min(X)` → `50`. Dimensión: Economic Readiness (no Macro Demand Structure
+— es momentum/efecto riqueza, no uno de los 4 términos de la identidad `C+I+G+NX`).
+
+**Pendiente de optimización (no bloqueante):** el layout posicional de la clave de serie SDMX de este dataflow
+en `marketmind-oecd` (`_SERIES_KEY_LAYOUT`) no fue confirmado contra la datastructure real todavía — la
+colección usa el fallback "all" ya existente en ese servicio (más lento, pero funcional), igual que pasaba con
+CPI antes de confirmarse su layout.
 
 ## 4.5 Indicadores derivados de UN Data
 
@@ -300,6 +398,12 @@ MedianAgeFitScore = AgeFitRaw   (ya es 0-100)
 | Population Growth Score | UN Data | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
 | Net Migration Rate Score | UN Data | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
 | Median Age Fit Score | UN Data + Product Profile | Depende del producto | Condicional | Passthrough (ya 0-100) |
+| Consumer Spending Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
+| Investment Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
+| Net Exports Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
+| Trade Openness Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
+| Government Expenditure Score | World Bank | Sin dirección defendible | **No — contexto únicamente** | Ninguna (nunca se normaliza) |
+| Real Estate Growth Score | OECD | Mayor = mejor | Condicional (solo OCDE) | Min-Max, población de referencia (p5/p95) |
 
 Regional Spread Insight y Rising Query Momentum (PyTrends) **no entran en el MOS v1** — fuera del alcance de la Fase 3.
 
@@ -330,6 +434,11 @@ Cada indicador enviado al motor MOS mantiene valor bruto, score normalizado y fu
 | `calculation_window` | Ventana usada: `3m`, `últimos 12 meses`, `últimos 3 años`, etc. | `calculation_window` |
 | `availability_status` | `AVAILABLE`, `UNAVAILABLE`, `FALLBACK`, `CONDITIONAL` | `availability_status` |
 | `notes` | Explicación breve para auditoría/reporte | `notes` |
+| `business_context` | Frase fija en inglés — qué significa este indicador (contexto para LLM, añadido 2026-07-08) | `business_context` |
+| `interpretation_band` | Very Low/Low/Moderate/High/Very High derivado del `normalized_score` (añadido 2026-07-08) | `interpretation_band` |
+
+`business_context`/`interpretation_band` son determinísticos (`app/services/mos/interpretation.py`), nunca
+generados por el LLM — alimentan la explicación de la Fase 5, no participan del cálculo.
 
 ## 4.9 Conclusión
 

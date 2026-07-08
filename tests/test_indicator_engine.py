@@ -21,6 +21,9 @@ _UNAVAILABLE = RawIndicatorResult(
 )
 # Mirrors the real compute_worldbank_inflation_fallback contract: always FALLBACK by construction (see worldbank.py).
 _FALLBACK_INVERSE = RawIndicatorResult(2.0, IndicatorDirection.INVERSE, "last_3y", AvailabilityStatus.FALLBACK, None)
+_CONDITIONAL_UNAVAILABLE = RawIndicatorResult(
+    None, IndicatorDirection.DIRECT, "last_12q", AvailabilityStatus.CONDITIONAL, "insufficient RHP quarters"
+)
 
 _COUNTRY_LEVEL_TARGETS = [
     f"{_ENGINE}.worldbank_indicators.compute_gdp_per_capita",
@@ -31,6 +34,12 @@ _COUNTRY_LEVEL_TARGETS = [
     f"{_ENGINE}.worldbank_indicators.compute_urbanization",
     f"{_ENGINE}.undata_indicators.compute_population_growth",
     f"{_ENGINE}.undata_indicators.compute_net_migration_rate",
+    # Macro Demand Structure + Real Estate Growth (added 2026-07-08)
+    f"{_ENGINE}.worldbank_indicators.compute_consumer_spending",
+    f"{_ENGINE}.worldbank_indicators.compute_government_expenditure",
+    f"{_ENGINE}.worldbank_indicators.compute_investment",
+    f"{_ENGINE}.worldbank_indicators.compute_net_exports",
+    f"{_ENGINE}.worldbank_indicators.compute_trade_openness",
 ]
 
 _PYTRENDS_TARGETS = {
@@ -69,6 +78,9 @@ def _patched_country_level(
             stack.enter_context(
                 patch(f"{_ENGINE}.oecd_indicators.compute_oecd_inflation_volatility", return_value=oecd_volatility)
             )
+        stack.enter_context(
+            patch(f"{_ENGINE}.oecd_indicators.compute_real_estate_growth", return_value=_CONDITIONAL_UNAVAILABLE)
+        )
         yield
 
 

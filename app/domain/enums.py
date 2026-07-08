@@ -61,10 +61,13 @@ class IndicatorDirection(StrEnum):
 
 
 class IndicatorCode(StrEnum):
-    """Cap. 4 — os 17 indicadores atômicos (16 sempre elegíveis pro MOS +
-    Median Age Fit condicional). Regional Spread Insight e Rising Query
-    Momentum (Cap. 4 §4.2.5/4.2.7) ficam de fora de propósito — o próprio
-    capítulo marca "no entra al MOS v1", são insight de narrativa pra Fase 5."""
+    """Cap. 4 — os indicadores atômicos: 20 elegíveis pro MOS (score
+    normalizado, entram em alguma dimensão) + 2 condicionais (Median Age Fit,
+    Real Estate Growth) + 1 apenas-contexto (Government Expenditure, nunca
+    pontuado — ver marketmind_mos_engine, seção "Government Expenditure").
+    Regional Spread Insight e Rising Query Momentum (Cap. 4 §4.2.5/4.2.7)
+    ficam de fora de propósito — o próprio capítulo marca "no entra al MOS
+    v1", são insight de narrativa pra Fase 5."""
 
     TREND_SCORE = "trend_score"
     GROWTH_SCORE = "growth_score"
@@ -83,6 +86,14 @@ class IndicatorCode(StrEnum):
     POPULATION_GROWTH_SCORE = "population_growth_score"
     NET_MIGRATION_RATE_SCORE = "net_migration_rate_score"
     MEDIAN_AGE_FIT_SCORE = "median_age_fit_score"
+    # Macro Demand Structure (added 2026-07-08, GDP = C + I + G + NX identity)
+    CONSUMER_SPENDING_SCORE = "consumer_spending_score"
+    INVESTMENT_SCORE = "investment_score"
+    NET_EXPORTS_SCORE = "net_exports_score"
+    TRADE_OPENNESS_SCORE = "trade_openness_score"
+    GOVERNMENT_EXPENDITURE_SCORE = "government_expenditure_score"  # context-only, never scored
+    # Economic Readiness addition (added 2026-07-08)
+    REAL_ESTATE_GROWTH_SCORE = "real_estate_growth_score"
 
 
 class NormalizationMethod(StrEnum):
@@ -95,6 +106,10 @@ class NormalizationMethod(StrEnum):
     # Min-Max contra normalization_reference (população de referência, p5/p95)
     MINMAX_REFERENCE = "minmax_reference"
     MINMAX_FIXED = "minmax_fixed"  # Min-Max contra bounds teóricos fixos (Growth Score, Demand Stability/CV)
+    # Sem score — raw_value fica só como contexto pro LLM, nunca normalizado
+    # nem usado em dimension_mapping/TOPSIS (Government Expenditure Score:
+    # sem direção maior/menor defensável, ver marketmind_mos_engine).
+    CONTEXT_ONLY = "context_only"
 
 
 class IndicatorDimension(StrEnum):
@@ -105,3 +120,4 @@ class IndicatorDimension(StrEnum):
     ECONOMIC_READINESS = "economic_readiness"
     MARKET_SIZE = "market_size"
     DEMOGRAPHIC_SUSTAINABILITY = "demographic_sustainability"
+    MACRO_DEMAND_STRUCTURE = "macro_demand_structure"

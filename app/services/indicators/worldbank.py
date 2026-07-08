@@ -9,7 +9,7 @@ import math
 from sqlalchemy import text
 
 from app.db.external import get_external_engine
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorDirection
+from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, IndicatorDirection
 from app.services.indicators.results import RawIndicatorResult
 
 _GDP_PER_CAPITA = "NY.GDP.PCAP.CD"
@@ -19,6 +19,36 @@ _INTERNET = "IT.NET.USER.ZS"
 _GDP_GROWTH = "NY.GDP.MKTP.KD.ZG"
 _POPULATION = "SP.POP.TOTL"
 _URBANIZATION = "SP.URB.TOTL.IN.ZS"
+# Macro Demand Structure (added 2026-07-08, GDP = C + I + G + NX identity —
+# see marketmind_mos_engine). All 4 confirmed live against the real World
+# Bank API before use (Cap. 4 §4.0 "no inventa indicadores"). Used as %GDP
+# shares, not per-capita absolute levels, on purpose — a share doesn't
+# duplicate the GDP-per-capita level signal already in Economic Readiness
+# (same multicollinearity concern as known gap #2).
+_CONSUMER_SPENDING = "NE.CON.PRVT.ZS"  # Households and NPISHs final consumption expenditure (% of GDP)
+_GOVERNMENT_EXPENDITURE = "NE.CON.GOVT.ZS"  # General government final consumption expenditure (% of GDP)
+_INVESTMENT = "NE.GDI.FTOT.ZS"  # Gross fixed capital formation (% of GDP) — proxy for investment/infrastructure
+_NET_EXPORTS = "NE.RSB.GNFS.ZS"  # External balance on goods and services (% of GDP)
+_TRADE_OPENNESS = "NE.TRD.GNFS.ZS"  # Trade (% of GDP) = (exports + imports) / GDP
+
+# Fase 5 (POST /analyze) — which native WDI code(s) must be collected to
+# support each Cap. 4 indicator, reused by both the raw-value functions
+# above (as the private constants) and analysis_service.py's coverage-gap
+# construction, so the two never drift apart.
+RAW_INDICATOR_CODES: dict[IndicatorCode, list[str]] = {
+    IndicatorCode.GDP_PER_CAPITA_SCORE: [_GDP_PER_CAPITA],
+    IndicatorCode.INTERNET_PENETRATION_SCORE: [_INTERNET],
+    IndicatorCode.MOBILE_CONNECTIVITY_SCORE: [_MOBILE],
+    IndicatorCode.GDP_GROWTH_SCORE: [_GDP_GROWTH],
+    IndicatorCode.POPULATION_SCALE_SCORE: [_POPULATION],
+    IndicatorCode.URBANIZATION_SCORE: [_URBANIZATION],
+    IndicatorCode.WORLDBANK_INFLATION_SCORE: [_INFLATION],
+    IndicatorCode.CONSUMER_SPENDING_SCORE: [_CONSUMER_SPENDING],
+    IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE: [_GOVERNMENT_EXPENDITURE],
+    IndicatorCode.INVESTMENT_SCORE: [_INVESTMENT],
+    IndicatorCode.NET_EXPORTS_SCORE: [_NET_EXPORTS],
+    IndicatorCode.TRADE_OPENNESS_SCORE: [_TRADE_OPENNESS],
+}
 
 
 async def _latest_value(country_iso2: str, indicator_code: str) -> float | None:
@@ -139,3 +169,82 @@ async def compute_worldbank_inflation_fallback(country_iso2: str) -> RawIndicato
         avg, IndicatorDirection.INVERSE, "last_3y", AvailabilityStatus.FALLBACK,
         f"k={k}, WB fallback (OECD unavailable)",
     )  # fmt: skip
+
+
+async def compute_consumer_spending(country_iso2: str) -> RawIndicatorResult:
+    """Macro Demand Structure — Consumer Spending Score. C in GDP = C+I+G+NX.
+    ConsumerSpendingRaw = latest household final consumption expenditure,
+    % of GDP. Mayor = mejor (a bigger private-consumption share signals a
+    more consumer-driven economy)."""
+    value = await _latest_value(country_iso2, _CONSUMER_SPENDING)
+    if value is None:
+        return RawIndicatorResult(
+            None, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.UNAVAILABLE,
+            f"worldbank_observations: no {_CONSUMER_SPENDING} value",
+        )  # fmt: skip
+    return RawIndicatorResult(value, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.AVAILABLE, None)
+
+
+async def compute_government_expenditure(country_iso2: str) -> RawIndicatorResult:
+    """Context-only — Government Expenditure. G in GDP = C+I+G+NX. No
+    defensible mayor/menor direction for "is this a good market to sell a
+    private product in": France/Denmark (~23-24% of GDP, among the highest
+    in the world) and India (~11%) show this reflects economic *model*
+    (welfare state vs. developing economy), not consumer-market quality —
+    confirmed against live World Bank data, see marketmind_mos_engine.
+    availability_status is AVAILABLE but the caller must route this through
+    NormalizationMethod.CONTEXT_ONLY (never scored, never enters a
+    dimension)."""
+    value = await _latest_value(country_iso2, _GOVERNMENT_EXPENDITURE)
+    if value is None:
+        return RawIndicatorResult(
+            None, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.UNAVAILABLE,
+            f"worldbank_observations: no {_GOVERNMENT_EXPENDITURE} value",
+        )  # fmt: skip
+    return RawIndicatorResult(value, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.AVAILABLE, None)
+
+
+async def compute_investment(country_iso2: str) -> RawIndicatorResult:
+    """Macro Demand Structure — Investment Score. I in GDP = C+I+G+NX.
+    InvestmentRaw = latest gross fixed capital formation, % of GDP (proxy
+    for investment/infrastructure — few countries publish "infrastructure
+    investment" directly). Mayor = mejor."""
+    value = await _latest_value(country_iso2, _INVESTMENT)
+    if value is None:
+        return RawIndicatorResult(
+            None, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.UNAVAILABLE,
+            f"worldbank_observations: no {_INVESTMENT} value",
+        )  # fmt: skip
+    return RawIndicatorResult(value, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.AVAILABLE, None)
+
+
+async def compute_net_exports(country_iso2: str) -> RawIndicatorResult:
+    """Macro Demand Structure — Net Exports Score. NX in GDP = C+I+G+NX.
+    NetExportsRaw = latest external balance on goods and services, % of GDP
+    (can be negative — a trade deficit). Mayor = mejor per Cap. 4's default
+    convention; kept alongside Trade Openness Score (not a replacement) per
+    explicit user decision 2026-07-08 — see marketmind_mos_engine."""
+    value = await _latest_value(country_iso2, _NET_EXPORTS)
+    if value is None:
+        return RawIndicatorResult(
+            None, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.UNAVAILABLE,
+            f"worldbank_observations: no {_NET_EXPORTS} value",
+        )  # fmt: skip
+    return RawIndicatorResult(value, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.AVAILABLE, None)
+
+
+async def compute_trade_openness(country_iso2: str) -> RawIndicatorResult:
+    """Macro Demand Structure — Trade Openness Score. Not one of the 4
+    C+I+G+NX terms itself, but a complementary structural signal (added
+    2026-07-08 alongside Net Exports, not instead of it — see
+    marketmind_mos_engine): (exports + imports) / GDP, a magnitude, not a
+    share that trades off against C/I/G/NX. Mayor = mejor — a more
+    globally-integrated economy is generally an easier one for a foreign
+    product to enter."""
+    value = await _latest_value(country_iso2, _TRADE_OPENNESS)
+    if value is None:
+        return RawIndicatorResult(
+            None, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.UNAVAILABLE,
+            f"worldbank_observations: no {_TRADE_OPENNESS} value",
+        )  # fmt: skip
+    return RawIndicatorResult(value, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.AVAILABLE, None)

@@ -38,6 +38,7 @@ from app.services.indicators import undata as undata_indicators
 from app.services.indicators import worldbank as worldbank_indicators
 from app.services.indicators.normalization import FIXED_BOUNDS_PERIOD_KEY, normalization_method, normalize
 from app.services.indicators.results import RawIndicatorResult
+from app.services.mos.interpretation import INDICATOR_MEANING, score_band
 from app.utils.period import current_month_period_key
 
 
@@ -80,7 +81,10 @@ class IndicatorEngine:
                 IndicatorCode.MOBILE_CONNECTIVITY_SCORE, IndicatorCode.GDP_GROWTH_SCORE,
                 IndicatorCode.POPULATION_SCALE_SCORE, IndicatorCode.URBANIZATION_SCORE,
                 IndicatorCode.POPULATION_GROWTH_SCORE, IndicatorCode.NET_MIGRATION_RATE_SCORE,
-                IndicatorCode.WORLDBANK_INFLATION_SCORE,
+                IndicatorCode.WORLDBANK_INFLATION_SCORE, IndicatorCode.CONSUMER_SPENDING_SCORE,
+                IndicatorCode.INVESTMENT_SCORE, IndicatorCode.NET_EXPORTS_SCORE,
+                IndicatorCode.TRADE_OPENNESS_SCORE, IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE,
+                IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
             ]  # fmt: skip
             return [
                 await self._normalize_and_save(code, DataSource.WORLDBANK, None, country.iso3, period_key, missing)
@@ -100,6 +104,15 @@ class IndicatorEngine:
         population_growth = await undata_indicators.compute_population_growth(un_iso2)
         net_migration = await undata_indicators.compute_net_migration_rate(un_iso2)
 
+        # Macro Demand Structure (2026-07-08, GDP = C+I+G+NX identity) +
+        # Real Estate Growth (Economic Readiness, conditional/OECD-only).
+        consumer_spending = await worldbank_indicators.compute_consumer_spending(wb_iso2)
+        government_expenditure = await worldbank_indicators.compute_government_expenditure(wb_iso2)
+        investment = await worldbank_indicators.compute_investment(wb_iso2)
+        net_exports = await worldbank_indicators.compute_net_exports(wb_iso2)
+        trade_openness = await worldbank_indicators.compute_trade_openness(wb_iso2)
+        real_estate_growth = await oecd_indicators.compute_real_estate_growth(oecd_code)
+
         raws: list[tuple[IndicatorCode, DataSource, RawIndicatorResult]] = [
             (IndicatorCode.GDP_PER_CAPITA_SCORE, DataSource.WORLDBANK, gdp_per_capita),
             (IndicatorCode.INTERNET_PENETRATION_SCORE, DataSource.WORLDBANK, internet),
@@ -109,6 +122,12 @@ class IndicatorEngine:
             (IndicatorCode.URBANIZATION_SCORE, DataSource.WORLDBANK, urbanization),
             (IndicatorCode.POPULATION_GROWTH_SCORE, DataSource.UNDATA, population_growth),
             (IndicatorCode.NET_MIGRATION_RATE_SCORE, DataSource.UNDATA, net_migration),
+            (IndicatorCode.CONSUMER_SPENDING_SCORE, DataSource.WORLDBANK, consumer_spending),
+            (IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE, DataSource.WORLDBANK, government_expenditure),
+            (IndicatorCode.INVESTMENT_SCORE, DataSource.WORLDBANK, investment),
+            (IndicatorCode.NET_EXPORTS_SCORE, DataSource.WORLDBANK, net_exports),
+            (IndicatorCode.TRADE_OPENNESS_SCORE, DataSource.WORLDBANK, trade_openness),
+            (IndicatorCode.REAL_ESTATE_GROWTH_SCORE, DataSource.OECD, real_estate_growth),
         ]
 
         # Inflation: OECD preferred, World Bank fallback — Cap. 4 §4.7 ("no duplicar con OECD").
@@ -225,4 +244,6 @@ class IndicatorEngine:
             calculation_window=raw.calculation_window,
             availability_status=raw.availability_status.value,
             notes=note,
+            business_context=INDICATOR_MEANING.get(indicator_code),
+            interpretation_band=None if normalized_score is None else score_band(normalized_score),
         )

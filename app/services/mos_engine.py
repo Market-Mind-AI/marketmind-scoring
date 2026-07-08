@@ -26,6 +26,7 @@ from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
 from app.services.mos.country_vectors import CountryVectorBuilder
 from app.services.mos.dimension_mapping import check_availability, compute_dimension_subscores
+from app.services.mos.interpretation import mos_band
 from app.services.mos.library_reference import classical_topsis_scores
 from app.services.mos.topsis import topsis_score, trend_score_cap
 from app.utils.period import current_month_period_key
@@ -134,6 +135,7 @@ class MosEngine:
             topsis_score=topsis,
             library_topsis_score=library_topsis,
             library_mos=library_mos,
+            mos_interpretation=mos_band(mos),
             availability_status=AvailabilityStatus.AVAILABLE.value,
             excluded_reason=None,
         )

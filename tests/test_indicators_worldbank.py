@@ -75,3 +75,58 @@ async def test_worldbank_inflation_fallback_marks_status_fallback() -> None:
     assert result.availability_status == AvailabilityStatus.FALLBACK
     assert result.direction == IndicatorDirection.INVERSE
     assert result.raw_value == pytest.approx((4.37 + 5.0 + 3.5) / 3)
+
+
+async def test_consumer_spending_uses_latest_value() -> None:
+    engine = make_mock_engine([result_with_first((55.56,))])
+    with patch("app.services.indicators.worldbank.get_external_engine", return_value=engine):
+        result = await worldbank_indicators.compute_consumer_spending("ES")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 55.56
+    assert result.direction == IndicatorDirection.DIRECT
+
+
+async def test_consumer_spending_unavailable_when_missing() -> None:
+    engine = make_mock_engine([result_with_first(None)])
+    with patch("app.services.indicators.worldbank.get_external_engine", return_value=engine):
+        result = await worldbank_indicators.compute_consumer_spending("ES")
+
+    assert result.availability_status == AvailabilityStatus.UNAVAILABLE
+    assert result.raw_value is None
+
+
+async def test_government_expenditure_uses_latest_value() -> None:
+    engine = make_mock_engine([result_with_first((19.20,))])
+    with patch("app.services.indicators.worldbank.get_external_engine", return_value=engine):
+        result = await worldbank_indicators.compute_government_expenditure("ES")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 19.20
+
+
+async def test_investment_uses_latest_value() -> None:
+    engine = make_mock_engine([result_with_first((20.61,))])
+    with patch("app.services.indicators.worldbank.get_external_engine", return_value=engine):
+        result = await worldbank_indicators.compute_investment("ES")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 20.61
+
+
+async def test_net_exports_accepts_negative_values() -> None:
+    engine = make_mock_engine([result_with_first((-2.5,))])
+    with patch("app.services.indicators.worldbank.get_external_engine", return_value=engine):
+        result = await worldbank_indicators.compute_net_exports("BR")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == -2.5
+
+
+async def test_trade_openness_uses_latest_value() -> None:
+    engine = make_mock_engine([result_with_first((69.45,))])
+    with patch("app.services.indicators.worldbank.get_external_engine", return_value=engine):
+        result = await worldbank_indicators.compute_trade_openness("ES")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 69.45

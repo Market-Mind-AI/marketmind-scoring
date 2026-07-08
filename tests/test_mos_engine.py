@@ -14,6 +14,7 @@ _COUNTRY_LEVEL_CODES = [
     "internet_penetration_score", "mobile_connectivity_score", "gdp_per_capita_score", "gdp_growth_score",
     "population_scale_score", "urbanization_score", "population_growth_score", "net_migration_rate_score",
     "oecd_inflation_level_score", "oecd_inflation_volatility_score",
+    "consumer_spending_score", "investment_score", "net_exports_score", "trade_openness_score",
 ]  # fmt: skip
 
 _PRODUCT_LEVEL_CODES = [
@@ -52,9 +53,14 @@ async def _seed_indicators(
 
 async def _seed_weights(db_session: AsyncSession, *, period_key: str) -> None:
     repo = MosRepository(db_session)
+    # Uniform weight summing to 1 across however many dimensions exist —
+    # with the fixed ideal=100/anti-ideal=0 TOPSIS vector, equal sub-scores
+    # across all dimensions always yield topsis = value/100 as long as the
+    # weights sum to 1, regardless of dimension count (see topsis.py).
+    uniform_weight = 1.0 / len(list(IndicatorDimension))
     for dimension in IndicatorDimension:
         await repo.upsert_weight(
-            indicator_code=dimension.value, dimension=dimension.value, period_key=period_key, weight=0.2,
+            indicator_code=dimension.value, dimension=dimension.value, period_key=period_key, weight=uniform_weight,
             is_closed=False,
         )  # fmt: skip
     await db_session.commit()

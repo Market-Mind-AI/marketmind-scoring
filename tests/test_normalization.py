@@ -29,6 +29,14 @@ class TestNormalizationMethod:
     def test_reference_bounds_indicators(self) -> None:
         assert normalization_method(IndicatorCode.GDP_PER_CAPITA_SCORE) == NormalizationMethod.MINMAX_REFERENCE
         assert normalization_method(IndicatorCode.NET_MIGRATION_RATE_SCORE) == NormalizationMethod.MINMAX_REFERENCE
+        assert normalization_method(IndicatorCode.CONSUMER_SPENDING_SCORE) == NormalizationMethod.MINMAX_REFERENCE
+        assert normalization_method(IndicatorCode.INVESTMENT_SCORE) == NormalizationMethod.MINMAX_REFERENCE
+        assert normalization_method(IndicatorCode.NET_EXPORTS_SCORE) == NormalizationMethod.MINMAX_REFERENCE
+        assert normalization_method(IndicatorCode.TRADE_OPENNESS_SCORE) == NormalizationMethod.MINMAX_REFERENCE
+        assert normalization_method(IndicatorCode.REAL_ESTATE_GROWTH_SCORE) == NormalizationMethod.MINMAX_REFERENCE
+
+    def test_context_only_indicator(self) -> None:
+        assert normalization_method(IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE) == NormalizationMethod.CONTEXT_ONLY
 
 
 class TestNormalize:
@@ -94,6 +102,14 @@ class TestNormalize:
             reference=reference,
         )  # fmt: skip
         assert score == 0.0
+
+    def test_context_only_never_returns_a_score(self) -> None:
+        score, note = normalize(
+            indicator_code=IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE, raw_value=19.2,
+            direction=IndicatorDirection.DIRECT, reference=None,
+        )  # fmt: skip
+        assert score is None
+        assert note is not None and "context-only" in note
 
     def test_fixed_bounds_growth_score(self) -> None:
         reference = _reference(-50, 150)  # matches migration 005 seed

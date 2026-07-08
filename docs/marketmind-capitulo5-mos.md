@@ -40,6 +40,22 @@ Método elegido (junto con TOPSIS) porque calcula automáticamente la importanci
 > 2. **Pesos calculados periódicamente contra una población de referencia fija** (no en cada consulta), versionados por `period_key`, inmutables después de que el período cierra — tabla `indicator_weights`.
 > 3. **El bloque Demand es por producto** (sus indicadores — Trend/Growth/Stability/Regional/Search Intent — son específicos del producto, no tienen una población de países natural). Decisión del usuario (2026-07-02): al calibrar pesos para un producto, el Core garantiza cobertura de ese producto en los ~27 países de referencia (no solo en los países de la consulta del usuario) y calibra el peso del Demand contra esa base fija — el mismo producto siempre genera el mismo peso de Demand, independientemente de qué países se compararon en la consulta.
 
+> **Corrección posterior (2026-07-03, ver `marketmind_mos_engine`):** Entropy Weight fue abandonado como método de producción — pruebas en vivo mostraron que subvaloraba Demand sistemáticamente (2,6%-5% del peso total) por un problema conceptual (variancia ≠ importancia), no solo falta de dato. Reemplazado por **Rank Order Centroid (ROC)**, que convierte un orden de prioridad explícito en pesos matemáticos.
+>
+> **Corrección posterior (2026-07-08, ver `marketmind_mos_engine`):** se añadió una 6ª dimensión, **Macro Demand Structure** (identidad `PIB = C + I + G + NX`), y ROC fue reemplazado por **Rank Reciprocal (RR)** — misma familia de "surrogate weighting" (Barron & Barrett 1996), elegida porque el usuario pidió acercar los pesos de Market Size y Economic Readiness sin ajustar números a mano (ver 5.5.1). Orden de prioridad final: **Demand > Macro Demand Structure > Market Size > Economic Readiness > Digital Readiness > Demographic Sustainability**. Pesos resultantes: 40,82% / 20,41% / 13,61% / 10,20% / 8,16% / 6,80%.
+
+### 5.5.1 Por qué Rank Reciprocal y no un ajuste manual (2026-07-08)
+
+El usuario pidió explícitamente "dejar los pesos más parejos" entre Market Size y Economic Readiness, incluso
+sugiriendo tomar peso de Demand/Macro Demand Structure para redistribuir. Ajustar los números a mano habría
+reintroducido exactamente el "peso arbitrario" que motivó abandonar Entropy Weight (Cap. 4: "sin pesos
+arbitrarios"). En su lugar se cambió la *fórmula* (no los números): Rank Reciprocal
+(`w_j = (1/j) / Σ(1/k, k=1..n)`) mantiene el peso de Demand casi idéntico a ROC (40,82% vs. 40,83%) mientras
+reduce principalmente Macro Demand Structure y redistribuye hacia las dimensiones inferiores — resuelve la
+necesidad real sin violar el principio metodológico central del proyecto. Se descartó Rank Sum (más "parejo"
+todavía, pero le habría costado ~12pp de peso a Demand, reabriendo el problema que motivó la salida de Entropy
+Weight).
+
 ## 5.6 TOPSIS
 
 Responde: ¿qué país representa la mejor oportunidad de mercado? Imagina un **mercado ideal** (mejores valores posibles en todos los indicadores simultáneamente) y un **mercado pésimo** (peores valores posibles). Cada país se compara con los dos extremos — TOPSIS calcula la distancia a cada uno. El mejor mercado es el más cercano al ideal y más distante del pésimo. Al final, cada país recibe un coeficiente entre 0 y 1. Proceso completamente determinístico, sin IA.
@@ -82,9 +98,11 @@ El MOS no es un promedio de los indicadores — representa la posición relativa
 
 Después de calculado, el MOS va al módulo de IA, que recibe: indicadores normalizados, pesos calculados, resultado del TOPSIS, MOS final. Función única: generar explicación en lenguaje natural. La IA nunca modifica indicadores, pesos, cálculos o MOS — garantiza reproducibilidad total (misma entrada → mismo MOS siempre).
 
+> **Adición 2026-07-08 (ver `marketmind_mos_engine`):** el insumo de la Fase 5 (aún no implementada) ahora incluye una capa de contexto determinística por indicador/dimensión/MOS — frase fija de significado de negocio (`business_context`, en inglés) + banda categórica (`interpretation_band`: Very Low/Low/Moderate/High/Very High; `mos_interpretation` para el MOS, las 6 bandas de 5.8) — ver `app/services/mos/interpretation.py`. Sigue siendo 100% determinístico, no generado por LLM; solo cambia qué tan rico es el insumo que el LLM recibe para narrar.
+
 ## 5.10 Salida del Core
 
-Cada ejecución devuelve: indicadores normalizados, pesos calculados, resultado TOPSIS, MOS, estado de disponibilidad de los datos. Se mapea a la tabla `mos_results` (ya creada en la Fase 0): `entity_key, country, period_type, period_key, mos, mos_before_cap, capped_by, topsis_score, availability_status, excluded_reason, computed_at`.
+Cada ejecución devuelve: indicadores normalizados, pesos calculados, resultado TOPSIS, MOS, estado de disponibilidad de los datos. Se mapea a la tabla `mos_results` (ya creada en la Fase 0): `entity_key, country, period_type, period_key, mos, mos_before_cap, capped_by, topsis_score, mos_interpretation, availability_status, excluded_reason, computed_at`. `mos_interpretation` (añadido 2026-07-08) es el rótulo fijo de 5.8 (ej. "Good Opportunity").
 
 ## 5.11 Conclusión
 

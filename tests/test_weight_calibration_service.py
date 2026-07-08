@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import IndicatorDimension
 from app.repositories.mos_repository import MosRepository
-from app.services.mos.roc_weights import PRIORITY_ORDER, roc_weights
+from app.services.mos.rank_reciprocal import PRIORITY_ORDER, rank_reciprocal_weights
 from app.services.weight_calibration_service import WeightCalibrationService
 
 
@@ -13,13 +13,13 @@ def _unique_period_key() -> str:
     return f"2026-07-test-{uuid.uuid4().hex[:8]}"
 
 
-async def test_calibrate_writes_roc_weights_for_all_five_dimensions(db_session: AsyncSession) -> None:
+async def test_calibrate_writes_rank_reciprocal_weights_for_all_six_dimensions(db_session: AsyncSession) -> None:
     period_key = _unique_period_key()
 
     service = WeightCalibrationService(db_session)
     result = await service.calibrate(period_key=period_key)
 
-    expected = roc_weights(PRIORITY_ORDER)
+    expected = rank_reciprocal_weights(PRIORITY_ORDER)
     assert result == {dimension.value: pytest.approx(weight) for dimension, weight in expected.items()}
 
     mos_repo = MosRepository(db_session)

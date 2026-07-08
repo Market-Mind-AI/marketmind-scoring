@@ -113,17 +113,20 @@ async def refresh_reference(
 @router.post(
     "/mos/refresh-weights",
     response_model=RefreshWeightsResponse,
-    summary="Calibrate MOS dimension weights (Rank Order Centroid)",
+    summary="Calibrate MOS dimension weights (Rank Reciprocal)",
     description=(
-        "Writes all 5 dimension weights for the given period using Rank "
-        "Order Centroid (ROC) over an explicit priority order (Demand > "
-        "Economic Readiness > Market Size > Digital Readiness > "
-        "Demographic Sustainability) — a user decision made 2026-07-03 "
-        "after live testing showed Entropy Weight repeatedly undervaluing "
-        "Demand. Weights are fixed (no indicator data is read), but still "
-        "versioned by period_key and never overwrite an already-closed "
-        "period, consistent with normalization_reference. See "
-        "app/services/mos/roc_weights.py."
+        "Writes all 6 dimension weights for the given period using Rank "
+        "Reciprocal (RR) over an explicit priority order (Demand > Macro "
+        "Demand Structure > Market Size > Economic Readiness > Digital "
+        "Readiness > Demographic Sustainability) — Rank Order Centroid "
+        "(ROC) was used from 2026-07-03 (replacing Entropy Weight, which "
+        "live testing showed repeatedly undervaluing Demand) until "
+        "2026-07-08, when adding the Macro Demand Structure dimension "
+        "prompted switching to RR to narrow the Market Size / Economic "
+        "Readiness gap without hand-picking weights. Weights are fixed (no "
+        "indicator data is read), but still versioned by period_key and "
+        "never overwrite an already-closed period, consistent with "
+        "normalization_reference. See app/services/mos/rank_reciprocal.py."
     ),
 )
 async def refresh_weights(

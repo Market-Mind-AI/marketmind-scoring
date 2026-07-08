@@ -19,17 +19,28 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
     IndicatorCode.OECD_INFLATION_LEVEL_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.OECD_INFLATION_VOLATILITY_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.WORLDBANK_INFLATION_SCORE: IndicatorDimension.ECONOMIC_READINESS,
+    IndicatorCode.REAL_ESTATE_GROWTH_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.POPULATION_SCALE_SCORE: IndicatorDimension.MARKET_SIZE,
     IndicatorCode.URBANIZATION_SCORE: IndicatorDimension.MARKET_SIZE,
     IndicatorCode.POPULATION_GROWTH_SCORE: IndicatorDimension.DEMOGRAPHIC_SUSTAINABILITY,
     IndicatorCode.NET_MIGRATION_RATE_SCORE: IndicatorDimension.DEMOGRAPHIC_SUSTAINABILITY,
     IndicatorCode.MEDIAN_AGE_FIT_SCORE: IndicatorDimension.DEMOGRAPHIC_SUSTAINABILITY,
+    # Macro Demand Structure (2026-07-08, GDP = C+I+G+NX) — Government
+    # Expenditure (G) is deliberately NOT here: it's context-only (no
+    # defensible mayor/menor direction), never enters a dimension. See
+    # marketmind_mos_engine.
+    IndicatorCode.CONSUMER_SPENDING_SCORE: IndicatorDimension.MACRO_DEMAND_STRUCTURE,
+    IndicatorCode.INVESTMENT_SCORE: IndicatorDimension.MACRO_DEMAND_STRUCTURE,
+    IndicatorCode.NET_EXPORTS_SCORE: IndicatorDimension.MACRO_DEMAND_STRUCTURE,
+    IndicatorCode.TRADE_OPENNESS_SCORE: IndicatorDimension.MACRO_DEMAND_STRUCTURE,
 }
 
-# Every indicator is mandatory (Cap. 5 §5.3) except Median Age Fit
-# (conditional — only required when the Product Profile defines a target
-# age range, Cap. 4 §4.5.3) and the inflation trio, handled specially below
-# (OECD level+volatility OR the WorldBank fallback alone satisfies it).
+# Every indicator is mandatory (Cap. 5 §5.3) except Median Age Fit and Real
+# Estate Growth (both conditional — the first only required when the
+# Product Profile defines a target age range, Cap. 4 §4.5.3; the second
+# only available for OECD countries, Cap. 4 §4.4.3) and the inflation trio,
+# handled specially below (OECD level+volatility OR the WorldBank fallback
+# alone satisfies it).
 _INFLATION_CODES = frozenset({IndicatorCode.OECD_INFLATION_LEVEL_SCORE, IndicatorCode.OECD_INFLATION_VOLATILITY_SCORE})
 MANDATORY_INDICATORS: frozenset[IndicatorCode] = (
     frozenset(DIMENSION_BY_INDICATOR)
@@ -37,6 +48,7 @@ MANDATORY_INDICATORS: frozenset[IndicatorCode] = (
     - {
         IndicatorCode.MEDIAN_AGE_FIT_SCORE,
         IndicatorCode.WORLDBANK_INFLATION_SCORE,
+        IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
     }
 )
 

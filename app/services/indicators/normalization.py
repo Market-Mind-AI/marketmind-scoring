@@ -31,12 +31,25 @@ _FIXED_BOUNDS_INDICATORS = frozenset(
     }
 )
 
+# Government Expenditure has no defensible mayor/menor direction (confirmed
+# against live World Bank data — France/Denmark ~23-24% of GDP, among the
+# highest in the world, vs. India ~11% — reflects economic model, not
+# consumer-market quality). Never normalized, never enters a dimension;
+# raw_value is kept purely as LLM context. See marketmind_mos_engine.
+_CONTEXT_ONLY_INDICATORS = frozenset(
+    {
+        IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE,
+    }
+)
+
 
 def normalization_method(indicator_code: IndicatorCode) -> NormalizationMethod:
     if indicator_code in _PASSTHROUGH_INDICATORS:
         return NormalizationMethod.PASSTHROUGH
     if indicator_code in _FIXED_BOUNDS_INDICATORS:
         return NormalizationMethod.MINMAX_FIXED
+    if indicator_code in _CONTEXT_ONLY_INDICATORS:
+        return NormalizationMethod.CONTEXT_ONLY
     return NormalizationMethod.MINMAX_REFERENCE
 
 
@@ -51,6 +64,9 @@ def normalize(
     None or clamped/defaulted, so a caller never silently loses the reason."""
     method = normalization_method(indicator_code)
     value = float(raw_value)
+
+    if method == NormalizationMethod.CONTEXT_ONLY:
+        return None, "context-only indicator — no defensible mayor/menor direction, not scored (Cap. 4 §4.3.x)"
 
     if method == NormalizationMethod.PASSTHROUGH:
         return max(0.0, min(100.0, value)), None

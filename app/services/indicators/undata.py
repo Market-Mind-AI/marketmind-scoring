@@ -6,13 +6,23 @@ collection (see resolve_source_country_code), so it matches what's stored."""
 from sqlalchemy import text
 
 from app.db.external import get_external_engine
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorDirection
+from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, IndicatorDirection
 from app.services.indicators.results import RawIndicatorResult
 
 _POPULATION_GROWTH = "POPULATION_GROWTH"
 _NET_MIGRATION = "NET_MIGRATION"
 _TOTAL_POPULATION = "TOTAL_POPULATION"
 _MEDIAN_AGE = "MEDIAN_AGE"
+
+# Fase 5 (POST /analyze) — which native indicator code(s) must be collected
+# to support each Cap. 4 indicator. Net Migration Rate needs *two* separate
+# collected series (NET_MIGRATION and TOTAL_POPULATION, cross-joined by year
+# in compute_net_migration_rate above) — hence a list, not a single code.
+RAW_INDICATOR_CODES: dict[IndicatorCode, list[str]] = {
+    IndicatorCode.POPULATION_GROWTH_SCORE: [_POPULATION_GROWTH],
+    IndicatorCode.NET_MIGRATION_RATE_SCORE: [_NET_MIGRATION, _TOTAL_POPULATION],
+    IndicatorCode.MEDIAN_AGE_FIT_SCORE: [_MEDIAN_AGE],
+}
 
 
 async def _recent_average(country_iso2: str, indicator_code: str, k: int) -> tuple[float | None, int]:
