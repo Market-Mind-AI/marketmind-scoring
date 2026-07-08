@@ -15,7 +15,15 @@ class IndicatorValue(Base):
     normalized_score, direction, calculation_window, availability_status,
     notes). period_type/period_key permitem reprocessar a fórmula bruta sobre
     os registros agregados de vários meses, sem depender de médias de scores
-    já prontos."""
+    já prontos.
+
+    business_context/interpretation_band (2026-07-08, ver
+    marketmind_mos_engine): camada de contexto pro LLM, determinística (não
+    gerada por IA) — a frase fixa de "o que esse indicador significa"
+    (app/services/mos/interpretation.py::INDICATOR_MEANING) e a faixa
+    categórica do normalized_score (Very Low/Low/Moderate/High/Very High).
+    Diferente de `notes`, que é trilha de auditoria (por que caiu em
+    fallback/unavailable), não significado de negócio."""
 
     __tablename__ = "indicator_values"
 
@@ -34,6 +42,8 @@ class IndicatorValue(Base):
     calculation_window: Mapped[str | None] = mapped_column(nullable=True)
     availability_status: Mapped[str] = mapped_column(nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    business_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interpretation_band: Mapped[str | None] = mapped_column(nullable=True)
     computed_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     __table_args__ = (

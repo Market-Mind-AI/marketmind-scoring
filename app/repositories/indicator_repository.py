@@ -103,6 +103,8 @@ class IndicatorRepository:
         calculation_window: str | None,
         availability_status: str,
         notes: str | None,
+        business_context: str | None = None,
+        interpretation_band: str | None = None,
     ) -> IndicatorValue:
         existing = await self.get_value(entity_key, country, indicator_code, period_type, period_key)
         raw_decimal = None if raw_value is None else Decimal(str(raw_value))
@@ -116,6 +118,8 @@ class IndicatorRepository:
             existing.calculation_window = calculation_window
             existing.availability_status = availability_status
             existing.notes = notes
+            existing.business_context = business_context
+            existing.interpretation_band = interpretation_band
             existing.computed_at = utc_now()
             await self._session.flush()
             return existing
@@ -134,6 +138,8 @@ class IndicatorRepository:
             calculation_window=calculation_window,
             availability_status=availability_status,
             notes=notes,
+            business_context=business_context,
+            interpretation_band=interpretation_band,
             computed_at=utc_now(),
         )
         self._session.add(row)

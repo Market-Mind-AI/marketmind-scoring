@@ -19,7 +19,12 @@ class MosResult(Base):
     população comparada, com a normalização vetorial padrão), só pra
     comparação/validação manual contra a nossa implementação corrigida — não
     são usados em nenhuma decisão do produto, ver
-    app/services/mos/library_reference.py."""
+    app/services/mos/library_reference.py.
+
+    mos_interpretation (2026-07-08, ver marketmind_mos_engine): rótulo fixo
+    do Cap. 5 §5.8 (ex.: "Good Opportunity"), calculado por
+    app/services/mos/interpretation.py::mos_band — contexto pro LLM, não
+    afeta o valor de `mos`."""
 
     __tablename__ = "mos_results"
 
@@ -36,6 +41,7 @@ class MosResult(Base):
     topsis_score: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     library_topsis_score: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     library_mos: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    mos_interpretation: Mapped[str | None] = mapped_column(nullable=True)
     availability_status: Mapped[str] = mapped_column(nullable=False)
     excluded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     computed_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)

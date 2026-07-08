@@ -25,6 +25,8 @@ class IndicatorValueResponse(BaseModel):
     calculation_window: str | None
     availability_status: str
     notes: str | None
+    business_context: str | None
+    interpretation_band: str | None
     computed_at: datetime
 
 

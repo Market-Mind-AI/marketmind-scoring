@@ -80,6 +80,7 @@ class MosRepository:
         topsis_score: Decimal | float | None,
         library_topsis_score: Decimal | float | None = None,
         library_mos: Decimal | float | None = None,
+        mos_interpretation: str | None = None,
         availability_status: str,
         excluded_reason: str | None,
     ) -> MosResult:
@@ -97,6 +98,7 @@ class MosRepository:
             existing.topsis_score = topsis_decimal
             existing.library_topsis_score = library_topsis_decimal
             existing.library_mos = library_mos_decimal
+            existing.mos_interpretation = mos_interpretation
             existing.availability_status = availability_status
             existing.excluded_reason = excluded_reason
             existing.computed_at = utc_now()
@@ -115,6 +117,7 @@ class MosRepository:
             topsis_score=topsis_decimal,
             library_topsis_score=library_topsis_decimal,
             library_mos=library_mos_decimal,
+            mos_interpretation=mos_interpretation,
             availability_status=availability_status,
             excluded_reason=excluded_reason,
             computed_at=utc_now(),
