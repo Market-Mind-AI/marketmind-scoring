@@ -11,6 +11,27 @@ def current_month_period_key() -> str:
     return f"{now.year:04d}-{now.month:02d}"
 
 
+def last_n_month_period_keys(n: int) -> list[str]:
+    """Fase 5 (POST /analyze) — the last `n` calendar months up to and
+    including the current one, most recent first (e.g. n=6 from 2026-07 ->
+    ["2026-07", "2026-06", ..., "2026-02"]). Used as the data-freshness
+    window: ensure coverage for each of these period_keys, not a request to
+    compute/return a MOS per month (the final answer is still the current
+    month's MOS — see marketmind_mos_engine)."""
+    if n < 1:
+        raise ValueError("n must be >= 1")
+    now = utc_now()
+    year, month = now.year, now.month
+    keys = []
+    for _ in range(n):
+        keys.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    return keys
+
+
 def month_period_to_date_range(period_key: str) -> tuple[date, date]:
     """Slices PyTrends' continuous series (Fase 1: ``today 5-y`` collected
     once, sliced per request — see memory marketmind_core_architecture

@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -35,3 +36,29 @@ class CatalogEntityResponse(BaseModel):
     category: str | None
     merged_into: uuid.UUID | None
     aliases: list[ProductAliasItem]
+
+
+ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+
+class IdentifyImageRequest(BaseModel):
+    image_base64: str = Field(..., min_length=1)
+    image_media_type: ImageMediaType
+    hint_text: str | None = Field(None, description="Optional user-provided prompt/description alongside the photo")
+
+
+class IdentifyImageResponse(BaseModel):
+    entity_key: uuid.UUID
+    canonical_title: str
+    method: str  # "alias" | "trigram" | "embedding" | "created"
+    # Same field names as AnalyzeRequest (app/schemas/analyze.py) on purpose —
+    # the frontend passes these straight through, with whatever the user
+    # corrected, into POST /analyze.
+    product_name: str
+    brand: str | None
+    category: str | None
+    target_age_min: int | None
+    target_age_max: int | None
+    estimated_price: float | None
+    price_currency: str | None
+    confidence: float

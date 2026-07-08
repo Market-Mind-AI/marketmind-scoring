@@ -5,14 +5,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.repositories.product_repository import ProductRepository
-from app.schemas.catalog import CatalogEntityResponse, CatalogResolveRequest, CatalogResolveResponse, ProductAliasItem
+from app.schemas.catalog import (
+    CatalogEntityResponse,
+    CatalogResolveRequest,
+    CatalogResolveResponse,
+    IdentifyImageRequest,
+    IdentifyImageResponse,
+    ProductAliasItem,
+)
 from app.services.catalog_service import CatalogService
+from app.services.product_identification_service import ProductIdentificationService
+from app.services.vision_client import VisionError
 
 router = APIRouter()
 
 
 def get_catalog_service(session: AsyncSession = Depends(get_session)) -> CatalogService:
     return CatalogService(session)
+
+
+def get_product_identification_service(
+    session: AsyncSession = Depends(get_session),
+) -> ProductIdentificationService:
+    return ProductIdentificationService(session)
 
 
 @router.post(
@@ -37,6 +52,35 @@ async def resolve(
         target_age_min=request.target_age_min,
         target_age_max=request.target_age_max,
     )
+
+
+@router.post(
+    "/catalog/identify-image",
+    response_model=IdentifyImageResponse,
+    summary="Identify a product from a photo",
+    description=(
+        "Synchronous, lightweight — one vision call (Claude), then resolves "
+        "the identified product through the same Fase 2 pipeline as "
+        "POST /catalog/resolve. Deliberately separate from POST /analyze: "
+        "the frontend shows this result and lets the user correct any field "
+        "(product_name, brand, category, target_age_min/max, estimated_price) "
+        "before submitting the full analysis. estimated_price is the one "
+        "field in this service that is an LLM guess, not sourced from a real "
+        "API — never scored, context only."
+    ),
+)
+async def identify_image(
+    request: IdentifyImageRequest,
+    service: ProductIdentificationService = Depends(get_product_identification_service),
+) -> IdentifyImageResponse:
+    try:
+        return await service.identify(
+            image_base64=request.image_base64,
+            image_media_type=request.image_media_type,
+            hint_text=request.hint_text,
+        )
+    except VisionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get(

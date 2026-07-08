@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.routes.admin import router as admin_router
+from app.api.routes.analyze import router as analyze_router
 from app.api.routes.catalog import router as catalog_router
 from app.api.routes.coverage import router as coverage_router
 from app.api.routes.health import router as health_router
@@ -46,4 +47,5 @@ app.include_router(coverage_router, tags=["Coverage"])
 app.include_router(catalog_router, tags=["Catalog"])
 app.include_router(indicators_router, tags=["Indicators"])
 app.include_router(mos_router, tags=["MOS"])
+app.include_router(analyze_router, tags=["Analyze"])
 app.include_router(admin_router)

@@ -1,6 +1,9 @@
-from datetime import date
+from datetime import UTC, date, datetime
+from unittest.mock import patch
 
-from app.utils.period import is_month_closed, month_period_to_date_range
+import pytest
+
+from app.utils.period import is_month_closed, last_n_month_period_keys, month_period_to_date_range
 
 
 def test_month_period_to_date_range_regular_month() -> None:
@@ -35,3 +38,27 @@ def test_is_month_closed_false_before_margin() -> None:
 def test_is_month_closed_across_year_boundary() -> None:
     assert is_month_closed("2026-12", as_of=date(2027, 1, 5)) is False
     assert is_month_closed("2026-12", as_of=date(2027, 1, 6)) is True
+
+
+def test_last_n_month_period_keys_regular_case() -> None:
+    with patch("app.utils.period.utc_now", return_value=datetime(2026, 7, 8, tzinfo=UTC)):
+        assert last_n_month_period_keys(6) == [
+            "2026-07", "2026-06", "2026-05", "2026-04", "2026-03", "2026-02",
+        ]  # fmt: skip
+
+
+def test_last_n_month_period_keys_crosses_year_boundary() -> None:
+    with patch("app.utils.period.utc_now", return_value=datetime(2026, 2, 1, tzinfo=UTC)):
+        assert last_n_month_period_keys(6) == [
+            "2026-02", "2026-01", "2025-12", "2025-11", "2025-10", "2025-09",
+        ]  # fmt: skip
+
+
+def test_last_n_month_period_keys_n_equals_one() -> None:
+    with patch("app.utils.period.utc_now", return_value=datetime(2026, 7, 8, tzinfo=UTC)):
+        assert last_n_month_period_keys(1) == ["2026-07"]
+
+
+def test_last_n_month_period_keys_rejects_non_positive_n() -> None:
+    with pytest.raises(ValueError, match="n must be >= 1"):
+        last_n_month_period_keys(0)

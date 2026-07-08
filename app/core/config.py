@@ -63,7 +63,13 @@ class Settings(BaseSettings):
     # client retries up to 3 times with backoff before its /collect endpoint
     # responds, up to ~96s in degraded conditions — Core's dispatch call was
     # timing out first and reporting a misleading empty-message failure.
-    collection_dispatch_timeout_seconds: float = 120.0
+    # Raised again 2026-07-08: PyTrends is the highest-weighted data source
+    # (Demand dimension) and its own client now retries Google Trends rate
+    # limits far more persistently (see marketmind-pytrends
+    # trends_rate_limit_* settings), up to ~25 minutes worst case for one
+    # gap — this must stay comfortably above that ceiling or Core gives up
+    # on the HTTP call before PyTrends' own retry loop even finishes.
+    collection_dispatch_timeout_seconds: float = 1800.0
 
     # Default freshness window applied to a coverage_index row when the
     # caller doesn't specify one explicitly (see coverage_service).
@@ -77,6 +83,16 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_dimensions: int = 1536
+
+    # Fase 5 — identificação de produto por foto (app/services/vision_client.py,
+    # product_identification_service.py). Anthropic tem endpoint de visão
+    # nativo (ao contrário de embeddings) — usa o SDK oficial, não um stopgap.
+    anthropic_api_key: str = ""
+    # Haiku 4.5 (not Opus): identify-image is a simple, high-volume
+    # classification task (product name/brand/category/age from one photo),
+    # not deep reasoning — cost was the deciding factor (2026-07-08, user
+    # request) over Opus's extra capability, which this task doesn't need.
+    anthropic_vision_model: str = "claude-haiku-4-5-20251001"
 
     # Trigram (pg_trgm) similarity threshold to accept a fuzzy alias match
     # without falling through to the more expensive embedding step.

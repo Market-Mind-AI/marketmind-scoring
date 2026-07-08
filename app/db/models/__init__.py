@@ -1,3 +1,4 @@
+from app.db.models.analysis_request import AnalysisRequest
 from app.db.models.country import Country
 from app.db.models.coverage_index import CoverageIndex
 from app.db.models.indicator_value import IndicatorValue
@@ -11,6 +12,7 @@ from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 
 __all__ = [
+    "AnalysisRequest",
     "CoverageIndex",
     "Country",
     "IndicatorValue",
