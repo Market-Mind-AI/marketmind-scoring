@@ -4,10 +4,23 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import app.db.models  # noqa: F401 — registers every model on Base.metadata before _PRESERVE_TABLES logic reads it
 from app.core.config import settings
+from app.db.base import Base
+from app.db.session import engine as app_engine
 from app.main import app
+
+# Reference/seed data (migration 003's ~27-country basket) — every other
+# table accumulates real rows from tests that hit a real Postgres session
+# (db_session fixture, or a route test's real get_session dependency) and
+# must be wiped between tests, or later tests silently start seeing earlier
+# tests' rows (discovered 2026-07-08: product_catalog grew to 767 rows
+# across repeated local runs, making embedding/trigram "no match expected"
+# tests flaky — see memory marketmind_known_gaps item 14).
+_PRESERVE_TABLES = {"countries"}
 
 
 @pytest.fixture(scope="session")
@@ -15,6 +28,46 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture(autouse=True)
+async def _reset_database_after_test() -> AsyncGenerator[None, None]:
+    """Two unrelated problems, one fixture:
+
+    1. No test here runs inside a rolled-back transaction, so any test that
+       commits real rows (via db_session, or a route hitting the real
+       get_session) leaves them behind for every later test. Truncating
+       every mapped table except the seeded `countries` reference data
+       after each test keeps them isolated without touching how any
+       individual test/fixture is written. Uses a throwaway engine, never
+       app_engine — see point 2.
+    2. Each `TestClient(app)` instantiation (test_catalog_routes.py,
+       test_mos_routes.py, ...) spins up its own anyio event loop/portal, but
+       app/db/session.py's `engine` (used by the real `get_session`
+       dependency those routes hit) is a single process-wide pool. A
+       connection checked out under one TestClient's loop is invalid once
+       that loop closes; disposing the pool after every test forces the
+       next TestClient to open fresh connections under its own loop —
+       otherwise reuse raises "Future ... attached to a different loop".
+       That same stale-connection close can itself raise while dispose()
+       gracefully terminates it (the loop it belonged to is already gone),
+       which would otherwise fail the *next* test in teardown even though
+       nothing about that test is wrong — swallowed here on purpose since
+       the socket is already unusable either way.
+    """
+    yield
+    table_names = [name for name in Base.metadata.tables if name not in _PRESERVE_TABLES]
+    if table_names:
+        reset_engine = create_async_engine(settings.database_url)
+        try:
+            async with reset_engine.begin() as connection:
+                await connection.execute(text(f"TRUNCATE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
+        finally:
+            await reset_engine.dispose()
+    try:
+        await app_engine.dispose()
+    except RuntimeError:
+        pass
 
 
 @pytest.fixture
