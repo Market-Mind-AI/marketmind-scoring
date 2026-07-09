@@ -3,7 +3,15 @@ indicators (docs/marketmind-capitulo4-metricas.md). Reads directly from
 PyTrends' own database (read-only, via app/db/external.py) — same pattern as
 reconciliation_service/enrichment_service, never writes there.
 
-Only MONTH period slicing is implemented — see app/utils/period.py.
+Trend/Growth/Demand Stability read over a rolling 6-month window ending
+today (2026-07-08 fix), not the single calendar month named by period_key —
+Google Trends never has data for the month still in progress (a few days'
+lag plus weekly granularity means the freshest point is always in a
+previous month), so filtering to exactly period_key's month structurally
+always returned zero rows for a "compute this month's MOS now" request.
+period_key still labels which month's MOS this is (calculation_window),
+it just no longer bounds the query. Only MONTH period_key labeling is
+implemented — see app/utils/period.py.
 """
 
 import math
@@ -15,7 +23,16 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.db.external import get_external_engine
 from app.domain.enums import AvailabilityStatus, DataSource, IndicatorDirection
 from app.services.indicators.results import RawIndicatorResult
-from app.utils.period import month_period_to_date_range
+from app.utils.period import last_n_month_period_keys, month_period_to_date_range
+from app.utils.time import utc_now
+
+_TREND_WINDOW_MONTHS = 6
+
+
+def _six_month_window() -> tuple[date, date]:
+    period_keys = last_n_month_period_keys(_TREND_WINDOW_MONTHS)
+    start = month_period_to_date_range(period_keys[-1])[0]  # oldest month in the window, most-recent-first list
+    return start, utc_now().date()
 
 _TRANSACTIONAL_TERMS = ["amazon", "lidl", "comprar", "compra", "buy", "price", "precio", "oferta", "deal"]
 _EVALUATION_TERMS = ["best", "mejor", "review", "opiniones", "comparativa", "vs", "top"]
@@ -39,8 +56,8 @@ async def _fetch_interest_series(
 
 
 async def compute_trend_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.1 — TrendRaw = mean(v_i), n >= 2 required."""
-    start, end = month_period_to_date_range(period_key)
+    """Cap. 4 §4.2.1 — TrendRaw = mean(v_i), n >= 2 required, over the last 6 months (see module docstring)."""
+    start, end = _six_month_window()
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         series = await _fetch_interest_series(connection, keyword, country_code, start, end)
@@ -66,8 +83,8 @@ async def compute_trend_score(keyword: str, country_code: str, period_key: str) 
 
 async def compute_growth_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
     """Cap. 4 §4.2.2 — GrowthRaw = (media_final - media_inicial) / max(media_inicial, 1) * 100,
-    k = min(30, n // 3), n >= 6 required."""
-    start, end = month_period_to_date_range(period_key)
+    k = min(30, n // 3), n >= 6 required, over the last 6 months (see module docstring)."""
+    start, end = _six_month_window()
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         series = await _fetch_interest_series(connection, keyword, country_code, start, end)
@@ -96,8 +113,9 @@ async def compute_growth_score(keyword: str, country_code: str, period_key: str)
 
 
 async def compute_demand_stability_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev / mean (population stddev)."""
-    start, end = month_period_to_date_range(period_key)
+    """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev / mean (population stddev),
+    over the last 6 months (see module docstring)."""
+    start, end = _six_month_window()
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         series = await _fetch_interest_series(connection, keyword, country_code, start, end)

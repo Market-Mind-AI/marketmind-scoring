@@ -130,15 +130,16 @@ class IndicatorEngine:
             (IndicatorCode.REAL_ESTATE_GROWTH_SCORE, DataSource.OECD, real_estate_growth),
         ]
 
-        # Inflation: OECD preferred, World Bank fallback — Cap. 4 §4.7 ("no duplicar con OECD").
-        oecd_level = await oecd_indicators.compute_oecd_inflation_level(oecd_code)
-        if oecd_level.availability_status == AvailabilityStatus.AVAILABLE:
-            oecd_volatility = await oecd_indicators.compute_oecd_inflation_volatility(oecd_code)
-            raws.append((IndicatorCode.OECD_INFLATION_LEVEL_SCORE, DataSource.OECD, oecd_level))
-            raws.append((IndicatorCode.OECD_INFLATION_VOLATILITY_SCORE, DataSource.OECD, oecd_volatility))
-        else:
-            wb_inflation = await worldbank_indicators.compute_worldbank_inflation_fallback(wb_iso2)
-            raws.append((IndicatorCode.WORLDBANK_INFLATION_SCORE, DataSource.WORLDBANK, wb_inflation))
+        # Inflation: World Bank only (2026-07-08) — OECD's CPI series was
+        # removed as a source. marketmind-oecd doesn't persist the
+        # EXPENDITURE/TRANSFORMATION/ADJUSTMENT dimensions Cap. 4 needs to
+        # isolate a clean annual-growth series, so `measure='CPI'` alone
+        # was averaging several unrelated rebased sub-indices together
+        # (confirmed live: same time_period, wildly different values —
+        # e.g. Spain "124% inflation" was actually a mix of index levels,
+        # not a real annual rate). See marketmind_mos_engine.
+        inflation = await worldbank_indicators.compute_inflation(wb_iso2)
+        raws.append((IndicatorCode.WORLDBANK_INFLATION_SCORE, DataSource.WORLDBANK, inflation))
 
         return [
             await self._normalize_and_save(code, source, None, country.iso3, period_key, raw)
@@ -221,9 +222,14 @@ class IndicatorEngine:
             method = normalization_method(indicator_code)
             reference = None
             if method == NormalizationMethod.MINMAX_FIXED:
-                reference = await self._indicator_repo.get_reference(indicator_code.value, FIXED_BOUNDS_PERIOD_KEY)
-            elif method == NormalizationMethod.MINMAX_REFERENCE:
-                reference = await self._indicator_repo.get_reference(indicator_code.value, period_key)
+                # Self-widening (never narrows) — see
+                # indicator_repository.py::widen_reference_bounds. Never
+                # compares this country against any other country in the
+                # same request, only against its own indicator's fixed,
+                # absolute yardstick.
+                reference = await self._indicator_repo.widen_reference_bounds(
+                    indicator_code.value, FIXED_BOUNDS_PERIOD_KEY, float(raw.raw_value)
+                )
 
             normalized_score, normalize_note = normalize(
                 indicator_code=indicator_code, raw_value=raw.raw_value, direction=raw.direction, reference=reference

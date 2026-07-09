@@ -155,10 +155,11 @@ async def compute_urbanization(country_iso2: str) -> RawIndicatorResult:
     )
 
 
-async def compute_worldbank_inflation_fallback(country_iso2: str) -> RawIndicatorResult:
-    """Cap. 4 §4.3.7 — fallback only, caller must have already confirmed
-    OECD has no usable series for this country/period. availability_status
-    is FALLBACK, not AVAILABLE, by construction."""
+async def compute_inflation(country_iso2: str) -> RawIndicatorResult:
+    """Cap. 4 §4.3.7 — sole inflation source (2026-07-08: OECD's CPI path
+    was removed, see marketmind_mos_engine — marketmind-oecd doesn't
+    persist the dimensions needed to isolate a clean annual-growth series).
+    InflationRaw = mean of last k=min(3, years available)."""
     avg, k = await _recent_average(country_iso2, _INFLATION, 3)
     if avg is None:
         return RawIndicatorResult(
@@ -166,8 +167,7 @@ async def compute_worldbank_inflation_fallback(country_iso2: str) -> RawIndicato
             f"worldbank_observations: no {_INFLATION} value (Cap. 4 §4.3.7)",
         )  # fmt: skip
     return RawIndicatorResult(
-        avg, IndicatorDirection.INVERSE, "last_3y", AvailabilityStatus.FALLBACK,
-        f"k={k}, WB fallback (OECD unavailable)",
+        avg, IndicatorDirection.INVERSE, "last_3y", AvailabilityStatus.AVAILABLE, f"k={k}"
     )  # fmt: skip
 
 

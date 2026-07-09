@@ -16,8 +16,6 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
     IndicatorCode.MOBILE_CONNECTIVITY_SCORE: IndicatorDimension.DIGITAL_READINESS,
     IndicatorCode.GDP_PER_CAPITA_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.GDP_GROWTH_SCORE: IndicatorDimension.ECONOMIC_READINESS,
-    IndicatorCode.OECD_INFLATION_LEVEL_SCORE: IndicatorDimension.ECONOMIC_READINESS,
-    IndicatorCode.OECD_INFLATION_VOLATILITY_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.WORLDBANK_INFLATION_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.REAL_ESTATE_GROWTH_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.POPULATION_SCALE_SCORE: IndicatorDimension.MARKET_SIZE,
@@ -38,19 +36,13 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
 # Every indicator is mandatory (Cap. 5 §5.3) except Median Age Fit and Real
 # Estate Growth (both conditional — the first only required when the
 # Product Profile defines a target age range, Cap. 4 §4.5.3; the second
-# only available for OECD countries, Cap. 4 §4.4.3) and the inflation trio,
-# handled specially below (OECD level+volatility OR the WorldBank fallback
-# alone satisfies it).
-_INFLATION_CODES = frozenset({IndicatorCode.OECD_INFLATION_LEVEL_SCORE, IndicatorCode.OECD_INFLATION_VOLATILITY_SCORE})
-MANDATORY_INDICATORS: frozenset[IndicatorCode] = (
-    frozenset(DIMENSION_BY_INDICATOR)
-    - _INFLATION_CODES
-    - {
-        IndicatorCode.MEDIAN_AGE_FIT_SCORE,
-        IndicatorCode.WORLDBANK_INFLATION_SCORE,
-        IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
-    }
-)
+# only available for OECD countries, Cap. 4 §4.4.3). Inflation
+# (WORLDBANK_INFLATION_SCORE) is mandatory like any other indicator now
+# that OECD is no longer an alternative source (2026-07-08).
+MANDATORY_INDICATORS: frozenset[IndicatorCode] = frozenset(DIMENSION_BY_INDICATOR) - {
+    IndicatorCode.MEDIAN_AGE_FIT_SCORE,
+    IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
+}
 
 
 def _is_present(indicator_values: dict[str, IndicatorValue], code: IndicatorCode) -> bool:
@@ -65,12 +57,6 @@ def check_availability(indicator_values: dict[str, IndicatorValue]) -> str | Non
     if the country is eligible for MOS, or a human-readable exclusion
     reason otherwise (never silently drops the country)."""
     missing = [code.value for code in MANDATORY_INDICATORS if not _is_present(indicator_values, code)]
-    inflation_ok = _is_present(indicator_values, IndicatorCode.OECD_INFLATION_LEVEL_SCORE) or _is_present(
-        indicator_values, IndicatorCode.WORLDBANK_INFLATION_SCORE
-    )
-    if not inflation_ok:
-        missing.append("inflation (neither OECD nor WorldBank fallback available)")
-
     if missing:
         return "Missing mandatory indicator(s): " + ", ".join(missing)
     return None

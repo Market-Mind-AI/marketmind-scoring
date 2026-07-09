@@ -19,8 +19,6 @@ _AVAILABLE_INVERSE = RawIndicatorResult(2.0, IndicatorDirection.INVERSE, "last_3
 _UNAVAILABLE = RawIndicatorResult(
     None, IndicatorDirection.DIRECT, "y_latest", AvailabilityStatus.UNAVAILABLE, "no data"
 )
-# Mirrors the real compute_worldbank_inflation_fallback contract: always FALLBACK by construction (see worldbank.py).
-_FALLBACK_INVERSE = RawIndicatorResult(2.0, IndicatorDirection.INVERSE, "last_3y", AvailabilityStatus.FALLBACK, None)
 _CONDITIONAL_UNAVAILABLE = RawIndicatorResult(
     None, IndicatorDirection.DIRECT, "last_12q", AvailabilityStatus.CONDITIONAL, "insufficient RHP quarters"
 )
@@ -55,29 +53,20 @@ def _unique_period_key() -> str:
     """Not a real 'YYYY-MM' period — fine here since every pytrends compute_*
     call is mocked in this file, so nothing ever parses it as a date. Unique
     per test so reruns against a persistent (not recreated) dev DB never
-    collide with indicator_values/normalization_reference rows a previous
-    run already committed for a fixed literal like "2026-07"."""
+    collide with indicator_values rows a previous run already committed for a
+    fixed literal like "2026-07". (Fixed normalization bounds are keyed on
+    period_key="FIXED", independent of this.)"""
     return f"2026-07-test-{uuid.uuid4().hex[:8]}"
 
 
 @contextmanager
-def _patched_country_level(
-    *, oecd_level: RawIndicatorResult, oecd_volatility: RawIndicatorResult | None = None
-) -> Iterator[None]:
+def _patched_country_level(*, inflation: RawIndicatorResult = _AVAILABLE_INVERSE) -> Iterator[None]:
     with ExitStack() as stack:
         for target in _COUNTRY_LEVEL_TARGETS:
             stack.enter_context(patch(target, return_value=_AVAILABLE_WB))
         stack.enter_context(
-            patch(
-                f"{_ENGINE}.worldbank_indicators.compute_worldbank_inflation_fallback",
-                return_value=_FALLBACK_INVERSE,
-            )
+            patch(f"{_ENGINE}.worldbank_indicators.compute_inflation", return_value=inflation)
         )
-        stack.enter_context(patch(f"{_ENGINE}.oecd_indicators.compute_oecd_inflation_level", return_value=oecd_level))
-        if oecd_volatility is not None:
-            stack.enter_context(
-                patch(f"{_ENGINE}.oecd_indicators.compute_oecd_inflation_volatility", return_value=oecd_volatility)
-            )
         stack.enter_context(
             patch(f"{_ENGINE}.oecd_indicators.compute_real_estate_growth", return_value=_CONDITIONAL_UNAVAILABLE)
         )
@@ -105,42 +94,35 @@ async def test_unknown_country_raises(db_session: AsyncSession) -> None:
 
 async def test_unknown_entity_raises(db_session: AsyncSession) -> None:
     engine = IndicatorEngine(db_session)
-    with _patched_country_level(oecd_level=_UNAVAILABLE), pytest.raises(EntityNotFoundError):
+    with _patched_country_level(), pytest.raises(EntityNotFoundError):
         await engine.compute_all(country_iso3="USA", entity_key=uuid.uuid4(), period_key=_unique_period_key())
 
 
-async def test_country_level_uses_worldbank_inflation_fallback_when_oecd_unavailable(db_session: AsyncSession) -> None:
+async def test_country_level_inflation_from_worldbank_only(db_session: AsyncSession) -> None:
+    # World Bank is the sole inflation source now (OECD path removed
+    # 2026-07-08); it's AVAILABLE like any other WB indicator, no OECD
+    # inflation codes ever appear in the output.
     period_key = _unique_period_key()
+    # gdp_per_capita_score's fixed bound is seeded by migration 010 under
+    # period_key="FIXED"; seed it here too since db_session may run against a
+    # DB where that migration ran, but keep the test self-contained.
     await IndicatorRepository(db_session).upsert_reference(
-        indicator_code="gdp_per_capita_score", period_key=period_key, min_x=0, max_x=100,
-        reference_population_size=27, is_closed=False,
+        indicator_code="gdp_per_capita_score", period_key="FIXED", min_x=500, max_x=100000,
+        reference_population_size=0, is_closed=False,
     )  # fmt: skip
     await db_session.commit()
 
     engine = IndicatorEngine(db_session)
-    with _patched_country_level(oecd_level=_UNAVAILABLE):
+    with _patched_country_level():
         results = await engine.compute_all(country_iso3="USA", period_key=period_key)
 
     by_code = {r.indicator_code: r for r in results}
-    assert by_code["worldbank_inflation_score"].availability_status == "fallback"
+    assert by_code["worldbank_inflation_score"].availability_status == "available"
     assert "oecd_inflation_level_score" not in by_code
     assert "oecd_inflation_volatility_score" not in by_code
-    # gdp_per_capita_score has a reference row -> normalized; others don't -> None + note.
+    # gdp_per_capita_score has a FIXED reference row -> normalized.
     assert by_code["gdp_per_capita_score"].normalized_score is not None
-    assert by_code["mobile_connectivity_score"].normalized_score is None
-    assert by_code["mobile_connectivity_score"].notes is not None
     assert all(r.entity_key is None for r in results)
-
-
-async def test_oecd_available_skips_worldbank_inflation_fallback(db_session: AsyncSession) -> None:
-    engine = IndicatorEngine(db_session)
-    with _patched_country_level(oecd_level=_AVAILABLE_INVERSE, oecd_volatility=_AVAILABLE_INVERSE):
-        results = await engine.compute_all(country_iso3="BRA", period_key=_unique_period_key())
-
-    by_code = {r.indicator_code: r for r in results}
-    assert "oecd_inflation_level_score" in by_code
-    assert "oecd_inflation_volatility_score" in by_code
-    assert "worldbank_inflation_score" not in by_code
 
 
 async def test_product_specific_indicators_computed_with_entity_key(db_session: AsyncSession) -> None:
@@ -150,7 +132,7 @@ async def test_product_specific_indicators_computed_with_entity_key(db_session: 
     trend = RawIndicatorResult(60.0, IndicatorDirection.DIRECT, "2026-07", AvailabilityStatus.AVAILABLE, None)
 
     engine = IndicatorEngine(db_session)
-    with _patched_country_level(oecd_level=_UNAVAILABLE), _patched_pytrends(trend=trend):
+    with _patched_country_level(), _patched_pytrends(trend=trend):
         results = await engine.compute_all(
             country_iso3="USA", entity_key=entity.entity_key, period_key=_unique_period_key()
         )
@@ -174,7 +156,7 @@ async def test_granularity_fallback_marks_indicators_as_fallback(db_session: Asy
 
     engine = IndicatorEngine(db_session)
     with (
-        _patched_country_level(oecd_level=_UNAVAILABLE),
+        _patched_country_level(),
         _patched_pytrends(trend=[_UNAVAILABLE, category_trend], growth=category_growth),
     ):
         results = await engine.compute_all(

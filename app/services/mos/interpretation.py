@@ -29,12 +29,7 @@ INDICATOR_MEANING: dict[IndicatorCode, str] = {
     IndicatorCode.GDP_GROWTH_SCORE: "Is the economy expanding or contracting?",
     IndicatorCode.POPULATION_SCALE_SCORE: "How large is the addressable population?",
     IndicatorCode.URBANIZATION_SCORE: "What share of the population lives in urban areas (easier logistics/retail reach)?",  # noqa: E501
-    IndicatorCode.OECD_INFLATION_LEVEL_SCORE: "How high is recent consumer price inflation?",
-    IndicatorCode.OECD_INFLATION_VOLATILITY_SCORE: "How predictable (vs. erratic) has inflation been?",
-    IndicatorCode.WORLDBANK_INFLATION_SCORE: (
-        "How high is recent consumer price inflation? (World Bank fallback, used only when OECD "
-        "has no series for this country)"
-    ),
+    IndicatorCode.WORLDBANK_INFLATION_SCORE: "How high is recent consumer price inflation?",
     IndicatorCode.POPULATION_GROWTH_SCORE: "Is the population growing or shrinking?",
     IndicatorCode.NET_MIGRATION_RATE_SCORE: "Is the country gaining or losing population through migration?",
     IndicatorCode.MEDIAN_AGE_FIT_SCORE: (

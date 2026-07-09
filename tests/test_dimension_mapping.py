@@ -34,22 +34,15 @@ def _iv(code: str, score: float | None, *, availability_status: str = "available
     )
 
 
-def _full_values(*, oecd_inflation: bool = True) -> dict[str, IndicatorValue]:
-    values = {code: _iv(code, 50.0) for code in _ALL_MANDATORY_CODES}
-    if oecd_inflation:
-        values["oecd_inflation_level_score"] = _iv("oecd_inflation_level_score", 50.0)
-        values["oecd_inflation_volatility_score"] = _iv("oecd_inflation_volatility_score", 50.0)
-    else:
-        values["worldbank_inflation_score"] = _iv("worldbank_inflation_score", 50.0)
-    return values
+def _full_values() -> dict[str, IndicatorValue]:
+    # worldbank_inflation_score is now a plain mandatory indicator (OECD path
+    # removed 2026-07-08), so it's already in _ALL_MANDATORY_CODES.
+    return {code: _iv(code, 50.0) for code in _ALL_MANDATORY_CODES}
 
 
 class TestCheckAvailability:
-    def test_full_set_with_oecd_inflation_is_eligible(self) -> None:
-        assert check_availability(_full_values(oecd_inflation=True)) is None
-
-    def test_full_set_with_worldbank_inflation_fallback_is_eligible(self) -> None:
-        assert check_availability(_full_values(oecd_inflation=False)) is None
+    def test_full_set_is_eligible(self) -> None:
+        assert check_availability(_full_values()) is None
 
     def test_missing_mandatory_indicator_is_excluded(self) -> None:
         values = _full_values()
@@ -58,13 +51,12 @@ class TestCheckAvailability:
         assert reason is not None
         assert "gdp_per_capita_score" in reason
 
-    def test_missing_both_inflation_sources_is_excluded(self) -> None:
-        values = _full_values(oecd_inflation=True)
-        del values["oecd_inflation_level_score"]
-        del values["oecd_inflation_volatility_score"]
+    def test_missing_inflation_is_excluded(self) -> None:
+        values = _full_values()
+        del values["worldbank_inflation_score"]
         reason = check_availability(values)
         assert reason is not None
-        assert "inflation" in reason
+        assert "worldbank_inflation_score" in reason
 
     def test_median_age_fit_absence_does_not_exclude(self) -> None:
         values = _full_values()

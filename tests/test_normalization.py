@@ -23,17 +23,25 @@ class TestNormalizationMethod:
         assert normalization_method(IndicatorCode.MEDIAN_AGE_FIT_SCORE) == NormalizationMethod.PASSTHROUGH
 
     def test_fixed_bounds_indicators(self) -> None:
-        assert normalization_method(IndicatorCode.GROWTH_SCORE) == NormalizationMethod.MINMAX_FIXED
-        assert normalization_method(IndicatorCode.DEMAND_STABILITY_SCORE) == NormalizationMethod.MINMAX_FIXED
-
-    def test_reference_bounds_indicators(self) -> None:
-        assert normalization_method(IndicatorCode.GDP_PER_CAPITA_SCORE) == NormalizationMethod.MINMAX_REFERENCE
-        assert normalization_method(IndicatorCode.NET_MIGRATION_RATE_SCORE) == NormalizationMethod.MINMAX_REFERENCE
-        assert normalization_method(IndicatorCode.CONSUMER_SPENDING_SCORE) == NormalizationMethod.MINMAX_REFERENCE
-        assert normalization_method(IndicatorCode.INVESTMENT_SCORE) == NormalizationMethod.MINMAX_REFERENCE
-        assert normalization_method(IndicatorCode.NET_EXPORTS_SCORE) == NormalizationMethod.MINMAX_REFERENCE
-        assert normalization_method(IndicatorCode.TRADE_OPENNESS_SCORE) == NormalizationMethod.MINMAX_REFERENCE
-        assert normalization_method(IndicatorCode.REAL_ESTATE_GROWTH_SCORE) == NormalizationMethod.MINMAX_REFERENCE
+        # Every scored non-passthrough indicator uses fixed bounds now
+        # (MINMAX_REFERENCE was removed 2026-07-08).
+        for code in (
+            IndicatorCode.GROWTH_SCORE,
+            IndicatorCode.DEMAND_STABILITY_SCORE,
+            IndicatorCode.GDP_PER_CAPITA_SCORE,
+            IndicatorCode.GDP_GROWTH_SCORE,
+            IndicatorCode.POPULATION_SCALE_SCORE,
+            IndicatorCode.MOBILE_CONNECTIVITY_SCORE,
+            IndicatorCode.WORLDBANK_INFLATION_SCORE,
+            IndicatorCode.POPULATION_GROWTH_SCORE,
+            IndicatorCode.NET_MIGRATION_RATE_SCORE,
+            IndicatorCode.CONSUMER_SPENDING_SCORE,
+            IndicatorCode.INVESTMENT_SCORE,
+            IndicatorCode.NET_EXPORTS_SCORE,
+            IndicatorCode.TRADE_OPENNESS_SCORE,
+            IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
+        ):
+            assert normalization_method(code) == NormalizationMethod.MINMAX_FIXED
 
     def test_context_only_indicator(self) -> None:
         assert normalization_method(IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE) == NormalizationMethod.CONTEXT_ONLY

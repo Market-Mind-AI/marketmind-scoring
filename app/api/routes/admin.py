@@ -9,14 +9,12 @@ from app.schemas.admin import (
     EnrichmentReportResponse,
     MergeReportResponse,
     ReconciliationReportResponse,
-    RefreshReferenceResponse,
     RefreshWeightsResponse,
 )
 from app.services.catalog_service import CatalogService
 from app.services.enrichment_service import EnrichmentService
 from app.services.merge_service import MergeService
 from app.services.reconciliation_service import ReconciliationService
-from app.services.reference_calculator_service import ReferenceCalculatorService
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key
 
@@ -90,24 +88,6 @@ async def backfill_embeddings(
 ) -> BackfillEmbeddingsResponse:
     updated = await CatalogService(session).backfill_missing_embeddings(limit=limit)
     return BackfillEmbeddingsResponse(updated=updated)
-
-
-@router.post(
-    "/indicators/refresh-reference",
-    response_model=RefreshReferenceResponse,
-    summary="Refresh normalization reference bounds",
-    description=(
-        "Recomputes normalization_reference (p5/p95 percentile bounds) for "
-        "the 9 empirical country-agnostic indicators against the reference "
-        "population (the seeded countries table). Never overwrites an "
-        "already-closed period — see app/services/reference_calculator_service.py."
-    ),
-)
-async def refresh_reference(
-    period_key: str | None = None, session: AsyncSession = Depends(get_session)
-) -> RefreshReferenceResponse:
-    report = await ReferenceCalculatorService(session).refresh(period_key=period_key)
-    return RefreshReferenceResponse(reference_population_sizes=report)
 
 
 @router.post(

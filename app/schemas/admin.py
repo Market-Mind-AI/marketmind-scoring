@@ -16,10 +16,6 @@ class BackfillEmbeddingsResponse(BaseModel):
     updated: int
 
 
-class RefreshReferenceResponse(BaseModel):
-    reference_population_sizes: dict[str, int]
-
-
 class ReconciliationDriftItem(BaseModel):
     coverage_index_id: str
     source: str

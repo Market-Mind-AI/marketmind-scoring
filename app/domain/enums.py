@@ -61,7 +61,7 @@ class IndicatorDirection(StrEnum):
 
 
 class IndicatorCode(StrEnum):
-    """Cap. 4 — os indicadores atômicos: 20 elegíveis pro MOS (score
+    """Cap. 4 — os indicadores atômicos: 18 elegíveis pro MOS (score
     normalizado, entram em alguma dimensão) + 2 condicionais (Median Age Fit,
     Real Estate Growth) + 1 apenas-contexto (Government Expenditure, nunca
     pontuado — ver marketmind_mos_engine, seção "Government Expenditure").
@@ -80,8 +80,13 @@ class IndicatorCode(StrEnum):
     GDP_GROWTH_SCORE = "gdp_growth_score"
     POPULATION_SCALE_SCORE = "population_scale_score"
     URBANIZATION_SCORE = "urbanization_score"
-    OECD_INFLATION_LEVEL_SCORE = "oecd_inflation_level_score"
-    OECD_INFLATION_VOLATILITY_SCORE = "oecd_inflation_volatility_score"
+    # OECD Inflation Level/Volatility removed 2026-07-08 — marketmind-oecd
+    # doesn't persist the EXPENDITURE/TRANSFORMATION/ADJUSTMENT dimensions
+    # Cap. 4 needs to isolate a clean annual-growth CPI series, so `measure=
+    # 'CPI'` alone was averaging several unrelated rebased sub-indices
+    # together (confirmed live: same time_period, wildly different values).
+    # World Bank's FP.CPI.TOTL.ZG is the sole inflation source now — see
+    # WORLDBANK_INFLATION_SCORE and marketmind_mos_engine.
     WORLDBANK_INFLATION_SCORE = "worldbank_inflation_score"
     POPULATION_GROWTH_SCORE = "population_growth_score"
     NET_MIGRATION_RATE_SCORE = "net_migration_rate_score"
@@ -97,15 +102,22 @@ class IndicatorCode(StrEnum):
 
 
 class NormalizationMethod(StrEnum):
-    """Como o normalized_score é derivado do raw_value — ver Cap. 4 §4.1 e a
-    correção da seção 7 do plano (bounds contra população de referência fixa,
-    não por consulta)."""
+    """Como o normalized_score é derivado do raw_value — ver Cap. 4 §4.1.
+
+    MINMAX_REFERENCE (percentil p5/p95 sobre uma cesta de países de
+    referência) foi removido em 2026-07-08 — decisão do usuário: o produto
+    só coleta dado dos países que o usuário efetivamente pedir em cada
+    /analyze, então a cesta de referência nunca se populava organicamente, e
+    qualquer normalização que dependesse dela estaria implicitamente
+    comparando o país da consulta contra outros países. Todo indicador hoje
+    é PASSTHROUGH, MINMAX_FIXED ou CONTEXT_ONLY — ver marketmind_mos_engine."""
 
     # já é 0-100 (Trend, Regional Demand, Search Intent, Internet%, Urbanização%, Median Age Fit)
     PASSTHROUGH = "passthrough"
-    # Min-Max contra normalization_reference (população de referência, p5/p95)
-    MINMAX_REFERENCE = "minmax_reference"
-    MINMAX_FIXED = "minmax_fixed"  # Min-Max contra bounds teóricos fixos (Growth Score, Demand Stability/CV)
+    # Min-Max contra bounds absolutos fixos por indicador (normalization_reference,
+    # period_key="FIXED") — auto-amplia quando um valor real observado cai fora do
+    # range atual (nunca aperta), mas nunca compara contra outro país da mesma consulta.
+    MINMAX_FIXED = "minmax_fixed"
     # Sem score — raw_value fica só como contexto pro LLM, nunca normalizado
     # nem usado em dimension_mapping/TOPSIS (Government Expenditure Score:
     # sem direção maior/menor defensável, ver marketmind_mos_engine).

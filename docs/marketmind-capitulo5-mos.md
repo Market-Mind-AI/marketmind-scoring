@@ -29,6 +29,8 @@ Antes de construir la matriz, el Core verifica si hay datos suficientes por paí
 
 Después de validar los países, el Core construye la matriz automáticamente: filas = países, columnas = indicadores, todos ya normalizados 0-100 (Cap. 4). Esa normalización garantiza que ningún indicador tenga mayor influencia solo por usar una escala diferente.
 
+> **Corrección adoptada (2026-07-08, ver `marketmind_mos_engine`):** la normalización 0-100 del Cap. 4 usa **límites absolutos fijos por indicador** (auto-ampliables), **no** una población de referencia por percentil ni los países de la consulta. Consecuencia para el MOS: es una escala **absoluta de 0 a 100 por país** (0 = pésimo, 100 = perfecto para ese producto), calculada de forma **independiente por país — sin comparar un país contra otro**. Correr `/analyze` para 1 país o para 20 da exactamente el mismo MOS para cada país. El TOPSIS (5.6) usa ideal=100 / anti-ideal=0 **fijos**, no derivados de los países de la consulta, coherente con esto. Además, OECD Inflation Level/Volatility fueron **eliminados** como indicadores (World Bank es la única fuente de inflación) — ver Cap. 4 §4.4.
+
 ## 5.5 Entropy Weight
 
 Método elegido (junto con TOPSIS) porque calcula automáticamente la importancia de cada indicador sin intervención humana — sin pesos manuales, sin influencia humana.

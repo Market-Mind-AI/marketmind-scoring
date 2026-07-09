@@ -24,7 +24,9 @@ El LLM puede explicar el resultado, pero no calcula ni altera ninguno de estos v
 
 ## 4.1 Normalización común para el MOS
 
-> **CORRECCIÓN ARQUITECTURAL ADOPTADA (ver plan sección 7 y memoria `marketmind_mos_engine`):** el texto de abajo describe Min-Max **por consulta** (`X` = valores solo de los mercados comparados en la ejecución actual). El usuario rechazó esa relatividad — `X` en la implementación real es la **población de referencia fija del catálogo**, versionada por `period_key` en `normalization_reference`, con bounds por **percentil p5/p95** (no min/max literal) para los 9 indicadores país-a-país product-agnostic. Growth Score y Demand Stability (CV) usan límites teóricos fijos (no población empírica) — ver sección 4.6 y el código para los valores exactos. Las fórmulas de **valor bruto** de abajo permanecen exactas; solo el `X` del paso de normalización cambia.
+> **CORRECCIÓN ARQUITECTURAL ADOPTADA (actualizada 2026-07-08, ver memoria `marketmind_mos_engine`):** el texto de abajo describe Min-Max **por consulta** (`X` = valores solo de los mercados comparados en la ejecución actual). El usuario rechazó esa relatividad en dos etapas:
+> 1. Primero se pasó a una **población de referencia fija** con percentil p5/p95 (versionada por `period_key`).
+> 2. **2026-07-08 — decisión final:** se eliminó por completo la normalización por percentil (`MINMAX_REFERENCE`). El producto solo colecta datos de los países que el usuario efectivamente pide en cada `/analyze`, así que una "cesta de referencia" nunca se puebla orgánicamente sin forzar cada análisis a cubrir todos los países de referencia — lo que anula el propósito de la selección por país. **Ahora `X` es un bound absoluto fijo por indicador** (`normalization_reference`, `period_key="FIXED"`), idéntico para un país analizado solo o junto a otros 20 en la misma llamada. Los bounds **se auto-amplían** (nunca se estrechan) la primera vez que un valor real observado cae fuera del rango vigente (`indicator_repository.widen_reference_bounds`), así que la regla absoluta solo gana precisión con el tiempo en vez de recortar un outlier real en un límite adivinado. Las fórmulas de **valor bruto** de abajo permanecen exactas; solo el `X` del paso de normalización cambia. El score de cada indicador ya es información suficiente para saber si un país es bueno o no para el producto — **no se compara contra otros países**.
 
 El MOS necesita comparar indicadores muy diferentes: búsquedas de Google, inflación, población, migración, internet, PIB y regiones. Por eso todos se convierten a una escala común de 0 a 100.
 
@@ -158,7 +160,7 @@ Campos comunes: `date`, `value`, `country`, `indicator`, `countryiso3code`.
 | Código | Nome | Uso |
 |---|---|---|
 | `NY.GDP.PCAP.CD` | GDP per capita (current US$) | Poder económico medio |
-| `FP.CPI.TOTL.ZG` | Inflation, consumer prices (annual %) | Fallback si OECD no disponible |
+| `FP.CPI.TOTL.ZG` | Inflation, consumer prices (annual %) | Única fuente de inflación (2026-07-08; OECD eliminado) |
 | `IT.CEL.SETS.P2` | Mobile cellular subscriptions (per 100 people) | Conectividad móvil |
 | `IT.NET.USER.ZS` | Individuals using the Internet (% of population) | Penetración de internet |
 | `NY.GDP.MKTP.KD.ZG` | GDP growth (annual %) | Crecimiento económico reciente |
@@ -216,13 +218,13 @@ UrbanizationRaw = urb_latest
 UrbanizationScore = UrbanizationRaw   (truncar a [0,100])
 ```
 
-### 4.3.7 World Bank Inflation Score (fallback)
-**Solo usar si OECD no tiene serie CPI adecuada para el país/período.** `k = min(3, años válidos)`.
+### 4.3.7 World Bank Inflation Score (**única fuente de inflación desde 2026-07-08**)
+`FP.CPI.TOTL.ZG` (inflación anual del IPC, ya un % limpio). `k = min(3, años válidos)`.
 ```
 InflationRaw = (Σ π_t últimos k años) / k
 InflationScore = ((max(X) - InflationRaw) / (max(X) - min(X))) * 100
 ```
-`X` = población de referencia. `max(X)=min(X)` → `50`. **No duplicar con OECD para el mismo país/período.**
+`X` = bound fijo `[-5, 50]` (`period_key="FIXED"`, auto-ampliable). **Antes era fallback de OECD; ahora es la única fuente de inflación** — el camino OECD (4.4.1/4.4.2) se eliminó porque `marketmind-oecd` no persiste las dimensiones SDMX (`EXPENDITURE`/`TRANSFORMATION`/`ADJUSTMENT`) necesarias para aislar una serie de crecimiento anual limpia, así que `measure='CPI'` mezclaba varios sub-índices reindexados distintos (confirmado en vivo: mismo `time_period`, valores de 114 a 146). Ver memoria `marketmind_mos_engine`.
 
 ### 4.3.8 Consumer Spending Score (añadido 2026-07-08)
 
@@ -291,25 +293,7 @@ comercial generalmente implica un camino regulatorio/logístico más fácil para
 
 ## 4.4 Indicadores derivados de OECD
 
-CPI/HICP mensual interanual. Filtro de serie: `MEASURE=CPI`, `EXPENDITURE=_T` (total, no subcategoría), `TRANSFORMATION=GY` (growth rate 1 año), `ADJUSTMENT=N` (no ajustado estacionalmente), preferir `FREQ=M`. Campos: `TIME_PERIOD`, `OBS_VALUE`, `REF_AREA`, `FREQ`, `MEASURE`, `UNIT_MEASURE`, `EXPENDITURE`, `TRANSFORMATION`.
-
-**No usar** `consumer confidence`, `disposable income`, `household consumption` — no aparecen en los JSONs recibidos.
-
-### 4.4.1 OECD Inflation Level Score
-`k = min(12, observaciones mensuales válidas)`; `π_recent` = media de los últimos `k`.
-```
-InflationLevelRaw = (Σ π_t últimos k períodos) / k
-InflationLevelScore = ((max(X) - InflationLevelRaw) / (max(X) - min(X))) * 100
-```
-`X` = población de referencia. `max(X)=min(X)` → `50`.
-
-### 4.4.2 OECD Inflation Volatility Score
-Misma serie filtrada del Inflation Level Score. `σ_π` = desviación estándar de los últimos `k` valores (`k = min(12, observaciones válidas)`).
-```
-InflationVolatilityRaw = std(π_t últimos k períodos)
-InflationVolatilityScore = ((max(X) - InflationVolatilityRaw) / (max(X) - min(X))) * 100
-```
-`X` = población de referencia. `max(X)=min(X)` → `50`.
+> **4.4.1 OECD Inflation Level Score y 4.4.2 OECD Inflation Volatility Score — ELIMINADOS 2026-07-08.** El capítulo pedía filtrar la serie SDMX por `MEASURE=CPI`, `EXPENDITURE=_T`, `TRANSFORMATION=GY`, `ADJUSTMENT=N`, pero `marketmind-oecd` solo persiste `REF_AREA/INDICATOR/MEASURE/FREQ/UNIT` — las otras tres dimensiones no quedan almacenadas en `oecd_observations`. Con solo `measure='CPI'`, el mismo `time_period` devuelve varias filas de sub-índices reindexados no relacionados (confirmado en vivo para ESP: 2025-Q4 con valores de 114 a 146), así que el promedio no era una tasa de inflación real. **La inflación ahora viene únicamente de World Bank (`FP.CPI.TOTL.ZG`, ver 4.3.7)**, que ya es un % anual limpio. Reinstaurar 4.4.1/4.4.2 solo si `marketmind-oecd` empieza a persistir la clave SDMX completa. La única métrica OECD activa es Real Estate Growth (4.4.3). Ver memoria `marketmind_mos_engine`.
 
 ### 4.4.3 Real Estate Growth Score (añadido 2026-07-08, condicional)
 
@@ -386,33 +370,30 @@ MedianAgeFitScore = AgeFitRaw   (ya es 0-100)
 | Demand Stability Score | PyTrends | Menor CV = mejor | Sí | Min-Max, bounds **fijos**: `CV ∈ [0, 1]` |
 | Regional Demand Score | PyTrends | Mayor = mejor | Sí | Passthrough (ya 0-100) |
 | Search Intent Score | PyTrends | Mayor = mejor | Sí | Passthrough (ya 0-100) |
-| GDP per Capita Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
+| GDP per Capita Score | World Bank | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[500, 100000]` |
 | Internet Penetration Score | World Bank | Mayor = mejor | Sí | Passthrough (ya 0-100) |
-| Mobile Connectivity Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
-| GDP Growth Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
-| Population Scale Score | World Bank | Mayor = mejor | Sí | Min-Max sobre `ln(pop)`, población de referencia (p5/p95) |
+| Mobile Connectivity Score | World Bank | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[0, 150]` |
+| GDP Growth Score | World Bank | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[-10, 10]` |
+| Population Scale Score | World Bank | Mayor = mejor | Sí | Min-Max sobre `ln(pop)`, bound fijo auto-ampliable `[ln(1M), ln(1.5B)]` |
 | Urbanization Score | World Bank | Mayor = mejor | Sí | Passthrough (ya 0-100) |
-| OECD Inflation Level Score | OECD | Menor = mejor | Sí si disponible | Min-Max, población de referencia (p5/p95) |
-| OECD Inflation Volatility Score | OECD | Menor = mejor | Sí si disponible | Min-Max, población de referencia (p5/p95) |
-| World Bank Inflation Score | World Bank | Menor = mejor | Fallback (solo si OECD ausente) | Min-Max, población de referencia (p5/p95) |
-| Population Growth Score | UN Data | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
-| Net Migration Rate Score | UN Data | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
+| World Bank Inflation Score | World Bank | Menor = mejor | Sí (única fuente de inflación) | Min-Max, bound fijo auto-ampliable `[-5, 50]` |
+| Population Growth Score | UN Data | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[-3, 5]` |
+| Net Migration Rate Score | UN Data | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[-15, 15]` |
 | Median Age Fit Score | UN Data + Product Profile | Depende del producto | Condicional | Passthrough (ya 0-100) |
-| Consumer Spending Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
-| Investment Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
-| Net Exports Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
-| Trade Openness Score | World Bank | Mayor = mejor | Sí | Min-Max, población de referencia (p5/p95) |
+| Consumer Spending Score | World Bank | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[30, 85]` |
+| Investment Score | World Bank | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[15, 45]` |
+| Net Exports Score | World Bank | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[-15, 15]` |
+| Trade Openness Score | World Bank | Mayor = mejor | Sí | Min-Max, bound fijo auto-ampliable `[20, 200]` |
 | Government Expenditure Score | World Bank | Sin dirección defendible | **No — contexto únicamente** | Ninguna (nunca se normaliza) |
-| Real Estate Growth Score | OECD | Mayor = mejor | Condicional (solo OCDE) | Min-Max, población de referencia (p5/p95) |
+| Real Estate Growth Score | OECD | Mayor = mejor | Condicional (solo OCDE) | Min-Max, bound fijo auto-ampliable `[-30, 60]` |
 
-Regional Spread Insight y Rising Query Momentum (PyTrends) **no entran en el MOS v1** — fuera del alcance de la Fase 3.
+Todos los bounds fijos (`period_key="FIXED"`) se auto-amplían cuando un valor real cae fuera del rango (nunca comparan contra otros países). OECD Inflation Level/Volatility fueron eliminados (ver 4.4). Regional Spread Insight y Rising Query Momentum (PyTrends) **no entran en el MOS v1** — fuera del alcance de la Fase 3.
 
 ## 4.7 Reglas para datos ausentes y duplicados
 
 | Situación | Regla |
 |---|---|
-| OECD disponible para inflación | Usar OECD Inflation Level + Volatility. **No** usar World Bank Inflation para el mismo país/período. |
-| OECD no disponible | Usar World Bank Inflation Score como fallback. |
+| Inflación | Única fuente: World Bank `FP.CPI.TOTL.ZG` (el camino OECD se eliminó 2026-07-08, ver 4.4). |
 | UN total population y World Bank population disponibles | Usar World Bank para Population Scale. Usar UN total population **solo** para calcular Net Migration Rate. |
 | `related_topics` top/rising = null | No calcular. Registrar como no disponible. |
 | `trending_rss` disponible | No usar en el MOS (es tendencia general del país, no del producto). |

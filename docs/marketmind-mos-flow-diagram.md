@@ -41,7 +41,7 @@ subgraph DADOS["NIVEL 1 — Dato (directo de la API de cada fuente)"]
         wb4["IT.CEL.SETS.P2<br/>Suscripciones de celular (/100 hab.)"]
         wb5["SP.POP.TOTL<br/>Población total"]
         wb6["SP.URB.TOTL.IN.ZS<br/>Población urbana (%)"]
-        wb7["FP.CPI.TOTL.ZG<br/>Inflación anual (%) — fallback"]
+        wb7["FP.CPI.TOTL.ZG<br/>Inflación anual (%) — única fuente"]
         wb8["NE.CON.PRVT.ZS<br/>Consumo privado (% PIB)"]
         wb9["NE.CON.GOVT.ZS<br/>Gasto de gobierno (% PIB)"]
         wb10["NE.GDI.FTOT.ZS<br/>Formación bruta de capital fijo (% PIB)<br/>proxy de INVERSIÓN/INFRAESTRUCTURA"]
@@ -49,7 +49,6 @@ subgraph DADOS["NIVEL 1 — Dato (directo de la API de cada fuente)"]
         wb12["NE.TRD.GNFS.ZS<br/>Comercio total (% PIB) — export+import"]
     end
     subgraph SRC_OECD["OECD (país)"]
-        oe1["CPI mensual<br/>(MEASURE=CPI, FREQ=M)"]
         oe2["Real House Prices (RHP)<br/>(DSD_AN_HOUSE_PRICES@DF_HOUSE_PRICES)<br/>serie trimestral, últimos ~12 trimestres"]
     end
     subgraph SRC_UN["UN Data (país)"]
@@ -70,9 +69,7 @@ subgraph BASE["NIVEL 2 — Métrica normalizada (indicador determinista, Cap. 4 
     i7["Mobile Connectivity Score"]:::digital
     i8["GDP per Capita Score"]:::economic
     i9["GDP Growth Score"]:::economic
-    i10["OECD Inflation Level Score"]:::economic
-    i11["OECD Inflation Volatility Score"]:::economic
-    i12["World Bank Inflation Score<br/>(fallback, solo si OECD no está disponible)"]:::economic
+    i12["World Bank Inflation Score<br/>(única fuente de inflación)"]:::economic
     i23["Real Estate Growth Score<br/>(condicional, solo OECD)"]:::economic
     i13["Population Scale Score"]:::market
     i14["Urbanization Score"]:::market
@@ -107,9 +104,7 @@ wb3 --> i6
 wb4 --> i7
 wb1 --> i8
 wb2 --> i9
-oe1 --> i10
-oe1 --> i11
-wb7 -.->|"solo si falta OECD"| i12
+wb7 --> i12
 oe2 -.->|"crecimiento, no nivel — condicional"| i23
 wb5 --> i13
 wb6 --> i14
@@ -131,9 +126,7 @@ i6 --> d2
 i7 --> d2
 i8 --> d3
 i9 --> d3
-i10 --> d3
-i11 --> d3
-i12 -.-> d3
+i12 --> d3
 i23 -.-> d3
 i13 --> d4
 i14 --> d4
@@ -205,9 +198,11 @@ El valor bruto, exactamente como lo devuelve cada fuente externa, sin ningún c�
 
 Cada dato bruto pasa por una fórmula fija (documentada en el Cap. 4) que produce un número de **0 a 100**, siempre
 en la misma escala sin importar la métrica — esto es lo que permite comparar/combinar indicadores completamente
-distintos entre sí más adelante. La normalización usa límites fijos de una población de referencia (no los países
-de la consulta actual), para garantizar que el mismo valor bruto siempre se convierta en el mismo score
-normalizado, en cualquier ejecución.
+distintos entre sí más adelante. La normalización usa **límites absolutos fijos por indicador** (`period_key="FIXED"`,
+que se auto-amplían cuando llega un valor real fuera del rango, nunca se estrechan) — **nunca** compara contra los
+otros países de la consulta actual, así que el mismo valor bruto siempre da el mismo score normalizado, y un país
+analizado solo obtiene exactamente el mismo score que junto a otros 20 (decisión 2026-07-08, ver
+`marketmind_mos_engine`). El score de cada indicador ya basta para saber si un país es bueno para el producto.
 
 | Métrica normalizada | Qué mide | Calculada a partir de |
 |---|---|---|
@@ -220,9 +215,7 @@ normalizado, en cualquier ejecución.
 | Mobile Connectivity Score | Suscripciones de celular per cápita | `IT.CEL.SETS.P2` |
 | GDP per Capita Score | Poder de compra promedio de la población | `NY.GDP.PCAP.CD` |
 | GDP Growth Score | Momentum de la economía (creciendo o no) | `NY.GDP.MKTP.KD.ZG` |
-| OECD Inflation Level Score | Nivel promedio de inflación reciente | CPI mensual (OECD) |
-| OECD Inflation Volatility Score | Qué tan previsible (vs. inestable) es la inflación | CPI mensual (OECD) |
-| World Bank Inflation Score (fallback) | Misma idea del nivel de inflación, solo cuando la OCDE no tiene dato para el país | `FP.CPI.TOTL.ZG` |
+| World Bank Inflation Score | Nivel promedio de inflación reciente (única fuente; OECD eliminado 2026-07-08) | `FP.CPI.TOTL.ZG` |
 | **Real Estate Growth Score (condicional)** | Si el mercado inmobiliario se está calentando o enfriando — tasa de crecimiento, no nivel | Real House Prices (OECD) |
 | Population Scale Score | Tamaño de la población (escala logarítmica) | `SP.POP.TOTL` |
 | Urbanization Score | % de la población en áreas urbanas | `SP.URB.TOTL.IN.ZS` |

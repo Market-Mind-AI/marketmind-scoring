@@ -36,6 +36,32 @@ class IndicatorRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def widen_reference_bounds(
+        self, indicator_code: str, period_key: str, observed_value: float
+    ) -> NormalizationReference | None:
+        """A fixed-bounds indicator's normalization_reference row self-
+        calibrates: a real observed value outside today's [min_x, max_x]
+        widens the stored bound in place (never narrows), so the absolute
+        yardstick only gets more accurate over time instead of silently
+        clipping a real outlier at a guessed limit. Deliberately ignores
+        is_closed — that flag protects upsert_reference's percentile
+        snapshots from monthly drift, a different mechanism with a
+        different lifecycle than a fixed anchor's self-widening."""
+        reference = await self.get_reference(indicator_code, period_key)
+        if reference is None:
+            return None
+        changed = False
+        if observed_value < float(reference.min_x):
+            reference.min_x = Decimal(str(observed_value))
+            changed = True
+        if observed_value > float(reference.max_x):
+            reference.max_x = Decimal(str(observed_value))
+            changed = True
+        if changed:
+            reference.computed_at = utc_now()
+            await self._session.flush()
+        return reference
+
     async def upsert_reference(
         self,
         *,

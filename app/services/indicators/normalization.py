@@ -1,9 +1,20 @@
 """Cap. 4 §4.1 normalization step — runs after a raw-value function (see
-pytrends.py/worldbank.py/oecd.py/undata.py). Correction adopted over the
-literal Cap. 4 text (docs/marketmind-implementation-plan.md section 7,
-memory marketmind_mos_engine): bounds come from a fixed reference
-population (normalization_reference), never from the countries in the
-current query — that's what makes MOS absolute and comparable across runs.
+pytrends.py/worldbank.py/oecd.py/undata.py).
+
+Every indicator normalizes against a fixed, absolute bound
+(normalization_reference, period_key="FIXED") — never against the other
+countries in the current query (decision 2026-07-08: this product only ever
+collects data for the countries a user actually requests, so a percentile-
+based reference population never populates organically without forcing
+every analysis to cover all reference countries, which defeats the point of
+per-country selection). A country's score for a given indicator is the same
+whether it's analyzed alone or alongside 20 other countries in the same
+/analyze call. Fixed bounds self-widen (never narrow) the first time a real
+observed value falls outside today's range — see
+indicator_engine.py::_normalize_and_save and
+indicator_repository.py::widen_reference_bounds — so the initial bounds
+below only need to be plausible starting points, not perfectly researched
+limits.
 """
 
 from decimal import Decimal
@@ -24,10 +35,27 @@ _PASSTHROUGH_INDICATORS = frozenset(
     }
 )
 
+# Every indicator not in _PASSTHROUGH_INDICATORS or _CONTEXT_ONLY_INDICATORS
+# lands here — see normalization_method()'s fallback. Initial bounds seeded
+# in alembic/versions/010_fixed_normalization_bounds_v2.py (and 005 for
+# GROWTH_SCORE/DEMAND_STABILITY_SCORE, seeded before this became the only
+# normalization method for non-passthrough indicators).
 _FIXED_BOUNDS_INDICATORS = frozenset(
     {
         IndicatorCode.GROWTH_SCORE,
         IndicatorCode.DEMAND_STABILITY_SCORE,
+        IndicatorCode.GDP_PER_CAPITA_SCORE,
+        IndicatorCode.GDP_GROWTH_SCORE,
+        IndicatorCode.POPULATION_SCALE_SCORE,
+        IndicatorCode.MOBILE_CONNECTIVITY_SCORE,
+        IndicatorCode.WORLDBANK_INFLATION_SCORE,
+        IndicatorCode.POPULATION_GROWTH_SCORE,
+        IndicatorCode.NET_MIGRATION_RATE_SCORE,
+        IndicatorCode.CONSUMER_SPENDING_SCORE,
+        IndicatorCode.INVESTMENT_SCORE,
+        IndicatorCode.NET_EXPORTS_SCORE,
+        IndicatorCode.TRADE_OPENNESS_SCORE,
+        IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
     }
 )
 
@@ -46,11 +74,9 @@ _CONTEXT_ONLY_INDICATORS = frozenset(
 def normalization_method(indicator_code: IndicatorCode) -> NormalizationMethod:
     if indicator_code in _PASSTHROUGH_INDICATORS:
         return NormalizationMethod.PASSTHROUGH
-    if indicator_code in _FIXED_BOUNDS_INDICATORS:
-        return NormalizationMethod.MINMAX_FIXED
     if indicator_code in _CONTEXT_ONLY_INDICATORS:
         return NormalizationMethod.CONTEXT_ONLY
-    return NormalizationMethod.MINMAX_REFERENCE
+    return NormalizationMethod.MINMAX_FIXED
 
 
 def normalize(

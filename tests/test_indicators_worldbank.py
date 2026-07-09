@@ -67,12 +67,15 @@ async def test_urbanization_truncates_to_100() -> None:
     assert result.raw_value == 87.9
 
 
-async def test_worldbank_inflation_fallback_marks_status_fallback() -> None:
+async def test_inflation_is_available_and_inverse() -> None:
+    # World Bank is the sole inflation source now (OECD path removed
+    # 2026-07-08) — availability is AVAILABLE like any other WB indicator,
+    # no longer the special-case FALLBACK status.
     engine = make_mock_engine([result_with_all([(4.37,), (5.0,), (3.5,)])])
     with patch("app.services.indicators.worldbank.get_external_engine", return_value=engine):
-        result = await worldbank_indicators.compute_worldbank_inflation_fallback("BR")
+        result = await worldbank_indicators.compute_inflation("BR")
 
-    assert result.availability_status == AvailabilityStatus.FALLBACK
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
     assert result.direction == IndicatorDirection.INVERSE
     assert result.raw_value == pytest.approx((4.37 + 5.0 + 3.5) / 3)
 

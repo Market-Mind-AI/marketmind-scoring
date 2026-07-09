@@ -13,7 +13,7 @@ from app.services.mos_engine import MosEngine
 _COUNTRY_LEVEL_CODES = [
     "internet_penetration_score", "mobile_connectivity_score", "gdp_per_capita_score", "gdp_growth_score",
     "population_scale_score", "urbanization_score", "population_growth_score", "net_migration_rate_score",
-    "oecd_inflation_level_score", "oecd_inflation_volatility_score",
+    "worldbank_inflation_score",
     "consumer_spending_score", "investment_score", "net_exports_score", "trade_openness_score",
 ]  # fmt: skip
 
