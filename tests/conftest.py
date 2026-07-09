@@ -13,14 +13,22 @@ from app.db.base import Base
 from app.db.session import engine as app_engine
 from app.main import app
 
-# Reference/seed data (migration 003's ~27-country basket) — every other
-# table accumulates real rows from tests that hit a real Postgres session
-# (db_session fixture, or a route test's real get_session dependency) and
-# must be wiped between tests, or later tests silently start seeing earlier
-# tests' rows (discovered 2026-07-08: product_catalog grew to 767 rows
-# across repeated local runs, making embedding/trigram "no match expected"
-# tests flaky — see memory marketmind_known_gaps item 14).
-_PRESERVE_TABLES = {"countries"}
+# Reference/seed data that migrations own and tests must never wipe:
+#  - countries: migration 003's ~27-country basket.
+#  - normalization_reference: the fixed absolute bounds seeded by migrations
+#    005/010 (period_key="FIXED"). Truncating it silently broke the dev DB
+#    when the suite ran against the same Postgres the container uses
+#    (localhost:5436) — growth_score/demand_stability_score lost their bounds
+#    and stopped normalizing (found 2026-07-09 during the live /analyze test).
+#    Tests that write their own reference rows use unique uuid-suffixed codes,
+#    so preserving the table is safe.
+# Every other table accumulates real rows from tests that hit a real Postgres
+# session (db_session fixture, or a route test's real get_session dependency)
+# and must be wiped between tests, or later tests silently see earlier tests'
+# rows (discovered 2026-07-08: product_catalog grew to 767 rows across runs,
+# making embedding/trigram "no match expected" tests flaky — see memory
+# marketmind_known_gaps item 14).
+_PRESERVE_TABLES = {"countries", "normalization_reference"}
 
 
 @pytest.fixture(scope="session")
