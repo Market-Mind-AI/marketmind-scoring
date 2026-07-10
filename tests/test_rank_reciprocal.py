@@ -25,19 +25,22 @@ class TestRankReciprocalWeights:
         weights = rank_reciprocal_weights(PRIORITY_ORDER)
         assert max(weights, key=lambda d: weights[d]) == IndicatorDimension.DEMAND
 
-    def test_demographic_sustainability_is_ranked_last(self) -> None:
+    def test_market_size_is_ranked_last(self) -> None:
+        # User decision 2026-07-10: Market Size (raw population/urbanization)
+        # is the most "generic big country" signal and moved to last to cut
+        # the generic-size bias — see marketmind_mos_engine.
         weights = rank_reciprocal_weights(PRIORITY_ORDER)
-        assert min(weights, key=lambda d: weights[d]) == IndicatorDimension.DEMOGRAPHIC_SUSTAINABILITY
+        assert min(weights, key=lambda d: weights[d]) == IndicatorDimension.MARKET_SIZE
 
     def test_macro_demand_structure_ranked_second(self) -> None:
         assert PRIORITY_ORDER[1] == IndicatorDimension.MACRO_DEMAND_STRUCTURE
 
-    def test_market_size_ranked_above_economic_readiness(self) -> None:
-        # User decision 2026-07-08: swapped from the original Economic
-        # Readiness > Market Size order, see marketmind_mos_engine.
-        assert PRIORITY_ORDER.index(IndicatorDimension.MARKET_SIZE) < PRIORITY_ORDER.index(
-            IndicatorDimension.ECONOMIC_READINESS
-        )
+    def test_generic_wealth_size_ranked_below_product_fit(self) -> None:
+        # User decision 2026-07-10: Economic Readiness (GDP per capita) and
+        # Market Size (population) were pushed below the product-fit signals
+        # (Demand, Macro Demand Structure, Digital Readiness).
+        for generic in (IndicatorDimension.ECONOMIC_READINESS, IndicatorDimension.MARKET_SIZE):
+            assert PRIORITY_ORDER.index(generic) > PRIORITY_ORDER.index(IndicatorDimension.DIGITAL_READINESS)
 
     def test_priority_order_has_all_six_dimensions(self) -> None:
         assert set(PRIORITY_ORDER) == set(IndicatorDimension)

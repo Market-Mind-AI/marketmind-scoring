@@ -46,10 +46,12 @@ Endpoints usados para el MOS: `interest_over_time`, `interest_by_region`, `relat
 
 ### 4.2.1 Trend Score
 
-**Pregunta de negocio:** ¿Existe demanda observable por el producto durante el período analizado?
-**Fuente/endpoint:** PyTrends / `interest_over_time`
-**Campos JSON:** `date`, columna dinámica del keyword (ej. `"air fryer"`), `isPartial`
-**Uso en el MOS:** Sí — indicador atómico de demanda.
+> **CORRECCIÓN 2026-07-10 (ver `marketmind_mos_engine`):** el Trend Score dejó de leer `interest_over_time` **por país** (que Google escala 0-100 al pico DE ESE país, así que no es comparable entre países — un término cerca de su pico nacional en EE.UU. superaba al mercado cultural del producto, p.ej. jamón/España, invirtiendo el ranking del MOS). Ahora lee la consulta **mundial** de Google Trends (`geo=''`, `resolution='COUNTRY'`, una llamada por keyword, tabla `interest_by_country` del servicio pytrends), donde cada país está en una **régua global 0-100** = proporción de las búsquedas de ese país dedicadas al término (afinidad cultural — España ≈ 100 para jamón). Es independiente de la consulta (siempre mundial). Growth (4.2.2) y Demand Stability (4.2.3) siguen leyendo la serie `interest_over_time` por país (son razones/forma, ya comparables entre países).
+
+**Pregunta de negocio:** ¿Cuánta demanda relativa por el producto tiene este país frente al mundo?
+**Fuente/endpoint:** PyTrends / `interest_by_country` (worldwide, global 0-100 axis)
+**Campos JSON:** `country` (ISO-2), `interest_value`
+**Uso en el MOS:** Sí — indicador atómico de demanda, ahora comparable entre países.
 
 Variables: `O` = observaciones con `isPartial=false` y valor numérico; `n` = número de observaciones válidas; `v_i` = valor de interés (0-100) en la observación `i`.
 

@@ -27,12 +27,16 @@ from app.utils.period import last_n_month_period_keys, month_period_to_date_rang
 from app.utils.time import utc_now
 
 _TREND_WINDOW_MONTHS = 6
+# Minimum initial-window mean (on Google Trends' 0-100 scale) below which a
+# growth rate is treated as noise rather than signal — see compute_growth_score.
+_MIN_GROWTH_BASELINE = 5.0
 
 
 def _six_month_window() -> tuple[date, date]:
     period_keys = last_n_month_period_keys(_TREND_WINDOW_MONTHS)
     start = month_period_to_date_range(period_keys[-1])[0]  # oldest month in the window, most-recent-first list
     return start, utc_now().date()
+
 
 _TRANSACTIONAL_TERMS = ["amazon", "lidl", "comprar", "compra", "buy", "price", "precio", "oferta", "deal"]
 _EVALUATION_TERMS = ["best", "mejor", "review", "opiniones", "comparativa", "vs", "top"]
@@ -56,28 +60,44 @@ async def _fetch_interest_series(
 
 
 async def compute_trend_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.1 — TrendRaw = mean(v_i), n >= 2 required, over the last 6 months (see module docstring)."""
-    start, end = _six_month_window()
+    """Cap. 4 §4.2.1 — cross-country demand LEVEL.
+
+    Reads the WORLDWIDE Google Trends breakdown (interest_by_country table,
+    geo='' resolution=COUNTRY collected once per keyword), where every
+    country sits on a single global 0-100 axis representing the share of
+    that country's searches devoted to the term (2026-07-10 redesign, see
+    marketmind_mos_engine). This is what makes trend_score comparable across
+    countries — the previous per-country interest_over_time was self-scaled
+    to each country's own peak, so a term near its national peak in the US
+    outscored the product's cultural home market (e.g. jamón: Spain), which
+    inverted the MOS ranking. Growth and Demand Stability still read the
+    per-country interest_over_time series (they're ratios/shapes, already
+    comparable). country_code is the ISO-2 code, matched against the
+    worldwide breakdown's per-country rows."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        series = await _fetch_interest_series(connection, keyword, country_code, start, end)
+        result = await connection.execute(
+            text("SELECT interest_value FROM interest_by_country WHERE keyword = :keyword AND country = :country"),
+            {"keyword": keyword, "country": country_code},
+        )
+        row = result.first()
 
-    if len(series) < 2:
+    if row is None or row[0] is None:
         return RawIndicatorResult(
             raw_value=None,
             direction=IndicatorDirection.DIRECT,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes=f"interest_over_time: only {len(series)} valid observation(s), need >= 2 (Cap. 4 §4.2.1)",
+            notes=f"interest_by_country: no worldwide value for '{country_code}' (Cap. 4 §4.2.1)",
         )
 
-    trend_raw = sum(series) / len(series)
+    trend_raw = float(row[0])
     return RawIndicatorResult(
         raw_value=trend_raw,
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"n={len(series)}",
+        notes="worldwide interest-by-country (global 0-100 axis)",
     )
 
 
@@ -102,7 +122,26 @@ async def compute_growth_score(keyword: str, country_code: str, period_key: str)
     k = min(30, n // 3)
     initial_avg = sum(series[:k]) / k
     final_avg = sum(series[n - k :]) / k
-    growth_raw = ((final_avg - initial_avg) / max(initial_avg, 1)) * 100
+
+    # Low-base noise guard (known gap #4): Google Trends interest is 0-100,
+    # so an initial window mean near 0 makes (final-initial)/initial explode
+    # into meaningless four-digit percentages (a real run produced +1835% for
+    # Portugal off an almost-flat baseline, clamped to the bound max). A
+    # near-zero baseline means there's no measurable trend, so report a flat
+    # 0% growth (AVAILABLE) rather than a spurious extreme — 0 normalizes to
+    # a mild below-neutral score and still contributes to the Demand mean,
+    # instead of injecting noise.
+    if initial_avg < _MIN_GROWTH_BASELINE:
+        return RawIndicatorResult(
+            raw_value=0.0,
+            direction=IndicatorDirection.DIRECT,
+            calculation_window=period_key,
+            availability_status=AvailabilityStatus.AVAILABLE,
+            notes=f"initial-window mean {initial_avg:.2f} below {_MIN_GROWTH_BASELINE} — "
+            "flat 0% growth (near-zero base, no measurable trend)",
+        )
+
+    growth_raw = ((final_avg - initial_avg) / initial_avg) * 100
     return RawIndicatorResult(
         raw_value=growth_raw,
         direction=IndicatorDirection.DIRECT,

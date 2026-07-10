@@ -61,6 +61,7 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     coverage_service = _install("coverage_service", "app.services.analysis_service.CoverageService")
     indicator_engine = _install("indicator_engine", "app.services.analysis_service.IndicatorEngine")
     mos_engine = _install("mos_engine", "app.services.analysis_service.MosEngine")
+    weight_calibration = _install("weight_calibration", "app.services.analysis_service.WeightCalibrationService")
 
     analysis_repo.get = AsyncMock(return_value=_analysis_request())
     analysis_repo.mark_running = AsyncMock()
@@ -86,6 +87,7 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
 
     indicator_engine.compute_all = AsyncMock(return_value=[])
     mos_engine.compute_mos = AsyncMock(return_value=[_mos_result("USA")])
+    weight_calibration.calibrate = AsyncMock(return_value={})
 
     session = AsyncMock()
     return session, mocks

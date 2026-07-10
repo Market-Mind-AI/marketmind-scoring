@@ -34,14 +34,27 @@ async def _recent_real_house_price_series(country_code: str) -> list[float]:
     first. Level is NOT comparable across countries (rebased to 100 per
     country at BASE_PER, confirmed live: ESP and USA both =100.00 in
     2015 — see marketmind_mos_engine); only a growth rate computed within
-    the same series is meaningful, same principle as GDP Growth Score."""
+    the same series is meaningful, same principle as GDP Growth Score.
+
+    Two guards confirmed necessary against live data (2026-07-10):
+      - frequency='Q': RHP is published both quarterly and annually under
+        the same measure; mixing them would break the 12-quarter window.
+      - DISTINCT time_period: marketmind-oecd stores each observation
+        duplicated ~18x (re-collection inserts without dedup), so a plain
+        LIMIT 12 returned 12 copies of the SAME latest quarter, making the
+        recent and old windows identical -> a spurious 0% growth (which
+        then normalized to a constant 33.3 for every country). Deduping to
+        one value per quarter restores the real ~41-quarter series. Values
+        are identical within a quarter, so MAX(value) just picks that one."""
     engine = get_external_engine(DataSource.OECD)
     async with engine.connect() as connection:
         result = await connection.execute(
             text(
-                "SELECT value FROM oecd_observations "
-                "WHERE country = :country AND measure = 'RHP' AND value IS NOT NULL "
-                "ORDER BY time_period DESC LIMIT :limit"
+                "SELECT value FROM ("
+                "  SELECT time_period, MAX(value) AS value FROM oecd_observations "
+                "  WHERE country = :country AND measure = 'RHP' AND value IS NOT NULL AND frequency = 'Q' "
+                "  GROUP BY time_period"
+                ") q ORDER BY time_period DESC LIMIT :limit"
             ),
             {"country": country_code, "limit": _HOUSE_PRICE_WINDOW_QUARTERS},
         )

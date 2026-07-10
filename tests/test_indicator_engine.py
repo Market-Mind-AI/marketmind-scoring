@@ -64,9 +64,7 @@ def _patched_country_level(*, inflation: RawIndicatorResult = _AVAILABLE_INVERSE
     with ExitStack() as stack:
         for target in _COUNTRY_LEVEL_TARGETS:
             stack.enter_context(patch(target, return_value=_AVAILABLE_WB))
-        stack.enter_context(
-            patch(f"{_ENGINE}.worldbank_indicators.compute_inflation", return_value=inflation)
-        )
+        stack.enter_context(patch(f"{_ENGINE}.worldbank_indicators.compute_inflation", return_value=inflation))
         stack.enter_context(
             patch(f"{_ENGINE}.oecd_indicators.compute_real_estate_growth", return_value=_CONDITIONAL_UNAVAILABLE)
         )

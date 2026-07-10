@@ -4,23 +4,26 @@ import pytest
 
 from app.domain.enums import AvailabilityStatus, IndicatorDirection
 from app.services.indicators import pytrends as pytrends_indicators
-from tests._external_db_mock import make_mock_engine, result_with_all
+from tests._external_db_mock import make_mock_engine, result_with_all, result_with_first
 
 
-async def test_trend_score_computes_mean() -> None:
-    engine = make_mock_engine([result_with_all([(10.0,), (20.0,), (30.0,)])])
+async def test_trend_score_reads_worldwide_country_value() -> None:
+    # trend_score is now the WORLDWIDE interest-by-country value for the
+    # country (global 0-100 axis), a single row — not the mean of the
+    # per-country self-scaled series (2026-07-10 redesign).
+    engine = make_mock_engine([result_with_first((87.0,))])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
-        result = await pytrends_indicators.compute_trend_score("air fryer", "ES", "2026-07")
+        result = await pytrends_indicators.compute_trend_score("jamon iberico", "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
-    assert result.raw_value == 20.0
+    assert result.raw_value == 87.0
     assert result.direction == IndicatorDirection.DIRECT
 
 
-async def test_trend_score_unavailable_with_fewer_than_two_observations() -> None:
-    engine = make_mock_engine([result_with_all([(10.0,)])])
+async def test_trend_score_unavailable_when_country_absent_from_worldwide_breakdown() -> None:
+    engine = make_mock_engine([result_with_first(None)])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
-        result = await pytrends_indicators.compute_trend_score("air fryer", "ES", "2026-07")
+        result = await pytrends_indicators.compute_trend_score("jamon iberico", "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
     assert result.raw_value is None
@@ -43,6 +46,20 @@ async def test_growth_score_unavailable_with_fewer_than_six_observations() -> No
         result = await pytrends_indicators.compute_growth_score("air fryer", "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
+
+
+async def test_growth_score_flat_zero_on_near_zero_baseline() -> None:
+    # Low-base noise guard (2026-07-10): an almost-flat baseline near 0 makes
+    # the growth ratio explode (a live run produced +1835%). Must return a
+    # flat 0% (AVAILABLE) — not a spurious extreme, and not UNAVAILABLE
+    # (which would drop the signal entirely).
+    series = [(0.0,), (0.0,), (1.0,), (0.0,), (0.0,), (2.0,), (40.0,), (50.0,), (60.0,)]
+    engine = make_mock_engine([result_with_all(series)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_growth_score("air fryer", "ES", "2026-07")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 0.0
 
 
 async def test_demand_stability_score_computes_cv() -> None:

@@ -22,12 +22,13 @@ from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.coverage import CoverageGap
 from app.schemas.mos import MosResultResponse
-from app.services.coverage_service import CoverageService
+from app.services.coverage_service import WORLD_SENTINEL_ISO3, CoverageService
 from app.services.indicator_engine import IndicatorEngine
 from app.services.indicators.oecd import RAW_INDICATOR_CODES as OECD_RAW_CODES
 from app.services.indicators.undata import RAW_INDICATOR_CODES as UNDATA_RAW_CODES
 from app.services.indicators.worldbank import RAW_INDICATOR_CODES as WORLDBANK_RAW_CODES
 from app.services.mos_engine import MosEngine
+from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key, last_n_month_period_keys
 
 _HISTORY_WINDOW_MONTHS = 6
@@ -49,6 +50,7 @@ class AnalysisService:
         self._coverage_service = CoverageService(session)
         self._indicator_engine = IndicatorEngine(session)
         self._mos_engine = MosEngine(session)
+        self._weight_calibration = WeightCalibrationService(session)
 
     async def run(self, request_id: uuid.UUID) -> None:
         analysis_request = await self._analysis_repo.get(request_id)
@@ -63,6 +65,8 @@ class AnalysisService:
             entity_key = analysis_request.entity_key
             countries: list[str] = list(analysis_request.countries)
 
+            if entity_key is not None:
+                await self._ensure_worldwide_demand_coverage(entity_key=entity_key)
             for country_iso3 in countries:
                 await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
 
@@ -72,14 +76,23 @@ class AnalysisService:
                     country_iso3=country_iso3, entity_key=entity_key, period_key=period_key
                 )
 
+            # Dimension weights are deterministic (Rank Reciprocal over a
+            # fixed priority order — no country data involved), so calibrate
+            # on demand here to guarantee they exist for this period. Without
+            # this, a fresh database has no weights and compute_mos excludes
+            # every country ("No calibrated weight for dimension=..."),
+            # which is why the MOS previously needed a manual
+            # POST /admin/mos/refresh-weights. Idempotent and respects the
+            # is_closed immutability of already-locked periods.
+            await self._weight_calibration.calibrate(period_key=period_key)
+
             mos_results = (
                 await self._mos_engine.compute_mos(entity_key=entity_key, countries=countries, period_key=period_key)
                 if entity_key is not None
                 else []
             )
             serialized = [
-                MosResultResponse.model_validate(r, from_attributes=True).model_dump(mode="json")
-                for r in mos_results
+                MosResultResponse.model_validate(r, from_attributes=True).model_dump(mode="json") for r in mos_results
             ]
             await self._analysis_repo.mark_done(analysis_request, result=serialized)
             await self._session.commit()
@@ -174,3 +187,32 @@ class AnalysisService:
         missing = [gap for gap, status in zip(unique_gaps, statuses, strict=True) if not status.covered]
         if missing:
             await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")
+
+    async def _ensure_worldwide_demand_coverage(self, *, entity_key: uuid.UUID) -> None:
+        """The cross-country-comparable demand signal (interest_by_country)
+        is a WORLDWIDE Google Trends query — one collection per keyword, not
+        per country. Dispatched once here under the sentinel ISO3 "WLD",
+        separate from the per-country coverage loop, so it isn't re-fetched
+        once per requested country. Feeds compute_trend_score (see
+        app/services/indicators/pytrends.py)."""
+        entity = await self._product_repo.get_by_entity_key(entity_key)
+        keyword = entity.canonical_title if entity is not None else None
+        if keyword is None:
+            return
+
+        # A single collection, keyed only to the current month. Unlike the
+        # per-country signals, the worldwide breakdown is one snapshot (not a
+        # monthly series), so collecting it once per freshness period would
+        # just re-fetch identical data 6x (6 rate-limited calls). One gap =
+        # one call; next month's period_key re-collects for freshness.
+        gap = CoverageGap(
+            source=DataSource.PYTRENDS,
+            entity_key=entity_key,
+            country=WORLD_SENTINEL_ISO3,
+            indicator_code="interest_by_country",
+            period_key=current_month_period_key(),
+            collection_params={"keyword": keyword},
+        )
+        statuses = await self._coverage_service.check_coverage([gap])
+        if not statuses[0].covered:
+            await self._coverage_service.check_or_collect([gap], requested_by="analysis_service")

@@ -67,12 +67,10 @@ DIMENSION_MEANING: dict[IndicatorDimension, str] = {
         "investment, and trade integration."
     ),
     IndicatorDimension.MARKET_SIZE: "The scale of the addressable audience in this country.",
-    IndicatorDimension.ECONOMIC_READINESS: (
-        "The market's purchasing power, economic momentum, and price stability."
-    ),
+    IndicatorDimension.ECONOMIC_READINESS: ("The market's purchasing power, economic momentum, and price stability."),
     IndicatorDimension.DIGITAL_READINESS: "Whether the population can discover and purchase the product online.",
     IndicatorDimension.DEMOGRAPHIC_SUSTAINABILITY: (
-        "Long-term population trends — less tied to \"will this sell now\" than the other dimensions."
+        'Long-term population trends — less tied to "will this sell now" than the other dimensions.'
     ),
 }
 

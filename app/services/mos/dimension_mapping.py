@@ -33,15 +33,28 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
     IndicatorCode.TRADE_OPENNESS_SCORE: IndicatorDimension.MACRO_DEMAND_STRUCTURE,
 }
 
-# Every indicator is mandatory (Cap. 5 §5.3) except Median Age Fit and Real
-# Estate Growth (both conditional — the first only required when the
-# Product Profile defines a target age range, Cap. 4 §4.5.3; the second
-# only available for OECD countries, Cap. 4 §4.4.3). Inflation
-# (WORLDBANK_INFLATION_SCORE) is mandatory like any other indicator now
-# that OECD is no longer an alternative source (2026-07-08).
+# Mandatory = present or the country is excluded from the MOS (Cap. 5 §5.3).
+# Non-mandatory exclusions:
+#   - Median Age Fit: only required when the Product Profile has a target age
+#     range (Cap. 4 §4.5.3).
+#   - Real Estate Growth: OECD-only coverage (Cap. 4 §4.4.3).
+#   - Growth / Demand Stability / Regional Demand / Search Intent: the four
+#     per-country PyTrends *enrichment* signals (2026-07-10). They're
+#     collection-fragile — Google Trends rate-limits per-country queries and
+#     the DataForSEO sandbox fallback returns no region/query data, so any
+#     one of them can transiently come back empty and would otherwise
+#     exclude an entire country. trend_score (the WORLDWIDE interest-by-
+#     country anchor, one reliable call per keyword) stays mandatory as the
+#     Demand dimension's floor; the Demand sub-score averages whichever of
+#     these enrichment signals are present. Inflation
+#     (WORLDBANK_INFLATION_SCORE) is mandatory like any other WB indicator.
 MANDATORY_INDICATORS: frozenset[IndicatorCode] = frozenset(DIMENSION_BY_INDICATOR) - {
     IndicatorCode.MEDIAN_AGE_FIT_SCORE,
     IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
+    IndicatorCode.GROWTH_SCORE,
+    IndicatorCode.DEMAND_STABILITY_SCORE,
+    IndicatorCode.REGIONAL_DEMAND_SCORE,
+    IndicatorCode.SEARCH_INTENT_SCORE,
 }
 
 

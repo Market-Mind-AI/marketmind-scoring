@@ -26,34 +26,37 @@ w_j = (1/j) / sum(1/k for k in 1..n), for rank j = 1..n (1 = most important)
 from app.domain.enums import IndicatorDimension
 
 # Explicit priority order, most to least important for judging a specific
-# product's market potential in a country (user decisions, 2026-07-03 and
-# 2026-07-08):
-# 1. Demand — the most direct, product-specific signal (people searching
-#    for this exact product); everything else is a proxy.
+# product's market potential in a country (user decisions 2026-07-03,
+# 2026-07-08, and 2026-07-10):
+# 1. Demand — the most direct, product-specific signal (how much this exact
+#    product is actually wanted here); everything else is a proxy. Now
+#    cross-country comparable via the worldwide Google Trends signal (see
+#    pytrends.py compute_trend_score / interest_by_country).
 # 2. Macro Demand Structure — the country's aggregate demand composition
 #    (GDP = C+I+G+NX); ranked right after Demand because Consumer Spending
 #    is the closest macro proxy to "people actually spending money here".
-# 3. Market Size — scale of the addressable audience. Ranked above Economic
-#    Readiness (swapped 2026-07-08, user decision): with Consumer Spending
-#    now a dedicated signal one rank above, part of what used to justify
-#    "purchasing power over audience size" is already covered there, so
-#    audience size gets relatively more weight.
-# 4. Economic Readiness — purchasing power/momentum, still a real
-#    differentiator, just no longer ranked above Market Size.
-# 5. Digital Readiness — largely saturated across the reference population
-#    already (e.g. Spain 95.8%, USA 94.7% internet penetration), and
-#    partially redundant with Demand itself (PyTrends search volume already
-#    depends on internet access, so weighting this heavily double-counts
-#    that effect).
-# 6. Demographic Sustainability — long-term population trend, the least
-#    tied to "will this sell now", which is what this app answers.
+# 3. Digital Readiness — can the audience discover/buy the product online;
+#    product-relevant and moved up over the generic "big rich country"
+#    signals below.
+# 4. Economic Readiness — purchasing power + macro stability. Moved DOWN
+#    (2026-07-10, user decision): it's dominated by GDP per capita, which
+#    systematically rewarded large wealthy countries regardless of product
+#    fit (e.g. it was a main reason the USA outranked Spain for jamón).
+#    Reducing its rank cuts that generic-wealth bias without hand-picking
+#    weights (the RR formula does it from the order alone).
+# 5. Demographic Sustainability — long-term population trend, loosely tied
+#    to "will this sell now".
+# 6. Market Size — raw population/urbanization scale, the most "generic big
+#    country" signal (a large population isn't product fit). Moved to LAST
+#    (2026-07-10, user decision) for the same generic-size-bias reason as
+#    Economic Readiness above.
 PRIORITY_ORDER: list[IndicatorDimension] = [
     IndicatorDimension.DEMAND,
     IndicatorDimension.MACRO_DEMAND_STRUCTURE,
-    IndicatorDimension.MARKET_SIZE,
-    IndicatorDimension.ECONOMIC_READINESS,
     IndicatorDimension.DIGITAL_READINESS,
+    IndicatorDimension.ECONOMIC_READINESS,
     IndicatorDimension.DEMOGRAPHIC_SUSTAINABILITY,
+    IndicatorDimension.MARKET_SIZE,
 ]
 
 
