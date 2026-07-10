@@ -21,6 +21,10 @@ class Country(Base):
     worldbank_country_id: Mapped[str | None] = mapped_column(nullable=True)
     undata_location_id: Mapped[str | None] = mapped_column(nullable=True)
     pytrends_geo: Mapped[str | None] = mapped_column(nullable=True)
+    # Primary Google-search language (ISO 639-1) — the language a local buyer
+    # searches in. compute_trend_score reads the interest_by_country row for
+    # this country's term in this language (keyword localization, 2026-07-10).
+    search_language: Mapped[str | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     __table_args__ = (

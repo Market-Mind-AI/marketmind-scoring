@@ -35,6 +35,7 @@ class CatalogService:
         *,
         source: str,
         category: str | None = None,
+        localized_terms: dict[str, str] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
     ) -> CatalogResolveResponse:
@@ -80,6 +81,7 @@ class CatalogService:
         entity = await self._repo.create_entity(
             canonical_title=text,
             category=category,
+            localized_terms=localized_terms,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
             embedding=embedding,

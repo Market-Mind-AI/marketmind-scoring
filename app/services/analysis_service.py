@@ -17,8 +17,11 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import logger
+from app.db.models.country import Country
+from app.db.models.product_catalog import ProductCatalog
 from app.domain.enums import DataSource
 from app.repositories.analysis_repository import AnalysisRepository
+from app.repositories.country_repository import CountryRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.coverage import CoverageGap
 from app.schemas.mos import MosResultResponse
@@ -47,6 +50,7 @@ class AnalysisService:
         self._session = session
         self._analysis_repo = AnalysisRepository(session)
         self._product_repo = ProductRepository(session)
+        self._country_repo = CountryRepository(session)
         self._coverage_service = CoverageService(session)
         self._indicator_engine = IndicatorEngine(session)
         self._mos_engine = MosEngine(session)
@@ -66,7 +70,7 @@ class AnalysisService:
             countries: list[str] = list(analysis_request.countries)
 
             if entity_key is not None:
-                await self._ensure_worldwide_demand_coverage(entity_key=entity_key)
+                await self._ensure_worldwide_demand_coverage(entity_key=entity_key, countries=countries)
             for country_iso3 in countries:
                 await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
 
@@ -113,7 +117,13 @@ class AnalysisService:
 
         if entity_key is not None:
             entity = await self._product_repo.get_by_entity_key(entity_key)
-            keyword = entity.canonical_title if entity is not None else None
+            country = await self._country_repo.get_by_iso3(country_iso3)
+            # Per-country demand is searched in the country's own language
+            # (2026-07-10): a Portuguese buyer searches "presunto", not the
+            # Spanish "jamón", so measuring Portugal with the Spanish term
+            # understates it. Falls back to canonical_title when the country
+            # has no search_language or the entity has no term for it.
+            keyword = _localized_keyword(entity, country) if entity is not None else None
             if keyword is not None:
                 for period_key in period_keys:
                     for indicator_code in _PYTRENDS_INDICATOR_CODES:
@@ -188,17 +198,38 @@ class AnalysisService:
         if missing:
             await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")
 
-    async def _ensure_worldwide_demand_coverage(self, *, entity_key: uuid.UUID) -> None:
+    async def _ensure_worldwide_demand_coverage(self, *, entity_key: uuid.UUID, countries: list[str]) -> None:
         """The cross-country-comparable demand signal (interest_by_country)
-        is a WORLDWIDE Google Trends query — one collection per keyword, not
+        is a WORLDWIDE Google Trends query — one collection per product, not
         per country. Dispatched once here under the sentinel ISO3 "WLD",
         separate from the per-country coverage loop, so it isn't re-fetched
         once per requested country. Feeds compute_trend_score (see
-        app/services/indicators/pytrends.py)."""
+        app/services/indicators/pytrends.py).
+
+        Multi-term (2026-07-10): sends one localized term per distinct search
+        language among the requested countries, all compared on a single
+        Google Trends axis so each country can be read against the term in
+        ITS OWN language (keyword localization). base_keyword stays the
+        canonical title (grouping key / the row's `keyword`)."""
         entity = await self._product_repo.get_by_entity_key(entity_key)
-        keyword = entity.canonical_title if entity is not None else None
-        if keyword is None:
+        if entity is None:
             return
+        base_keyword = entity.canonical_title
+        localized = entity.localized_terms or {}
+
+        # One term per distinct search language among the requested countries.
+        # Missing localized term for a language -> canonical fallback tagged
+        # with that language, so compute_trend_score still finds its row.
+        terms_by_language: dict[str, str] = {}
+        for country_iso3 in countries:
+            country = await self._country_repo.get_by_iso3(country_iso3)
+            language = country.search_language if country is not None else None
+            if language is None or language in terms_by_language:
+                continue
+            terms_by_language[language] = localized.get(language) or base_keyword
+        if not terms_by_language:
+            terms_by_language = {"und": base_keyword}  # no language mapping at all — single-term worldwide
+        terms = [{"term": term, "language": language} for language, term in terms_by_language.items()]
 
         # A single collection, keyed only to the current month. Unlike the
         # per-country signals, the worldwide breakdown is one snapshot (not a
@@ -211,8 +242,22 @@ class AnalysisService:
             country=WORLD_SENTINEL_ISO3,
             indicator_code="interest_by_country",
             period_key=current_month_period_key(),
-            collection_params={"keyword": keyword},
+            collection_params={"base_keyword": base_keyword, "terms": terms},
         )
         statuses = await self._coverage_service.check_coverage([gap])
         if not statuses[0].covered:
             await self._coverage_service.check_or_collect([gap], requested_by="analysis_service")
+
+
+def _localized_keyword(entity: "ProductCatalog | None", country: "Country | None") -> str | None:
+    """The search term for a country = the entity's term in that country's
+    search language, falling back to the canonical title. Shared by the
+    per-country coverage loop and the indicator engine so collection and
+    reading always agree on the keyword stored in PyTrends' tables."""
+    if entity is None:
+        return None
+    language = country.search_language if country is not None else None
+    localized = entity.localized_terms or {}
+    if language is not None and language in localized:
+        return localized[language]
+    return entity.canonical_title

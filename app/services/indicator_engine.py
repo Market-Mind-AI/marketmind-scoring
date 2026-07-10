@@ -150,14 +150,26 @@ class IndicatorEngine:
         self, entity: ProductCatalog, country: Country, period_key: str
     ) -> list[IndicatorValue]:
         country_code = resolve_source_country_code(DataSource.PYTRENDS, country)
-        keyword = entity.canonical_title
+        # Per-country signals are searched in the country's own language
+        # (keyword localization, 2026-07-10) — the same term collection used,
+        # so the interest_over_time/region/related rows match. trend_score
+        # reads the WORLDWIDE row for (canonical base keyword, this country's
+        # language term) via term_language.
+        language = country.search_language
+        localized = entity.localized_terms or {}
+        keyword = localized.get(language) if language is not None else None
+        keyword = keyword or entity.canonical_title
 
-        trend = await pytrends_indicators.compute_trend_score(keyword, country_code, period_key)
+        trend = await pytrends_indicators.compute_trend_score(
+            entity.canonical_title, country_code, period_key, term_language=language
+        )
         granularity_fallback = False
         if trend.availability_status == AvailabilityStatus.UNAVAILABLE and entity.category:
             # Cap. 4 "fallback de granularidade SKU->categoria": specific
             # keyword has insufficient volume, retry with the category term.
-            fallback_trend = await pytrends_indicators.compute_trend_score(entity.category, country_code, period_key)
+            fallback_trend = await pytrends_indicators.compute_trend_score(
+                entity.category, country_code, period_key, term_language=language
+            )
             if fallback_trend.availability_status == AvailabilityStatus.AVAILABLE:
                 keyword = entity.category
                 granularity_fallback = True

@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import settings
@@ -24,6 +24,11 @@ class ProductCatalog(Base):
     google_mid: Mapped[str | None] = mapped_column(nullable=True)
     google_type: Mapped[str | None] = mapped_column(nullable=True)
     category: Mapped[str | None] = mapped_column(nullable=True)
+    # {lang: native_search_term} from the identify-image LLM — each country's
+    # trend_score reads the term in its own language on the common Google
+    # Trends axis (keyword localization, 2026-07-10, see marketmind_mos_engine).
+    # Written only when a NEW entity is created (same rule as embedding).
+    localized_terms: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(settings.openai_embedding_dimensions), nullable=True)

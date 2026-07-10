@@ -112,16 +112,22 @@ def _build_pytrends_request(
     if path is None:
         raise CollectionDispatchError(f"Unknown pytrends indicator_code '{indicator_code}'")
 
-    if indicator_code in ("suggestions", "interest_by_country"):
-        # Country-less pytrends indicators. "suggestions" is used for
-        # google_mid enrichment; "interest_by_country" is the WORLDWIDE
-        # (geo='') Google Trends breakdown collected once per keyword —
-        # every country on one global 0-100 axis, the cross-country-
+    if indicator_code == "interest_by_country":
+        # WORLDWIDE (geo='') Google Trends breakdown collected once per
+        # product — every country on one global 0-100 axis, the cross-country-
         # comparable demand signal behind trend_score (see
-        # app/services/indicators/pytrends.py compute_trend_score).
-        payload: dict[str, Any] = {"keyword": _require(params, "keyword")}
-        if indicator_code == "interest_by_country" and "timeframe" in params:
+        # app/services/indicators/pytrends.py compute_trend_score). Multi-term
+        # (2026-07-10): one localized term per language compared on that same
+        # axis, so each country reads the term in its own language.
+        payload: dict[str, Any] = {
+            "base_keyword": _require(params, "base_keyword"),
+            "terms": _require(params, "terms"),
+        }
+        if "timeframe" in params:
             payload["timeframe"] = params["timeframe"]
+    elif indicator_code == "suggestions":
+        # Country-less indicator used for google_mid enrichment.
+        payload = {"keyword": _require(params, "keyword")}
     elif indicator_code == "trending_rss":
         payload = {"geo": _require_country_code(DataSource.PYTRENDS, country)}
         if "max_articles" in params:

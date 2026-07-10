@@ -35,6 +35,21 @@ async def test_resolve_creates_new_entity_when_nothing_matches(db_session: Async
     assert result.canonical_title == text
 
 
+async def test_resolve_persists_localized_terms_on_new_entity(db_session: AsyncSession) -> None:
+    service = CatalogService(db_session, embedding_client=_mock_embedding_client())
+    text = f"Jamon Iberico {uuid.uuid4()}"
+    localized = {"es": "jamón ibérico", "pt": "presunto ibérico", "en": "iberico ham"}
+
+    result = await service.resolve(text, source="test", localized_terms=localized)
+    assert result.method == "created"
+
+    from app.repositories.product_repository import ProductRepository
+
+    entity = await ProductRepository(db_session).get_by_entity_key(result.entity_key)
+    assert entity is not None
+    assert entity.localized_terms == localized
+
+
 async def test_resolve_second_call_hits_exact_alias(db_session: AsyncSession) -> None:
     service = CatalogService(db_session, embedding_client=_mock_embedding_client())
     text = f"Repeat Product {uuid.uuid4()}"

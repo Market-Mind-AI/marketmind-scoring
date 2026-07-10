@@ -58,6 +58,7 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
 
     analysis_repo = _install("analysis_repo", "app.services.analysis_service.AnalysisRepository")
     product_repo = _install("product_repo", "app.services.analysis_service.ProductRepository")
+    country_repo = _install("country_repo", "app.services.analysis_service.CountryRepository")
     coverage_service = _install("coverage_service", "app.services.analysis_service.CoverageService")
     indicator_engine = _install("indicator_engine", "app.services.analysis_service.IndicatorEngine")
     mos_engine = _install("mos_engine", "app.services.analysis_service.MosEngine")
@@ -68,7 +69,10 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     analysis_repo.mark_done = AsyncMock()
     analysis_repo.mark_failed = AsyncMock()
 
-    product_repo.get_by_entity_key = AsyncMock(return_value=SimpleNamespace(canonical_title="air fryer"))
+    product_repo.get_by_entity_key = AsyncMock(
+        return_value=SimpleNamespace(canonical_title="air fryer", localized_terms={"en": "air fryer"})
+    )
+    country_repo.get_by_iso3 = AsyncMock(return_value=SimpleNamespace(search_language="en"))
 
     coverage_service.check_coverage = AsyncMock(
         side_effect=lambda gaps: [
@@ -131,6 +135,45 @@ async def test_run_dispatches_collection_only_for_missing_gaps() -> None:
     mocks["coverage_service"].check_or_collect.assert_awaited()
     dispatched_gaps = mocks["coverage_service"].check_or_collect.call_args.args[0]
     assert len(dispatched_gaps) > 0
+
+
+async def test_worldwide_demand_gap_sends_one_localized_term_per_language() -> None:
+    # Keyword localization (2026-07-10): the worldwide interest_by_country
+    # collection compares one localized term per distinct search language
+    # among the requested countries, so each country is read against the
+    # term in its own language.
+    session, mocks = _patched_service(all_covered=False)
+    mocks["analysis_repo"].get = AsyncMock(return_value=_analysis_request(countries=["ESP", "PRT", "MEX"]))
+    mocks["product_repo"].get_by_entity_key = AsyncMock(
+        return_value=SimpleNamespace(
+            canonical_title="jamon iberico",
+            localized_terms={"es": "jamón ibérico", "pt": "presunto ibérico"},
+        )
+    )
+    language_by_iso3 = {"ESP": "es", "PRT": "pt", "MEX": "es"}
+    mocks["country_repo"].get_by_iso3 = AsyncMock(
+        side_effect=lambda iso3: SimpleNamespace(search_language=language_by_iso3[iso3])
+    )
+    try:
+        service = AnalysisService(session)
+        await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    worldwide_gaps = [
+        gap
+        for call in mocks["coverage_service"].check_or_collect.await_args_list
+        for gap in call.args[0]
+        if gap.indicator_code == "interest_by_country"
+    ]
+    assert len(worldwide_gaps) == 1
+    params = worldwide_gaps[0].collection_params
+    assert params["base_keyword"] == "jamon iberico"
+    terms_by_language = {t["language"]: t["term"] for t in params["terms"]}
+    # es and pt only (MEX shares es -> deduped), each in its own language
+    assert terms_by_language == {"es": "jamón ibérico", "pt": "presunto ibérico"}
 
 
 async def test_run_marks_failed_on_unexpected_exception() -> None:

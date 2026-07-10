@@ -39,6 +39,7 @@ async def analyze(
         resolve_text,
         source="analyze",
         category=request.category,
+        localized_terms=request.localized_terms,
         target_age_min=request.target_age_min,
         target_age_max=request.target_age_max,
     )

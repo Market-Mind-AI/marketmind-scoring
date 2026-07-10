@@ -58,6 +58,23 @@ class ProductIdentification(BaseModel):
             "never a descriptive phrase, specification list, or marketing copy."
         )
     )
+    localized_terms: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Map of {ISO-639-1 language code: native search term} — the term a "
+            "local buyer in that language would ACTUALLY type into Google to "
+            "find this product, NOT a literal translation of `product_name`. "
+            "For Iberian ham this is 'jamón ibérico' for 'es', 'presunto "
+            "ibérico' for 'pt', 'iberico ham' for 'en', 'prosciutto iberico' "
+            "for 'it' — each is what that market really searches, which is why "
+            "a single translated term misrepresents demand across countries. "
+            "Provide an entry for EVERY one of these languages: es, pt, en, de, "
+            "fr, it, ja, zh, ko, ru, id, tr, ar, nl, pl, sv. Keep each term "
+            "short and commonly-searched (brand-free, no size/certification), "
+            "written in that language's own script/accents (unlike "
+            "`product_name`, these keep native diacritics)."
+        ),
+    )
     target_age_min: int | None
     target_age_max: int | None
     estimated_price: float | None
@@ -89,7 +106,14 @@ class VisionClient:
             "the product's own language (e.g. 'Charcuterie', 'Kitchen "
             "Appliances', 'Toys'). "
             "Put the brand only in `brand`, never in `product_name` or "
-            "`category`."
+            "`category`. "
+            "`localized_terms`: for each of the languages es, pt, en, de, fr, "
+            "it, ja, zh, ko, ru, id, tr, ar, nl, pl, sv, give the term a local "
+            "buyer in that language really types to search for this product — "
+            "the genuine local term, not a word-for-word translation (e.g. "
+            "'presunto ibérico' for pt, not a translation of the Spanish name). "
+            "Each country will be measured on Google Trends with its own "
+            "language's term, so accuracy here directly drives the demand score."
         )
         prompt = f"{instructions}\n\nAdditional context from the user: {hint_text}" if hint_text else instructions
         image_block: ImageBlockParam = {

@@ -59,11 +59,13 @@ async def _fetch_interest_series(
     return [float(row[0]) for row in result.all() if row[0] is not None]
 
 
-async def compute_trend_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
+async def compute_trend_score(
+    keyword: str, country_code: str, period_key: str, term_language: str | None = None
+) -> RawIndicatorResult:
     """Cap. 4 §4.2.1 — cross-country demand LEVEL.
 
     Reads the WORLDWIDE Google Trends breakdown (interest_by_country table,
-    geo='' resolution=COUNTRY collected once per keyword), where every
+    geo='' resolution=COUNTRY collected once per product), where every
     country sits on a single global 0-100 axis representing the share of
     that country's searches devoted to the term (2026-07-10 redesign, see
     marketmind_mos_engine). This is what makes trend_score comparable across
@@ -73,22 +75,34 @@ async def compute_trend_score(keyword: str, country_code: str, period_key: str) 
     inverted the MOS ranking. Growth and Demand Stability still read the
     per-country interest_over_time series (they're ratios/shapes, already
     comparable). country_code is the ISO-2 code, matched against the
-    worldwide breakdown's per-country rows."""
+    worldwide breakdown's per-country rows.
+
+    Keyword localization (2026-07-10): the worldwide query compares one term
+    per language on that common axis, so each country is read against the
+    term in ITS OWN language (term_language = the country's search_language),
+    fixing the artifact where Portugal scored low for the Spanish "jamón"
+    despite real demand for "presunto". `keyword` is the product's canonical
+    base keyword (the row's grouping key), term_language selects which
+    language's term to read for this country. When term_language is None
+    (country has no search_language) any row for the country is taken."""
     engine = get_external_engine(DataSource.PYTRENDS)
+    query = "SELECT interest_value FROM interest_by_country WHERE keyword = :keyword AND country = :country"
+    params: dict[str, str] = {"keyword": keyword, "country": country_code}
+    if term_language is not None:
+        query += " AND term_language = :term_language"
+        params["term_language"] = term_language
     async with engine.connect() as connection:
-        result = await connection.execute(
-            text("SELECT interest_value FROM interest_by_country WHERE keyword = :keyword AND country = :country"),
-            {"keyword": keyword, "country": country_code},
-        )
+        result = await connection.execute(text(query), params)
         row = result.first()
 
     if row is None or row[0] is None:
+        lang_note = f" (term_language='{term_language}')" if term_language is not None else ""
         return RawIndicatorResult(
             raw_value=None,
             direction=IndicatorDirection.DIRECT,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes=f"interest_by_country: no worldwide value for '{country_code}' (Cap. 4 §4.2.1)",
+            notes=f"interest_by_country: no worldwide value for '{country_code}'{lang_note} (Cap. 4 §4.2.1)",
         )
 
     trend_raw = float(row[0])
@@ -97,7 +111,7 @@ async def compute_trend_score(keyword: str, country_code: str, period_key: str) 
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes="worldwide interest-by-country (global 0-100 axis)",
+        notes=f"worldwide interest-by-country (global 0-100 axis, term_language='{term_language or 'any'}')",
     )
 
 

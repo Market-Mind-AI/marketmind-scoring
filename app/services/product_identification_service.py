@@ -34,6 +34,7 @@ class ProductIdentificationService:
             resolve_text,
             source="image_identification",
             category=identification.category,
+            localized_terms=identification.localized_terms or None,
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
         )
@@ -45,6 +46,7 @@ class ProductIdentificationService:
             product_name=identification.product_name,
             brand=identification.brand,
             category=identification.category,
+            localized_terms=identification.localized_terms or None,
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
             estimated_price=identification.estimated_price,

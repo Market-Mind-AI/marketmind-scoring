@@ -29,6 +29,18 @@ async def test_trend_score_unavailable_when_country_absent_from_worldwide_breakd
     assert result.raw_value is None
 
 
+async def test_trend_score_reads_localized_term_by_language() -> None:
+    # Keyword localization (2026-07-10): each country reads the worldwide
+    # value for the term in ITS OWN language (term_language selects the row).
+    engine = make_mock_engine([result_with_first((72.0,))])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_trend_score("jamon iberico", "PT", "2026-07", term_language="pt")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 72.0
+    assert "term_language='pt'" in result.notes
+
+
 async def test_growth_score_computes_expected_raw() -> None:
     series = [(10.0,), (10.0,), (10.0,), (20.0,), (20.0,), (20.0,), (40.0,), (40.0,), (40.0,)]
     engine = make_mock_engine([result_with_all(series)])
