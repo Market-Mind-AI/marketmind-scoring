@@ -92,6 +92,9 @@ class TestCheckAvailability:
 
 class TestComputeDimensionSubscores:
     def test_averages_scores_within_a_dimension(self) -> None:
+        # Demand averages its signals like any other dimension — every Demand
+        # signal is mandatory and present for every country (completeness gate),
+        # so the set is uniform and the plain mean stays comparable.
         values = {
             "trend_score": _iv("trend_score", 80.0),
             "growth_score": _iv("growth_score", 60.0),

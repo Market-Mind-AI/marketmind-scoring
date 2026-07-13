@@ -57,7 +57,7 @@ class IdentifyImageResponse(BaseModel):
     product_name: str
     brand: str | None
     category: str | None
-    localized_terms: dict[str, str] | None = None
+    localized_terms: dict[str, list[str]] | None = None
     target_age_min: int | None
     target_age_max: int | None
     estimated_price: float | None

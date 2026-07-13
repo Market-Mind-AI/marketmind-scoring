@@ -1,7 +1,7 @@
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,6 +81,14 @@ def _patched_pytrends(**overrides: RawIndicatorResult | list[RawIndicatorResult]
             else:
                 stack.enter_context(patch(target, return_value=value))
         stack.enter_context(patch(f"{_ENGINE}.undata_indicators.compute_median_age_fit", return_value=_UNAVAILABLE))
+        # Per-country signals now query the WINNING localized term (from the
+        # worldwide interest_by_country arbitration); stub it so the engine
+        # tests don't need that external read.
+        stack.enter_context(
+            patch(
+                f"{_ENGINE}.pytrends_indicators.best_localized_term", new_callable=AsyncMock, return_value="air fryer"
+            )
+        )
         yield
 
 

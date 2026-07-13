@@ -38,7 +38,11 @@ async def test_resolve_creates_new_entity_when_nothing_matches(db_session: Async
 async def test_resolve_persists_localized_terms_on_new_entity(db_session: AsyncSession) -> None:
     service = CatalogService(db_session, embedding_client=_mock_embedding_client())
     text = f"Jamon Iberico {uuid.uuid4()}"
-    localized = {"es": "jamón ibérico", "pt": "presunto ibérico", "en": "iberico ham"}
+    localized = {
+        "es": ["jamón ibérico", "jamón pata negra"],
+        "pt": ["presunto de porco preto", "presunto pata negra"],
+        "en": ["iberico ham"],
+    }
 
     result = await service.resolve(text, source="test", localized_terms=localized)
     assert result.method == "created"
@@ -48,6 +52,30 @@ async def test_resolve_persists_localized_terms_on_new_entity(db_session: AsyncS
     entity = await ProductRepository(db_session).get_by_entity_key(result.entity_key)
     assert entity is not None
     assert entity.localized_terms == localized
+
+
+async def test_resolve_accumulates_localized_terms_across_analyses(db_session: AsyncSession) -> None:
+    # The acervo grows on every resolve (not only creation): a second resolve
+    # of the same text merges genuinely-new variations and dedups the rest.
+    service = CatalogService(db_session, embedding_client=_mock_embedding_client())
+    text = f"Presunto {uuid.uuid4()}"
+
+    created = await service.resolve(text, source="test", localized_terms={"pt": ["presunto pata negra"]})
+    again = await service.resolve(
+        text,
+        source="test",
+        localized_terms={"pt": ["presunto pata negra", "presunto de porco preto"], "es": ["jamón pata negra"]},
+    )
+    assert again.entity_key == created.entity_key  # same entity (exact alias hit)
+
+    from app.repositories.product_repository import ProductRepository
+
+    entity = await ProductRepository(db_session).get_by_entity_key(again.entity_key)
+    assert entity is not None
+    assert entity.localized_terms == {
+        "pt": ["presunto pata negra", "presunto de porco preto"],  # deduped + appended
+        "es": ["jamón pata negra"],  # new language added
+    }
 
 
 async def test_resolve_second_call_hits_exact_alias(db_session: AsyncSession) -> None:

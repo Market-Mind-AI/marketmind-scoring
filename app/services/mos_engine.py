@@ -56,6 +56,27 @@ class MosEngine:
         await self._session.commit()
         return results
 
+    async def find_incomplete_countries(
+        self, *, entity_key: uuid.UUID, countries: list[str], period_key: str
+    ) -> dict[str, str]:
+        """Completeness gate (user principle 2026-07-11): the MOS must never be
+        computed on partial data. Returns {country: reason} for every requested
+        country still missing a mandatory indicator, so the caller can abort the
+        whole analysis rather than emit a partial/asymmetric result. Empty dict
+        means every country carries the full, uniform indicator set."""
+        incomplete: dict[str, str] = {}
+        for country_iso3 in countries:
+            country_values = await self._indicator_repo.get_values_for(
+                entity_key=None, country=country_iso3, period_type=PeriodType.MONTH.value, period_key=period_key
+            )
+            product_values = await self._indicator_repo.get_values_for(
+                entity_key=entity_key, country=country_iso3, period_type=PeriodType.MONTH.value, period_key=period_key
+            )
+            reason = check_availability({**country_values, **product_values})
+            if reason is not None:
+                incomplete[country_iso3] = reason
+        return incomplete
+
     async def _exclude(self, *, entity_key: uuid.UUID, country_iso3: str, period_key: str, reason: str) -> MosResult:
         return await self._mos_repo.upsert_mos_result(
             entity_key=entity_key,

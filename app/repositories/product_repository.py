@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
+from app.utils.text import merge_localized_terms
 from app.utils.time import utc_now
 
 
@@ -98,7 +99,7 @@ class ProductRepository:
         *,
         canonical_title: str,
         category: str | None = None,
-        localized_terms: dict[str, str] | None = None,
+        localized_terms: dict[str, list[str]] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
         embedding: list[float] | None = None,
@@ -133,6 +134,18 @@ class ProductRepository:
     async def set_embedding(self, entity: ProductCatalog, embedding: list[float]) -> None:
         entity.embedding = embedding
         await self._session.flush()
+
+    async def merge_localized_terms(self, entity: ProductCatalog, new_terms: dict[str, list[str]] | None) -> None:
+        """Accumulate newly-seen search-term variations into the entity's
+        localized_terms acervo (union per language, dedup by normalized key),
+        on EVERY analysis — not only at creation. No-op when new_terms adds
+        nothing. See app/utils/text.merge_localized_terms."""
+        if not new_terms:
+            return
+        merged = merge_localized_terms(entity.localized_terms, new_terms)
+        if merged != (entity.localized_terms or {}):
+            entity.localized_terms = merged
+            await self._session.flush()
 
     async def set_google_mid(self, entity: ProductCatalog, *, google_mid: str, google_type: str | None) -> None:
         entity.google_mid = google_mid

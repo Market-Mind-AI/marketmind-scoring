@@ -59,6 +59,31 @@ async def _fetch_interest_series(
     return [float(row[0]) for row in result.all() if row[0] is not None]
 
 
+async def best_localized_term(base_keyword: str, country_code: str, term_language: str | None, fallback: str) -> str:
+    """The country's WINNING local search term = the variation with the highest
+    worldwide interest_by_country value for that country (2026-07-11). The
+    worldwide multi-term comparison already arbitrated which of the LLM's
+    candidate names is the real one; reuse that verdict for the per-country
+    series (interest_over_time / interest_by_region / related_queries) so they
+    query a term that actually has search volume — the LLM's best-guess-first
+    variation can be too niche to have a standalone per-country time series
+    (e.g. 'presunto de porco preto' returns no series even though 'presunto
+    pata negra' does). Falls back to `fallback` when no worldwide value exists."""
+    engine = get_external_engine(DataSource.PYTRENDS)
+    query = "SELECT term FROM interest_by_country WHERE keyword = :keyword AND country = :country"
+    params: dict[str, str] = {"keyword": base_keyword, "country": country_code}
+    if term_language is not None:
+        query += " AND term_language = :term_language"
+        params["term_language"] = term_language
+    query += " ORDER BY interest_value DESC NULLS LAST LIMIT 1"
+    async with engine.connect() as connection:
+        result = await connection.execute(text(query), params)
+        row = result.first()
+    if row is None or row[0] is None:
+        return fallback
+    return str(row[0])
+
+
 async def compute_trend_score(
     keyword: str, country_code: str, period_key: str, term_language: str | None = None
 ) -> RawIndicatorResult:
@@ -77,26 +102,42 @@ async def compute_trend_score(
     comparable). country_code is the ISO-2 code, matched against the
     worldwide breakdown's per-country rows.
 
-    Keyword localization (2026-07-10): the worldwide query compares one term
-    per language on that common axis, so each country is read against the
-    term in ITS OWN language (term_language = the country's search_language),
-    fixing the artifact where Portugal scored low for the Spanish "jamón"
-    despite real demand for "presunto". `keyword` is the product's canonical
-    base keyword (the row's grouping key), term_language selects which
-    language's term to read for this country. When term_language is None
-    (country has no search_language) any row for the country is taken."""
+    Keyword localization by data arbitration (2026-07-11): the worldwide query
+    compares MULTIPLE real local-name variations per language on that common
+    axis, so each country is read against the terms in ITS OWN language
+    (term_language = the country's search_language). The score is the MAX over
+    those variations — the single winning local name that real search volume
+    picked (user decision 2026-07-11, replacing SUM). MAX makes the score
+    independent of how many candidates the LLM proposed per language: SUM
+    inflated whoever had more/overlapping synonyms, double-counted near-
+    synonyms (the same searcher counted twice), and — after clamping — tied
+    every strong country at 100 (Spain and Portugal both hit 100). MAX still
+    removes the dependence on the LLM naming the term exactly right — the data
+    decides which candidate is the real one, MAX just reads its value.
+    `keyword` is the product's canonical base keyword (the row's grouping key);
+    when term_language is None (country has no search_language) the max is over
+    all of the country's rows."""
+    # interest_by_country accumulates rows from every collection run (no
+    # upsert — each worldwide call is a new trend_request), so a term can have
+    # a stale duplicate. Reduce to the freshest value per DISTINCT term (max
+    # created_at) first, then take the max across terms.
     engine = get_external_engine(DataSource.PYTRENDS)
-    query = "SELECT interest_value FROM interest_by_country WHERE keyword = :keyword AND country = :country"
+    inner = (
+        "SELECT DISTINCT ON (term) interest_value AS v "
+        "FROM interest_by_country WHERE keyword = :keyword AND country = :country"
+    )
     params: dict[str, str] = {"keyword": keyword, "country": country_code}
     if term_language is not None:
-        query += " AND term_language = :term_language"
+        inner += " AND term_language = :term_language"
         params["term_language"] = term_language
+    inner += " ORDER BY term, created_at DESC"
+    query = f"SELECT COALESCE(MAX(v), 0), COUNT(*) FROM ({inner}) latest_per_term"
     async with engine.connect() as connection:
         result = await connection.execute(text(query), params)
         row = result.first()
 
-    if row is None or row[0] is None:
-        lang_note = f" (term_language='{term_language}')" if term_language is not None else ""
+    lang_note = f" (term_language='{term_language}')" if term_language is not None else ""
+    if row is None or row[1] == 0:
         return RawIndicatorResult(
             raw_value=None,
             direction=IndicatorDirection.DIRECT,
@@ -105,13 +146,17 @@ async def compute_trend_score(
             notes=f"interest_by_country: no worldwide value for '{country_code}'{lang_note} (Cap. 4 §4.2.1)",
         )
 
-    trend_raw = float(row[0])
+    # min(100) is only a safety guard: raw Google Trends cells are already
+    # 0-100, but anchor-chaining (>5 terms) can scale a value slightly past
+    # 100. MAX never sums, so this rarely triggers.
+    trend_raw = min(100.0, float(row[0]))
     return RawIndicatorResult(
         raw_value=trend_raw,
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"worldwide interest-by-country (global 0-100 axis, term_language='{term_language or 'any'}')",
+        notes=f"worldwide interest-by-country (global 0-100 axis, MAX of {row[1]} local variation(s), "
+        f"term_language='{term_language or 'any'}')",
     )
 
 
@@ -205,8 +250,14 @@ async def compute_demand_stability_score(keyword: str, country_code: str, period
 
 
 async def compute_regional_demand_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.4 — RegionalDemandRaw = mean(r_j) across regions, m >= 1,
-    zero-valued regions kept (not excluded)."""
+    """Cap. 4 §4.2.4 — RegionalDemandRaw = mean(r_j) across the country's own
+    sub-regions (PyTrends interest_by_region, geo=XX), m >= 1, zero-valued
+    regions kept (not excluded).
+
+    Scope (user decision 2026-07-11): the cross-country-comparable "world
+    total" is the trend_score (worldwide interest_by_country); Regional Demand
+    stays a PER-COUNTRY signal — the geographic spread of interest inside the
+    country — read with the country's own localized keyword (geo=XX)."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         result = await connection.execute(

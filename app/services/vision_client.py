@@ -58,21 +58,27 @@ class ProductIdentification(BaseModel):
             "never a descriptive phrase, specification list, or marketing copy."
         )
     )
-    localized_terms: dict[str, str] = Field(
+    localized_terms: dict[str, list[str]] = Field(
         default_factory=dict,
         description=(
-            "Map of {ISO-639-1 language code: native search term} — the term a "
-            "local buyer in that language would ACTUALLY type into Google to "
-            "find this product, NOT a literal translation of `product_name`. "
-            "For Iberian ham this is 'jamón ibérico' for 'es', 'presunto "
-            "ibérico' for 'pt', 'iberico ham' for 'en', 'prosciutto iberico' "
-            "for 'it' — each is what that market really searches, which is why "
-            "a single translated term misrepresents demand across countries. "
-            "Provide an entry for EVERY one of these languages: es, pt, en, de, "
-            "fr, it, ja, zh, ko, ru, id, tr, ar, nl, pl, sv. Keep each term "
-            "short and commonly-searched (brand-free, no size/certification), "
-            "written in that language's own script/accents (unlike "
-            "`product_name`, these keep native diacritics)."
+            "Map of {ISO-639-1 language code: LIST of real local market names}. "
+            "For each language, list 2-4 terms that a local buyer ACTUALLY types "
+            "into Google to find this product — the genuine colloquial/regional "
+            "names, NEVER a word-for-word translation of `product_name`. This is "
+            "the critical rule: the same product has a different real name in "
+            "each market. Iberian ham is called 'presunto de porco preto' and "
+            "'presunto pata negra' in Portugal (NOT the literal 'presunto "
+            "ibérico'), 'jamón de bellota' / 'jamón pata negra' in Spain, "
+            "'pata negra ham' in the English-speaking world. So give, e.g.: "
+            "pt: ['presunto de porco preto','presunto pata negra','presunto "
+            "ibérico'], es: ['jamón ibérico','jamón de bellota','jamón pata "
+            "negra'], en: ['iberico ham','pata negra ham']. Order each list "
+            "best-guess-first. The system compares ALL of them on Google Trends "
+            "and lets real search volume decide the winner, so include every "
+            "plausible local name rather than betting on one. Provide an entry "
+            "for EVERY language: es, pt, en, de, fr, it, ja, zh, ko, ru, id, tr, "
+            "ar, nl, pl, sv. Keep terms short and brand-free (no size/"
+            "certification), in each language's own script/accents."
         ),
     )
     target_age_min: int | None
@@ -108,12 +114,15 @@ class VisionClient:
             "Put the brand only in `brand`, never in `product_name` or "
             "`category`. "
             "`localized_terms`: for each of the languages es, pt, en, de, fr, "
-            "it, ja, zh, ko, ru, id, tr, ar, nl, pl, sv, give the term a local "
-            "buyer in that language really types to search for this product — "
-            "the genuine local term, not a word-for-word translation (e.g. "
-            "'presunto ibérico' for pt, not a translation of the Spanish name). "
-            "Each country will be measured on Google Trends with its own "
-            "language's term, so accuracy here directly drives the demand score."
+            "it, ja, zh, ko, ru, id, tr, ar, nl, pl, sv, give a LIST of 2-4 "
+            "genuine local market names a buyer in that language really types — "
+            "the real colloquial/regional names, NOT word-for-word translations. "
+            "Iberian ham in Portugal is 'presunto de porco preto' / 'presunto "
+            "pata negra' (not the literal 'presunto ibérico'); in Spain 'jamón "
+            "de bellota' / 'jamón pata negra'; in English 'pata negra ham'. "
+            "Include every plausible local name — the system compares all of "
+            "them on Google Trends and lets real search volume pick the winner, "
+            "so this directly drives the demand score."
         )
         prompt = f"{instructions}\n\nAdditional context from the user: {hint_text}" if hint_text else instructions
         image_block: ImageBlockParam = {

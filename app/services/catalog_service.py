@@ -35,7 +35,7 @@ class CatalogService:
         *,
         source: str,
         category: str | None = None,
-        localized_terms: dict[str, str] | None = None,
+        localized_terms: dict[str, list[str]] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
     ) -> CatalogResolveResponse:
@@ -45,6 +45,10 @@ class CatalogService:
         if existing is not None:
             existing_alias, entity = existing
             await self._repo.bump_alias_hit(existing_alias)
+            # Accumulate any newly-seen local term variations into the acervo
+            # (keyword localization by data arbitration) — happens on every
+            # resolve, not only at creation.
+            await self._repo.merge_localized_terms(entity, localized_terms)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="alias"
@@ -55,6 +59,7 @@ class CatalogService:
             await self._repo.create_alias(
                 alias_normalized=alias_normalized, entity_key=trigram.product.entity_key, source=source
             )
+            await self._repo.merge_localized_terms(trigram.product, localized_terms)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=trigram.product.entity_key,
@@ -70,6 +75,7 @@ class CatalogService:
                 await self._repo.create_alias(
                     alias_normalized=alias_normalized, entity_key=semantic.product.entity_key, source=source
                 )
+                await self._repo.merge_localized_terms(semantic.product, localized_terms)
                 await self._session.commit()
                 return CatalogResolveResponse(
                     entity_key=semantic.product.entity_key,
@@ -81,11 +87,12 @@ class CatalogService:
         entity = await self._repo.create_entity(
             canonical_title=text,
             category=category,
-            localized_terms=localized_terms,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
             embedding=embedding,
         )
+        # Normalize/dedup the initial terms through the same merge path.
+        await self._repo.merge_localized_terms(entity, localized_terms)
         await self._repo.create_alias(alias_normalized=alias_normalized, entity_key=entity.entity_key, source=source)
         await self._session.commit()
         return CatalogResolveResponse(

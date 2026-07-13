@@ -24,11 +24,14 @@ class ProductCatalog(Base):
     google_mid: Mapped[str | None] = mapped_column(nullable=True)
     google_type: Mapped[str | None] = mapped_column(nullable=True)
     category: Mapped[str | None] = mapped_column(nullable=True)
-    # {lang: native_search_term} from the identify-image LLM — each country's
-    # trend_score reads the term in its own language on the common Google
-    # Trends axis (keyword localization, 2026-07-10, see marketmind_mos_engine).
-    # Written only when a NEW entity is created (same rule as embedding).
-    localized_terms: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
+    # {lang: [real local market names]} — accumulating list of every search-term
+    # variation seen for this product per language (2026-07-11). The LLM proposes
+    # candidates (real colloquial/regional names, not literal translations); the
+    # worldwide Google Trends comparison arbitrates which actually has volume, and
+    # each country's trend_score SUMS its language's variations (see
+    # marketmind_mos_engine). Merged/accumulated on EVERY analysis (not only at
+    # creation), so the acervo grows over time.
+    localized_terms: Mapped[dict[str, list[str]] | None] = mapped_column(JSONB, nullable=True)
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(settings.openai_embedding_dimensions), nullable=True)

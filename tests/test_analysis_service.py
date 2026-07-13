@@ -72,7 +72,16 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     product_repo.get_by_entity_key = AsyncMock(
         return_value=SimpleNamespace(canonical_title="air fryer", localized_terms={"en": "air fryer"})
     )
-    country_repo.get_by_iso3 = AsyncMock(return_value=SimpleNamespace(search_language="en"))
+    country_repo.get_by_iso3 = AsyncMock(
+        return_value=SimpleNamespace(search_language="en", pytrends_geo=None, iso2="US")
+    )
+    best_term_patcher = patch(
+        "app.services.analysis_service.pytrends_indicators.best_localized_term",
+        new_callable=AsyncMock,
+        side_effect=lambda base, country_code, lang, fallback: fallback,
+    )
+    best_term_patcher.start()
+    mocks["_patcher_best_term"] = best_term_patcher
 
     coverage_service.check_coverage = AsyncMock(
         side_effect=lambda gaps: [
@@ -90,6 +99,7 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     coverage_service.check_or_collect = AsyncMock(return_value=(uuid.uuid4(), []))
 
     indicator_engine.compute_all = AsyncMock(return_value=[])
+    mos_engine.find_incomplete_countries = AsyncMock(return_value={})  # completeness gate: nothing missing
     mos_engine.compute_mos = AsyncMock(return_value=[_mos_result("USA")])
     weight_calibration.calibrate = AsyncMock(return_value={})
 
@@ -137,22 +147,28 @@ async def test_run_dispatches_collection_only_for_missing_gaps() -> None:
     assert len(dispatched_gaps) > 0
 
 
-async def test_worldwide_demand_gap_sends_one_localized_term_per_language() -> None:
-    # Keyword localization (2026-07-10): the worldwide interest_by_country
-    # collection compares one localized term per distinct search language
-    # among the requested countries, so each country is read against the
-    # term in its own language.
+async def test_worldwide_demand_gap_sends_all_variations_per_language() -> None:
+    # Data arbitration (2026-07-11): the worldwide interest_by_country
+    # collection compares ALL local-name variations for each distinct search
+    # language among the requested countries, so real search volume can pick
+    # the genuine local name and each country SUMS its language's variations.
     session, mocks = _patched_service(all_covered=False)
     mocks["analysis_repo"].get = AsyncMock(return_value=_analysis_request(countries=["ESP", "PRT", "MEX"]))
     mocks["product_repo"].get_by_entity_key = AsyncMock(
         return_value=SimpleNamespace(
             canonical_title="jamon iberico",
-            localized_terms={"es": "jamón ibérico", "pt": "presunto ibérico"},
+            localized_terms={
+                "es": ["jamón ibérico", "jamón pata negra"],
+                "pt": ["presunto de porco preto", "presunto pata negra"],
+            },
         )
     )
     language_by_iso3 = {"ESP": "es", "PRT": "pt", "MEX": "es"}
+    iso2_by_iso3 = {"ESP": "ES", "PRT": "PT", "MEX": "MX"}
     mocks["country_repo"].get_by_iso3 = AsyncMock(
-        side_effect=lambda iso3: SimpleNamespace(search_language=language_by_iso3[iso3])
+        side_effect=lambda iso3: SimpleNamespace(
+            search_language=language_by_iso3[iso3], pytrends_geo=None, iso2=iso2_by_iso3[iso3]
+        )
     )
     try:
         service = AnalysisService(session)
@@ -171,9 +187,35 @@ async def test_worldwide_demand_gap_sends_one_localized_term_per_language() -> N
     assert len(worldwide_gaps) == 1
     params = worldwide_gaps[0].collection_params
     assert params["base_keyword"] == "jamon iberico"
-    terms_by_language = {t["language"]: t["term"] for t in params["terms"]}
-    # es and pt only (MEX shares es -> deduped), each in its own language
-    assert terms_by_language == {"es": "jamón ibérico", "pt": "presunto ibérico"}
+    terms_by_language: dict[str, list[str]] = {}
+    for t in params["terms"]:
+        terms_by_language.setdefault(t["language"], []).append(t["term"])
+    # es and pt only (MEX shares es -> deduped), ALL variations per language
+    assert terms_by_language == {
+        "es": ["jamón ibérico", "jamón pata negra"],
+        "pt": ["presunto de porco preto", "presunto pata negra"],
+    }
+
+
+async def test_run_aborts_when_data_incomplete_never_partial_mos() -> None:
+    # Completeness gate: if any requested country is missing a mandatory
+    # indicator after collection, the whole analysis fails — no partial MOS.
+    session, mocks = _patched_service(all_covered=True)
+    mocks["mos_engine"].find_incomplete_countries = AsyncMock(
+        return_value={"USA": "Missing mandatory indicator(s): regional_demand_score"}
+    )
+    try:
+        service = AnalysisService(session)
+        await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    mocks["mos_engine"].compute_mos.assert_not_awaited()  # never computed on partial data
+    mocks["analysis_repo"].mark_failed.assert_awaited_once()
+    assert "partial data" in mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+    mocks["analysis_repo"].mark_done.assert_not_awaited()
 
 
 async def test_run_marks_failed_on_unexpected_exception() -> None:

@@ -40,6 +40,7 @@ from app.services.indicators.normalization import FIXED_BOUNDS_PERIOD_KEY, norma
 from app.services.indicators.results import RawIndicatorResult
 from app.services.mos.interpretation import INDICATOR_MEANING, score_band
 from app.utils.period import current_month_period_key
+from app.utils.text import as_term_list
 
 
 class IndicatorEngine:
@@ -150,15 +151,20 @@ class IndicatorEngine:
         self, entity: ProductCatalog, country: Country, period_key: str
     ) -> list[IndicatorValue]:
         country_code = resolve_source_country_code(DataSource.PYTRENDS, country)
-        # Per-country signals are searched in the country's own language
-        # (keyword localization, 2026-07-10) — the same term collection used,
-        # so the interest_over_time/region/related rows match. trend_score
-        # reads the WORLDWIDE row for (canonical base keyword, this country's
-        # language term) via term_language.
+        # trend_score reads the WORLDWIDE interest_by_country (the cross-country
+        # comparable "world total") for (canonical base keyword, this country's
+        # language). growth/stability/regional read the PER-COUNTRY series
+        # (interest_over_time, interest_by_region, geo=XX) searched with the
+        # country's WINNING local term — the variation that scored highest in
+        # the worldwide arbitration (has real volume), not the LLM's first
+        # guess (which can be too niche to have a standalone series). Matches
+        # the term analysis_service collected for those per-country series.
         language = country.search_language
-        localized = entity.localized_terms or {}
-        keyword = localized.get(language) if language is not None else None
-        keyword = keyword or entity.canonical_title
+        variations = as_term_list((entity.localized_terms or {}).get(language)) if language is not None else []
+        fallback_keyword = variations[0] if variations else entity.canonical_title
+        keyword = await pytrends_indicators.best_localized_term(
+            entity.canonical_title, country_code, language, fallback_keyword
+        )
 
         trend = await pytrends_indicators.compute_trend_score(
             entity.canonical_title, country_code, period_key, term_language=language

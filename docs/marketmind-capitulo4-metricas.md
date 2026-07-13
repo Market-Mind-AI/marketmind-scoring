@@ -42,13 +42,19 @@ Notación: `X` = conjunto de valores del mismo indicador para todos los mercados
 
 ## 4.2 Indicadores derivados de PyTrends
 
-Endpoints usados para el MOS: `interest_over_time`, `interest_by_region`, `related_queries` (solo `top`). `suggestions` es identificación de producto (Fase 2, no entra al MOS). `related_topics` llegó null/null. `trending_rss` es general del país, no del producto. `categories` es catálogo auxiliar.
+Endpoints usados para el MOS: `interest_over_time` (Growth + Demand Stability), `interest_by_country` (Trend Score, worldwide), `interest_by_region_worldwide` (Regional Demand, worldwide), `related_queries` (solo `top`, Search Intent). `suggestions` es identificación de producto (Fase 2, no entra al MOS). `related_topics` llegó null/null. `trending_rss` es general del país, no del producto. `categories` es catálogo auxiliar.
+
+> **PRINCIPIO DE COMPLETUD 2026-07-11 (decisión del usuario, transversal a todo el MOS):** los 5 indicadores de Demanda son **obligatorios** — el MOS jamás se calcula sobre datos parciales. Todos los países de una consulta llevan el MISMO conjunto de indicadores en la MISMA regla 0-100; es eso lo que los hace comparables. La recolección debe COMPLETARSE para todos los países antes de calcular cualquier score/MOS (portón de completud en `analysis_service`); si algo falta tras la recolección, la consulta **falla por entero** en vez de devolver un ranking parcial/asimétrico. Los límites de tasa de Google se resuelven con reintento + el fallback DataForSEO (live), nunca saltándose una señal. La Demanda es la media simple de sus 5 señales (todas presentes → conjunto uniforme → media comparable).
+>
+> **Keyword per-país = término GANADOR (2026-07-11):** las señales per-país (Growth/Demand Stability/Regional Demand/Search Intent) se consultan (geo=XX) con el término local que **ganó** el arbitraje mundial — el de mayor valor en `interest_by_country` para ese país — no con el primer candidato del LLM. Motivo: el nombre local más específico (p.ej. "presunto de porco preto") sirve para el arbitraje mundial pero puede ser demasiado nicho para tener una serie temporal per-país propia (Google devuelve vacío/404); el ganador (p.ej. "presunto pata negra") sí tiene volumen. El dato ya nos dijo cuál es el término real — se reutiliza ese veredicto en todas las consultas per-país (`app/services/indicators/pytrends.py::best_localized_term`).
 
 ### 4.2.1 Trend Score
 
 > **CORRECCIÓN 2026-07-10 (ver `marketmind_mos_engine`):** el Trend Score dejó de leer `interest_over_time` **por país** (que Google escala 0-100 al pico DE ESE país, así que no es comparable entre países — un término cerca de su pico nacional en EE.UU. superaba al mercado cultural del producto, p.ej. jamón/España, invirtiendo el ranking del MOS). Ahora lee la consulta **mundial** de Google Trends (`geo=''`, `resolution='COUNTRY'`, tabla `interest_by_country` del servicio pytrends), donde cada país está en una **régua global 0-100** = proporción de las búsquedas de ese país dedicadas al término (afinidad cultural — España ≈ 100 para jamón). Es independiente de la consulta (siempre mundial). Growth (4.2.2) y Demand Stability (4.2.3) siguen leyendo la serie `interest_over_time` por país (son razones/forma, ya comparables entre países).
 >
 > **KEYWORD LOCALIZADA 2026-07-10 (misma corrección):** la régua mundial mide la fracción de búsquedas por el **término exacto**, así que un único keyword en un idioma penaliza a los países que buscan el producto con otra palabra — Portugal salía en 5 con "jamón" (en español) porque busca **"presunto"**, un artefacto lingüístico, no falta de demanda, que dejaba su Trend Score bajo el piso no-compensatorio. Solución: cada país se mide con el término en **su propio idioma**, y **todos los términos localizados se comparan en un único eje** de Google Trends (comparación multi-término: `build_payload([t1,t2,...], geo='')`, encadenamiento con término-âncora cuando hay >5 idiomas). El LLM de `identify-image` genera el mapa `{idioma: término nativo}` (`product_catalog.localized_terms`); cada país usa `countries.search_language` para leer, en `interest_by_country`, la fila `(country, term_language)` — el valor de SU término en el eje común. Así España lee "jamón ibérico" (es), Portugal "presunto ibérico" (pt) e Inglaterra "iberico ham" (en), todos comparables.
+>
+> **ARBITRAJE POR DATOS + ACERVO 2026-07-11 (refuerzo):** un LLM que devuelve UN término por idioma puede dar una traducción literal errónea en vez del nombre real de mercado (p.ej. el jamón ibérico en Portugal se llama **"presunto de porco preto"** / **"presunto pata negra"**, no el literal "presunto ibérico"). Para no depender de que el LLM acierte, ahora devuelve una **LISTA de nombres locales reales** por idioma (`product_catalog.localized_terms` pasa a `{idioma: [variaciones]}`), TODAS entran en la comparación multi-término, y **el propio volumen de Google Trends arbitra** cuál es el nombre real. El Trend Score de cada país es el **MÁXIMO** de las variaciones de su idioma — el nombre local ganador que el dato eligió (decisión del usuario 2026-07-11, sustituyendo a la SUMA). El MÁXIMO es **independiente del número de candidatos** por idioma: la SUMA inflaba a quien tuviera más sinónimos, contaba doble los cuasi-sinónimos y, tras el clamp a 100, empataba a todos los países fuertes en 100 (España y Portugal ambos 100). El acervo de variaciones es **acumulativo**: cada `/analyze` fusiona los candidatos nuevos del LLM en la lista existente (dedup por clave normalizada), también en entidades ya creadas. Nota: el Trend Score mide **fracción de las búsquedas del país** (share), no volumen absoluto — el tamaño de mercado absoluto entra por la dimensión Market Size, no por Demanda.
 
 **Pregunta de negocio:** ¿Cuánta demanda relativa por el producto tiene este país frente al mundo?
 **Fuente/endpoint:** PyTrends / `interest_by_country` (worldwide, global 0-100 axis, multi-término localizado)
@@ -109,10 +115,12 @@ Interpretación: score alto = más estable; score bajo = picos/caídas fuertes.
 
 ### 4.2.4 Regional Demand Score
 
+> **ALCANCE 2026-07-11 (decisión del usuario):** Regional Demand es un indicador **PER-PAÍS** — la dispersión geográfica del interés DENTRO del país (`interest_by_region`, geo=XX, escalado al pico del propio país). NO se intentó hacerlo comparable entre países vía consulta sub-nacional mundial: eso solo lo da Google (`geo=''`,`resolution=REGION`), que rate-limita agresivamente y no tiene equivalente en DataForSEO. La comparabilidad cross-country la aporta el **Trend Score** (el "total mundial" = `interest_by_country`); Regional Demand se lee con el keyword localizado del país (geo=XX), como siempre.
+
 **Pregunta de negocio:** ¿El interés está presente en varias regiones del país?
-**Fuente/endpoint:** PyTrends / `interest_by_region`
+**Fuente/endpoint:** PyTrends / `interest_by_region` (per-país, geo=XX)
 **Campos:** `geoName`, columna del keyword
-**Uso en el MOS:** Sí.
+**Uso en el MOS:** Sí (obligatorio).
 
 Variables: `m` = número de regiones con valor válido; `r_j` = valor de la región `j` (0-100).
 

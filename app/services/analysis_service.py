@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
 from app.db.models.country import Country
 from app.db.models.product_catalog import ProductCatalog
@@ -27,12 +28,14 @@ from app.schemas.coverage import CoverageGap
 from app.schemas.mos import MosResultResponse
 from app.services.coverage_service import WORLD_SENTINEL_ISO3, CoverageService
 from app.services.indicator_engine import IndicatorEngine
+from app.services.indicators import pytrends as pytrends_indicators
 from app.services.indicators.oecd import RAW_INDICATOR_CODES as OECD_RAW_CODES
 from app.services.indicators.undata import RAW_INDICATOR_CODES as UNDATA_RAW_CODES
 from app.services.indicators.worldbank import RAW_INDICATOR_CODES as WORLDBANK_RAW_CODES
 from app.services.mos_engine import MosEngine
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key, last_n_month_period_keys
+from app.utils.text import as_term_list, normalize_alias
 
 _HISTORY_WINDOW_MONTHS = 6
 # Window for collection_params on annual/quarterly sources (WorldBank/OECD/
@@ -42,6 +45,11 @@ _HISTORY_WINDOW_MONTHS = 6
 # freshness tracking, not how much history each source is asked to fetch.
 _ANNUAL_LOOKBACK_YEARS = 10
 
+# Per-country PyTrends collections (geo=XX): interest_over_time (Growth +
+# Demand Stability), interest_by_region (Regional Demand — geographic spread
+# inside the country), related_queries (Search Intent). trend_score is the
+# WORLDWIDE interest_by_country (the cross-country "world total"), dispatched
+# separately in _ensure_worldwide_demand_coverage.
 _PYTRENDS_INDICATOR_CODES = ["interest_over_time", "interest_by_region", "related_queries"]
 
 
@@ -90,6 +98,24 @@ class AnalysisService:
             # is_closed immutability of already-locked periods.
             await self._weight_calibration.calibrate(period_key=period_key)
 
+            # Completeness gate (user principle 2026-07-11): never compute a MOS
+            # on partial data. Every requested country must carry the full,
+            # uniform mandatory indicator set (same 0-100 ruler for all) before
+            # any MOS is produced — otherwise the whole analysis fails loudly
+            # rather than returning an asymmetric/partial ranking. Reliable
+            # collection (retry + DataForSEO live fallback) is what makes this
+            # gate pass; it is never satisfied by skipping a signal.
+            if entity_key is not None:
+                incomplete = await self._mos_engine.find_incomplete_countries(
+                    entity_key=entity_key, countries=countries, period_key=period_key
+                )
+                if incomplete:
+                    detail = "; ".join(f"{country}: {reason}" for country, reason in incomplete.items())
+                    raise MarketMindCoreError(
+                        "Analysis aborted — the MOS is never computed on partial data. "
+                        f"Incomplete after collection: {detail}"
+                    )
+
             mos_results = (
                 await self._mos_engine.compute_mos(entity_key=entity_key, countries=countries, period_key=period_key)
                 if entity_key is not None
@@ -123,20 +149,38 @@ class AnalysisService:
             # Spanish "jamón", so measuring Portugal with the Spanish term
             # understates it. Falls back to canonical_title when the country
             # has no search_language or the entity has no term for it.
-            keyword = _localized_keyword(entity, country) if entity is not None else None
+            # Per-country series are collected with the country's WINNING local
+            # term (the variation that scored highest in the worldwide
+            # interest_by_country arbitration — real volume), falling back to
+            # the LLM's first guess. Matches what indicator_engine reads. The
+            # worldwide collection ran first (above), so the verdict exists.
+            keyword = None
+            if entity is not None:
+                keyword = _localized_keyword(entity, country) or entity.canonical_title
+                country_code = (country.pytrends_geo or country.iso2) if country is not None else None
+                if country is not None and country_code is not None:
+                    keyword = await pytrends_indicators.best_localized_term(
+                        entity.canonical_title, country_code, country.search_language, keyword
+                    )
             if keyword is not None:
-                for period_key in period_keys:
-                    for indicator_code in _PYTRENDS_INDICATOR_CODES:
-                        gaps.append(
-                            CoverageGap(
-                                source=DataSource.PYTRENDS,
-                                entity_key=entity_key,
-                                country=country_iso3,
-                                indicator_code=indicator_code,
-                                period_key=period_key,
-                                collection_params={"keyword": keyword},
-                            )
+                # Per-country PyTrends is collected ONCE (current month only),
+                # not per freshness period_key: each call fetches the same
+                # rolling "today 12-m" series regardless of period_key, so the
+                # old 6x loop just re-fetched identical data 6x — 6x the
+                # rate-limited Google calls for nothing. One gap per indicator;
+                # next month's period_key re-collects for freshness. (Same
+                # rationale as the worldwide interest_by_country gap.)
+                for indicator_code in _PYTRENDS_INDICATOR_CODES:
+                    gaps.append(
+                        CoverageGap(
+                            source=DataSource.PYTRENDS,
+                            entity_key=entity_key,
+                            country=country_iso3,
+                            indicator_code=indicator_code,
+                            period_key=current_month_period_key(),
+                            collection_params={"keyword": keyword},
                         )
+                    )
 
         current_year = datetime.now(UTC).year
         start_year, end_year = current_year - _ANNUAL_LOOKBACK_YEARS, current_year
@@ -215,27 +259,41 @@ class AnalysisService:
         if entity is None:
             return
         base_keyword = entity.canonical_title
-        localized = entity.localized_terms or {}
 
-        # One term per distinct search language among the requested countries.
-        # Missing localized term for a language -> canonical fallback tagged
-        # with that language, so compute_trend_score still finds its row.
-        terms_by_language: dict[str, str] = {}
+        # ALL local-name variations for each distinct search language among the
+        # requested countries, each tagged with its language, compared on one
+        # Google Trends axis. Real search volume then arbitrates which name is
+        # the genuine local one (data arbitration) and each country SUMS its
+        # language's variations in compute_trend_score. Missing a language ->
+        # canonical fallback tagged with that language, so a value still exists.
+        terms: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        languages_done: set[str] = set()
         for country_iso3 in countries:
             country = await self._country_repo.get_by_iso3(country_iso3)
             language = country.search_language if country is not None else None
-            if language is None or language in terms_by_language:
+            if language is None or language in languages_done:
                 continue
-            terms_by_language[language] = localized.get(language) or base_keyword
-        if not terms_by_language:
-            terms_by_language = {"und": base_keyword}  # no language mapping at all — single-term worldwide
-        terms = [{"term": term, "language": language} for language, term in terms_by_language.items()]
+            languages_done.add(language)
+            variations = _language_variations(entity, language) or [base_keyword]
+            for term in variations:
+                key = (language, normalize_alias(term))
+                if key in seen:
+                    continue
+                seen.add(key)
+                terms.append({"term": term, "language": language})
+        if not terms:
+            terms = [{"term": base_keyword, "language": "und"}]  # no language mapping at all
 
         # A single collection, keyed only to the current month. Unlike the
         # per-country signals, the worldwide breakdown is one snapshot (not a
         # monthly series), so collecting it once per freshness period would
         # just re-fetch identical data 6x (6 rate-limited calls). One gap =
         # one call; next month's period_key re-collects for freshness.
+        # The cross-country-comparable "world total": worldwide multi-term
+        # interest_by_country (geo='', one localized term per language on a
+        # single global axis) — feeds trend_score. Keyed to the current month
+        # only (single snapshot, not a monthly series).
         gap = CoverageGap(
             source=DataSource.PYTRENDS,
             entity_key=entity_key,
@@ -249,15 +307,23 @@ class AnalysisService:
             await self._coverage_service.check_or_collect([gap], requested_by="analysis_service")
 
 
+def _language_variations(entity: "ProductCatalog", language: str | None) -> list[str]:
+    """All accumulated local-name variations for a language, tolerating the
+    legacy single-string shape. Empty if the language isn't in the acervo."""
+    if language is None:
+        return []
+    raw = (entity.localized_terms or {}).get(language)
+    return as_term_list(raw)
+
+
 def _localized_keyword(entity: "ProductCatalog | None", country: "Country | None") -> str | None:
-    """The search term for a country = the entity's term in that country's
-    search language, falling back to the canonical title. Shared by the
-    per-country coverage loop and the indicator engine so collection and
-    reading always agree on the keyword stored in PyTrends' tables."""
+    """The representative per-country search term = the top (best-guess-first)
+    local-name variation in that country's search language, falling back to the
+    canonical title. Used for the per-country geo signals (growth/stability/
+    regional), which take a single keyword; the worldwide demand read SUMS all
+    variations instead (see compute_trend_score)."""
     if entity is None:
         return None
     language = country.search_language if country is not None else None
-    localized = entity.localized_terms or {}
-    if language is not None and language in localized:
-        return localized[language]
-    return entity.canonical_title
+    variations = _language_variations(entity, language)
+    return variations[0] if variations else entity.canonical_title

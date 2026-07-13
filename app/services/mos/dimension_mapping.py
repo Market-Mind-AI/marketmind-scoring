@@ -34,27 +34,22 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
 }
 
 # Mandatory = present or the country is excluded from the MOS (Cap. 5 §5.3).
-# Non-mandatory exclusions:
-#   - Median Age Fit: only required when the Product Profile has a target age
-#     range (Cap. 4 §4.5.3).
-#   - Real Estate Growth: OECD-only coverage (Cap. 4 §4.4.3).
-#   - Growth / Demand Stability / Regional Demand / Search Intent: the four
-#     per-country PyTrends *enrichment* signals (2026-07-10). They're
-#     collection-fragile — Google Trends rate-limits per-country queries and
-#     the DataForSEO sandbox fallback returns no region/query data, so any
-#     one of them can transiently come back empty and would otherwise
-#     exclude an entire country. trend_score (the WORLDWIDE interest-by-
-#     country anchor, one reliable call per keyword) stays mandatory as the
-#     Demand dimension's floor; the Demand sub-score averages whichever of
-#     these enrichment signals are present. Inflation
-#     (WORLDBANK_INFLATION_SCORE) is mandatory like any other WB indicator.
+# Only two indicators are non-mandatory, and both for structural reasons (not
+# collection fragility):
+#   - Median Age Fit: only defined when the Product Profile has a target age
+#     range (Cap. 4 §4.5.3) — conditional by design.
+#   - Real Estate Growth: OECD-only coverage (Cap. 4 §4.4.3) — non-OECD
+#     countries structurally cannot have it.
+# Everything else — including ALL five Demand signals (trend_score plus the
+# four per-country PyTrends signals) — is mandatory (user principle 2026-07-11:
+# the MOS must never be computed on partial data; every country carries the
+# SAME indicator set on the same 0-100 ruler, so the scores stay comparable).
+# Collection must therefore complete for every country before any score/MOS is
+# computed (see analysis_service completeness gate); PyTrends rate limits are
+# handled by reliable retry + the DataForSEO live fallback, never by skipping.
 MANDATORY_INDICATORS: frozenset[IndicatorCode] = frozenset(DIMENSION_BY_INDICATOR) - {
     IndicatorCode.MEDIAN_AGE_FIT_SCORE,
     IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
-    IndicatorCode.GROWTH_SCORE,
-    IndicatorCode.DEMAND_STABILITY_SCORE,
-    IndicatorCode.REGIONAL_DEMAND_SCORE,
-    IndicatorCode.SEARCH_INTENT_SCORE,
 }
 
 
@@ -77,8 +72,14 @@ def check_availability(indicator_values: dict[str, IndicatorValue]) -> str | Non
 
 def compute_dimension_subscores(indicator_values: dict[str, IndicatorValue]) -> dict[IndicatorDimension, float]:
     """Sub-score per dimension = mean of the normalized scores of every
-    available indicator in that dimension (Median Age Fit only contributes
-    when present — it's conditional, not mandatory)."""
+    available indicator in that dimension, all on the same 0-100 ruler
+    (Median Age Fit only contributes when present — it's conditional, not
+    mandatory). Demand averages its five signals like any other dimension:
+    every one is mandatory and collected for every country before this runs
+    (completeness gate), so the set is uniform and the plain mean stays
+    comparable across countries. All five Demand signals are cross-country
+    comparable — trend_score and regional_demand come from the WORLDWIDE
+    breakdowns, and growth/stability/search_intent are ratios/compositions."""
     by_dimension: dict[IndicatorDimension, list[float]] = {}
     for code, dimension in DIMENSION_BY_INDICATOR.items():
         iv = indicator_values.get(code.value)

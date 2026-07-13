@@ -113,12 +113,10 @@ def _build_pytrends_request(
         raise CollectionDispatchError(f"Unknown pytrends indicator_code '{indicator_code}'")
 
     if indicator_code == "interest_by_country":
-        # WORLDWIDE (geo='') Google Trends breakdown collected once per
-        # product — every country on one global 0-100 axis, the cross-country-
-        # comparable demand signal behind trend_score (see
-        # app/services/indicators/pytrends.py compute_trend_score). Multi-term
-        # (2026-07-10): one localized term per language compared on that same
-        # axis, so each country reads the term in its own language.
+        # WORLDWIDE (geo='') multi-term Google Trends breakdown — the
+        # cross-country-comparable "world total" behind trend_score, each
+        # country read against its own-language term(s) on one global 0-100
+        # axis (see app/services/indicators/pytrends.py compute_trend_score).
         payload: dict[str, Any] = {
             "base_keyword": _require(params, "base_keyword"),
             "terms": _require(params, "terms"),

@@ -8,10 +8,10 @@ from tests._external_db_mock import make_mock_engine, result_with_all, result_wi
 
 
 async def test_trend_score_reads_worldwide_country_value() -> None:
-    # trend_score is now the WORLDWIDE interest-by-country value for the
-    # country (global 0-100 axis), a single row — not the mean of the
-    # per-country self-scaled series (2026-07-10 redesign).
-    engine = make_mock_engine([result_with_first((87.0,))])
+    # trend_score is the WORLDWIDE interest-by-country value for the country
+    # (global 0-100 axis) — the MAX of the country's language variations
+    # (query returns (MAX, COUNT)), not the per-country self-scaled series.
+    engine = make_mock_engine([result_with_first((87.0, 2))])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_trend_score("jamon iberico", "ES", "2026-07")
 
@@ -20,8 +20,20 @@ async def test_trend_score_reads_worldwide_country_value() -> None:
     assert result.direction == IndicatorDirection.DIRECT
 
 
+async def test_trend_score_clamps_to_100_safety_guard() -> None:
+    # Anchor-chaining (>5 terms) can scale a value slightly past the axis —
+    # a min(100) safety guard keeps the score on the 0-100 scale.
+    engine = make_mock_engine([result_with_first((140.0, 3))])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_trend_score("jamon iberico", "PT", "2026-07", term_language="pt")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 100.0
+
+
 async def test_trend_score_unavailable_when_country_absent_from_worldwide_breakdown() -> None:
-    engine = make_mock_engine([result_with_first(None)])
+    # No rows for the country/language -> COUNT is 0 -> UNAVAILABLE.
+    engine = make_mock_engine([result_with_first((0, 0))])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_trend_score("jamon iberico", "ES", "2026-07")
 
@@ -29,16 +41,18 @@ async def test_trend_score_unavailable_when_country_absent_from_worldwide_breakd
     assert result.raw_value is None
 
 
-async def test_trend_score_reads_localized_term_by_language() -> None:
-    # Keyword localization (2026-07-10): each country reads the worldwide
-    # value for the term in ITS OWN language (term_language selects the row).
-    engine = make_mock_engine([result_with_first((72.0,))])
+async def test_trend_score_takes_max_localized_variation_by_language() -> None:
+    # Data arbitration (2026-07-11): each country takes the MAX (winning local
+    # name) among the real variations in ITS OWN language — count-independent,
+    # so a language with more candidates isn't mechanically inflated.
+    engine = make_mock_engine([result_with_first((71.0, 3))])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_trend_score("jamon iberico", "PT", "2026-07", term_language="pt")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
-    assert result.raw_value == 72.0
+    assert result.raw_value == 71.0
     assert "term_language='pt'" in result.notes
+    assert "MAX of 3 local variation(s)" in result.notes
 
 
 async def test_growth_score_computes_expected_raw() -> None:
@@ -94,9 +108,10 @@ async def test_demand_stability_unavailable_when_mean_is_zero() -> None:
 
 
 async def test_regional_demand_score_computes_mean() -> None:
+    # Per-country signal (geo=XX): mean of the country's own sub-region values.
     engine = make_mock_engine([result_with_all([(100.0,), (95.0,), (76.0,)])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
-        result = await pytrends_indicators.compute_regional_demand_score("air fryer", "ES", "2026-07")
+        result = await pytrends_indicators.compute_regional_demand_score("jamon iberico", "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
     assert result.raw_value == pytest.approx((100.0 + 95.0 + 76.0) / 3)
@@ -105,7 +120,7 @@ async def test_regional_demand_score_computes_mean() -> None:
 async def test_regional_demand_score_unavailable_when_no_regions() -> None:
     engine = make_mock_engine([result_with_all([])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
-        result = await pytrends_indicators.compute_regional_demand_score("air fryer", "ES", "2026-07")
+        result = await pytrends_indicators.compute_regional_demand_score("jamon iberico", "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
 
