@@ -10,8 +10,18 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
     IndicatorCode.TREND_SCORE: IndicatorDimension.DEMAND,
     IndicatorCode.GROWTH_SCORE: IndicatorDimension.DEMAND,
     IndicatorCode.DEMAND_STABILITY_SCORE: IndicatorDimension.DEMAND,
-    IndicatorCode.REGIONAL_DEMAND_SCORE: IndicatorDimension.DEMAND,
     IndicatorCode.SEARCH_INTENT_SCORE: IndicatorDimension.DEMAND,
+    # REGIONAL_DEMAND_SCORE is deliberately NOT scored into Demand (2026-07-14):
+    # it's the per-country `interest_by_region` mean, self-scaled to each
+    # country's OWN top region, so it is NOT cross-country comparable (a
+    # geographically-spread market reads high, a concentrated one low, on
+    # different rulers) — mixing it into a cross-country MOS distorted the
+    # ranking (e.g. it inflated Mexico over the USA for air fryer). The other
+    # four Demand signals ARE comparable: trend_score/search_intent are
+    # worldwide/composition, growth/stability are scale-invariant ratios.
+    # regional_demand is still computed and stored as narrative CONTEXT for the
+    # LLM (like government_expenditure), just never aggregated. See
+    # marketmind_mos_engine.
     IndicatorCode.INTERNET_PENETRATION_SCORE: IndicatorDimension.DIGITAL_READINESS,
     IndicatorCode.MOBILE_CONNECTIVITY_SCORE: IndicatorDimension.DIGITAL_READINESS,
     IndicatorCode.GDP_PER_CAPITA_SCORE: IndicatorDimension.ECONOMIC_READINESS,
@@ -74,12 +84,14 @@ def compute_dimension_subscores(indicator_values: dict[str, IndicatorValue]) -> 
     """Sub-score per dimension = mean of the normalized scores of every
     available indicator in that dimension, all on the same 0-100 ruler
     (Median Age Fit only contributes when present — it's conditional, not
-    mandatory). Demand averages its five signals like any other dimension:
-    every one is mandatory and collected for every country before this runs
-    (completeness gate), so the set is uniform and the plain mean stays
-    comparable across countries. All five Demand signals are cross-country
-    comparable — trend_score and regional_demand come from the WORLDWIDE
-    breakdowns, and growth/stability/search_intent are ratios/compositions."""
+    mandatory). Demand averages its FOUR scored signals like any other
+    dimension: every one is mandatory and collected for every country before
+    this runs (completeness gate), so the set is uniform and the plain mean
+    stays comparable across countries. All four are cross-country comparable —
+    trend_score comes from the WORLDWIDE breakdown, search_intent is a
+    composition, and growth/stability are scale-invariant ratios.
+    regional_demand is intentionally excluded (self-scaled per country, not
+    comparable — see DIMENSION_BY_INDICATOR); it stays as narrative context."""
     by_dimension: dict[IndicatorDimension, list[float]] = {}
     for code, dimension in DIMENSION_BY_INDICATOR.items():
         iv = indicator_values.get(code.value)

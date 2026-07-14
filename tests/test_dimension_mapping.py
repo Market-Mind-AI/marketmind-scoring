@@ -143,6 +143,27 @@ class TestComputeDimensionSubscores:
         assert with_growth[IndicatorDimension.ECONOMIC_READINESS] == 75.0
 
 
+class TestRegionalDemandIsContextOnly:
+    def test_regional_demand_never_maps_to_a_dimension(self) -> None:
+        # Self-scaled per country (interest_by_region is relative to each
+        # country's OWN top region) -> not cross-country comparable, so it's
+        # kept as narrative context and never scored into Demand (2026-07-14).
+        assert IndicatorCode.REGIONAL_DEMAND_SCORE not in DIMENSION_BY_INDICATOR
+
+    def test_regional_demand_never_mandatory(self) -> None:
+        assert IndicatorCode.REGIONAL_DEMAND_SCORE not in MANDATORY_INDICATORS
+
+    def test_regional_demand_ignored_even_if_a_score_is_present(self) -> None:
+        # Even if a normalized_score is attached (it is — regional is still
+        # computed for context), it must not leak into the Demand sub-score.
+        values = {
+            "trend_score": _iv("trend_score", 80.0),
+            "regional_demand_score": _iv("regional_demand_score", 0.0),
+        }
+        subscores = compute_dimension_subscores(values)
+        assert subscores[IndicatorDimension.DEMAND] == 80.0
+
+
 class TestGovernmentExpenditureIsContextOnly:
     def test_government_expenditure_never_maps_to_a_dimension(self) -> None:
         assert IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE not in DIMENSION_BY_INDICATOR
