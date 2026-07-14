@@ -99,12 +99,27 @@ async def test_demand_stability_score_computes_cv() -> None:
     assert result.raw_value == pytest.approx(0.408248, rel=1e-4)
 
 
-async def test_demand_stability_unavailable_when_mean_is_zero() -> None:
+async def test_demand_stability_neutral_on_low_volume_series() -> None:
+    # Low-volume noise guard (2026-07-11): a near-zero, spiky series (mostly 0
+    # with rare spikes — e.g. a niche localized term) can't yield a reliable
+    # CV, so return a NEUTRAL score instead of a spurious "maximally unstable"
+    # that would crush the Demand mean. Covers mean=0 too.
+    engine = make_mock_engine([result_with_all([(0.0,), (0.0,), (2.0,), (0.0,), (0.0,), (1.0,)])])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_demand_stability_score("presunto pata negra", "PT", "2026-07")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == pytest.approx(0.5)  # neutral CV -> ~50 normalized
+    assert "low-volume" in result.notes
+
+
+async def test_demand_stability_neutral_when_mean_is_zero() -> None:
     engine = make_mock_engine([result_with_all([(0.0,), (0.0,)])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_demand_stability_score("air fryer", "ES", "2026-07")
 
-    assert result.availability_status == AvailabilityStatus.UNAVAILABLE
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == pytest.approx(0.5)
 
 
 async def test_regional_demand_score_computes_mean() -> None:

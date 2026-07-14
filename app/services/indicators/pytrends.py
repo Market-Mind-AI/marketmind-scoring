@@ -30,6 +30,16 @@ _TREND_WINDOW_MONTHS = 6
 # Minimum initial-window mean (on Google Trends' 0-100 scale) below which a
 # growth rate is treated as noise rather than signal — see compute_growth_score.
 _MIN_GROWTH_BASELINE = 5.0
+# Minimum series mean (0-100 scale) below which the coefficient of variation is
+# noise rather than signal — see compute_demand_stability_score. A near-zero,
+# spiky series (e.g. a low-volume localized term: mostly 0 with rare 100s)
+# produces an enormous CV that would spuriously read as "maximally unstable"
+# and crush the Demand mean, even though the country's real demand (worldwide
+# trend_score) is fine. Below this, stability isn't reliably measurable.
+_MIN_STABILITY_BASELINE = 5.0
+# Neutral CV on the fixed [0,1] bounds (INVERSE) → normalizes to ~50, so a
+# low-volume series neither rewards nor penalizes the country on stability.
+_NEUTRAL_STABILITY_CV = 0.5
 
 
 def _six_month_window() -> tuple[date, date]:
@@ -228,13 +238,22 @@ async def compute_demand_stability_score(keyword: str, country_code: str, period
         )
 
     mean = sum(series) / len(series)
-    if mean == 0:
+    # Low-volume noise guard (2026-07-11, same rationale as compute_growth_
+    # score's low-base guard): a near-zero, spiky per-country series makes
+    # CV = stddev/mean explode (or be undefined at mean=0), which would read
+    # as "maximally unstable" and unfairly crush the Demand mean for a country
+    # whose real demand (worldwide trend_score) is high — the term just has
+    # low absolute per-country volume. Return a NEUTRAL CV (normalizes to ~50)
+    # rather than a spurious extreme: don't reward or penalize stability when
+    # it can't be reliably measured. Also covers mean=0 (CV undefined).
+    if mean < _MIN_STABILITY_BASELINE:
         return RawIndicatorResult(
-            raw_value=None,
+            raw_value=_NEUTRAL_STABILITY_CV,
             direction=IndicatorDirection.INVERSE,
             calculation_window=period_key,
-            availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes="mean interest is 0, CV undefined (Cap. 4 §4.2.3)",
+            availability_status=AvailabilityStatus.AVAILABLE,
+            notes=f"series mean {mean:.2f} below {_MIN_STABILITY_BASELINE} — low-volume, "
+            "stability not reliably measurable, neutral score",
         )
 
     variance = sum((v - mean) ** 2 for v in series) / len(series)
