@@ -51,6 +51,9 @@ _ANNUAL_LOOKBACK_YEARS = 10
 # WORLDWIDE interest_by_country (the cross-country "world total"), dispatched
 # separately in _ensure_worldwide_demand_coverage.
 _PYTRENDS_INDICATOR_CODES = ["interest_over_time", "interest_by_region", "related_queries"]
+# English is always compared too (universal secondary search language) — see
+# pytrends._read_languages / _UNIVERSAL_SEARCH_LANGUAGE.
+_UNIVERSAL_SEARCH_LANGUAGE = "en"
 
 
 class AnalysisService:
@@ -260,27 +263,37 @@ class AnalysisService:
             return
         base_keyword = entity.canonical_title
 
-        # ALL local-name variations for each distinct search language among the
-        # requested countries, each tagged with its language, compared on one
-        # Google Trends axis. Real search volume then arbitrates which name is
-        # the genuine local one (data arbitration) and each country SUMS its
-        # language's variations in compute_trend_score. Missing a language ->
-        # canonical fallback tagged with that language, so a value still exists.
-        terms: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        languages_done: set[str] = set()
+        # Terms compared on one Google Trends axis: each requested country's
+        # own-language variations PLUS the English variations (the universal
+        # secondary — many markets search global products in English; see
+        # pytrends._read_languages). Real search volume then arbitrates which
+        # name is the genuine one per country, and compute_trend_score reads
+        # MAX over (country language, English).
+        #
+        # Deduped by normalized TERM STRING (not language+string): a loanword
+        # like "airfryer" that appears in several language lists must be sent
+        # ONCE — sending it multiple times put the same string in different
+        # anchor-chained batches and produced inconsistent values for it
+        # (bug found 2026-07-14: DEU read "airfryer"=40 while another tag had
+        # 79). First language seen for a string wins the tag; the MAX read
+        # still picks it up for any country via the English inclusion.
+        languages: list[str] = []
         for country_iso3 in countries:
             country = await self._country_repo.get_by_iso3(country_iso3)
             language = country.search_language if country is not None else None
-            if language is None or language in languages_done:
-                continue
-            languages_done.add(language)
-            variations = _language_variations(entity, language) or [base_keyword]
-            for term in variations:
-                key = (language, normalize_alias(term))
-                if key in seen:
+            if language is not None and language not in languages:
+                languages.append(language)
+        if _UNIVERSAL_SEARCH_LANGUAGE not in languages:
+            languages.append(_UNIVERSAL_SEARCH_LANGUAGE)
+
+        terms: list[dict[str, str]] = []
+        seen_strings: set[str] = set()
+        for language in languages:
+            for term in _language_variations(entity, language) or [base_keyword]:
+                norm = normalize_alias(term)
+                if norm in seen_strings:
                     continue
-                seen.add(key)
+                seen_strings.add(norm)
                 terms.append({"term": term, "language": language})
         if not terms:
             terms = [{"term": base_keyword, "language": "und"}]  # no language mapping at all

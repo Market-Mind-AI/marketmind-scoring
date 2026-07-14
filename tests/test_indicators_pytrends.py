@@ -7,6 +7,15 @@ from app.services.indicators import pytrends as pytrends_indicators
 from tests._external_db_mock import make_mock_engine, result_with_all, result_with_first
 
 
+def test_read_languages_adds_english_as_universal_secondary() -> None:
+    # A country reads its own language AND English (the universal secondary —
+    # many markets search global products in English), deduped.
+    assert pytrends_indicators._read_languages("de") == ["de", "en"]
+    assert pytrends_indicators._read_languages("es") == ["es", "en"]
+    assert pytrends_indicators._read_languages("en") == ["en"]  # no dup
+    assert pytrends_indicators._read_languages(None) is None
+
+
 async def test_trend_score_reads_worldwide_country_value() -> None:
     # trend_score is the WORLDWIDE interest-by-country value for the country
     # (global 0-100 axis) — the MAX of the country's language variations

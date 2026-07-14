@@ -68,6 +68,27 @@ _CURIOSITY_INTENT = 0.2
 # Language used when a country's search_language has no lexicon entry.
 _INTENT_FALLBACK_LANGUAGE = "en"
 
+# English is a UNIVERSAL SECONDARY search language: for many countries buyers
+# search global/tech products in English (e.g. Germans search "airfryer", not
+# "heißluftfritteuse"; Indians search entirely in English). So every country is
+# read against its own-language terms AND the English terms, taking the MAX —
+# whichever the market actually uses wins (a native-searching market like Spain
+# for "jamón ibérico" still wins on its native term). English is included ONCE
+# as this shared secondary instead of duplicating loanwords into every
+# language's list (which double-sent terms and gave inconsistent anchor-chained
+# values). User decision 2026-07-14.
+_UNIVERSAL_SEARCH_LANGUAGE = "en"
+
+
+def _read_languages(term_language: str | None) -> list[str] | None:
+    """Languages to read a country's demand against: its own + English (the
+    universal secondary), deduped. None = no language filter (read all rows)."""
+    if term_language is None:
+        return None
+    if term_language == _UNIVERSAL_SEARCH_LANGUAGE:
+        return [_UNIVERSAL_SEARCH_LANGUAGE]
+    return [term_language, _UNIVERSAL_SEARCH_LANGUAGE]
+
 
 async def _fetch_interest_series(
     connection: AsyncConnection, keyword: str, country_code: str, start: date, end: date
@@ -95,10 +116,11 @@ async def best_localized_term(base_keyword: str, country_code: str, term_languag
     pata negra' does). Falls back to `fallback` when no worldwide value exists."""
     engine = get_external_engine(DataSource.PYTRENDS)
     query = "SELECT term FROM interest_by_country WHERE keyword = :keyword AND country = :country"
-    params: dict[str, str] = {"keyword": base_keyword, "country": country_code}
-    if term_language is not None:
-        query += " AND term_language = :term_language"
-        params["term_language"] = term_language
+    params: dict[str, object] = {"keyword": base_keyword, "country": country_code}
+    languages = _read_languages(term_language)
+    if languages is not None:
+        query += " AND term_language = ANY(:languages)"
+        params["languages"] = languages
     query += " ORDER BY interest_value DESC NULLS LAST LIMIT 1"
     async with engine.connect() as connection:
         result = await connection.execute(text(query), params)
@@ -150,10 +172,11 @@ async def compute_trend_score(
         "SELECT DISTINCT ON (term) interest_value AS v "
         "FROM interest_by_country WHERE keyword = :keyword AND country = :country"
     )
-    params: dict[str, str] = {"keyword": keyword, "country": country_code}
-    if term_language is not None:
-        inner += " AND term_language = :term_language"
-        params["term_language"] = term_language
+    params: dict[str, object] = {"keyword": keyword, "country": country_code}
+    languages = _read_languages(term_language)
+    if languages is not None:
+        inner += " AND term_language = ANY(:languages)"
+        params["languages"] = languages
     inner += " ORDER BY term, created_at DESC"
     query = f"SELECT COALESCE(MAX(v), 0), COUNT(*) FROM ({inner}) latest_per_term"
     async with engine.connect() as connection:
