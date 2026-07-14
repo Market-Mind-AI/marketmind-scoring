@@ -184,7 +184,7 @@ class IndicatorEngine:
         growth = await pytrends_indicators.compute_growth_score(keyword, country_code, period_key)
         stability = await pytrends_indicators.compute_demand_stability_score(keyword, country_code, period_key)
         regional = await pytrends_indicators.compute_regional_demand_score(keyword, country_code, period_key)
-        intent = await pytrends_indicators.compute_search_intent_score(keyword, period_key)
+        intent = await pytrends_indicators.compute_search_intent_score(keyword, period_key, language=language)
 
         indicator_raws = [
             (IndicatorCode.TREND_SCORE, trend),

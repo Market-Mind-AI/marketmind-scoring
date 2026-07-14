@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.db.external import get_external_engine
 from app.domain.enums import AvailabilityStatus, DataSource, IndicatorDirection
+from app.services.indicators.intent_lexicon import INTENT_LEXICON
 from app.services.indicators.results import RawIndicatorResult
 from app.utils.period import last_n_month_period_keys, month_period_to_date_range
 from app.utils.time import utc_now
@@ -48,11 +49,24 @@ def _six_month_window() -> tuple[date, date]:
     return start, utc_now().date()
 
 
-_TRANSACTIONAL_TERMS = ["amazon", "lidl", "comprar", "compra", "buy", "price", "precio", "oferta", "deal"]
-_EVALUATION_TERMS = ["best", "mejor", "review", "opiniones", "comparativa", "vs", "top"]
-_USAGE_TERMS = [
-    "how to", "como", "cómo", "recetas", "receta", "pollo", "patatas", "boniato", "huevos", "alitas", "salmon", "use",
-]  # fmt: skip
+# Search Intent Score (Cap. 4 §4.2.6) intent tiers and their weights. The
+# per-language marker lists are NOT hardcoded here — they live in
+# intent_lexicon.py (canonical English concepts translated once per language by
+# an offline LLM step, frozen/versioned). This avoids a hand-maintained
+# polyglot dictionary that would always miss a language and break the metric
+# for that country (user decision 2026-07-14). A query is classified with the
+# lexicon of its COUNTRY's search_language.
+#
+# The CURIOSITY tier is the key discriminator: a market mostly searching
+# "what is / vs / taste" is discovering the product (low purchase intent),
+# vs one searching "buy / price / <retailer>" which is transacting.
+_TRANSACTIONAL_INTENT = 1.0
+_EVALUATION_INTENT = 0.8
+_DEFAULT_INTENT = 0.6  # unmatched: treated as a product variant/brand refinement
+_USAGE_INTENT = 0.4
+_CURIOSITY_INTENT = 0.2
+# Language used when a country's search_language has no lexicon entry.
+_INTENT_FALLBACK_LANGUAGE = "en"
 
 
 async def _fetch_interest_series(
@@ -304,26 +318,37 @@ async def compute_regional_demand_score(keyword: str, country_code: str, period_
     )
 
 
-def _classify_query_intent(query: str) -> float:
-    lowered = query.lower()
-    if any(term in lowered for term in _TRANSACTIONAL_TERMS):
-        return 1.0
-    if any(term in lowered for term in _EVALUATION_TERMS):
-        return 0.8
-    if any(term in lowered for term in _USAGE_TERMS):
-        return 0.4
-    # Cap. 4 §4.2.6 gives no lexical rule to distinguish "0.6 marca/modelo/
-    # variante" from "0.0 irrelevante" — documented assumption: a query that
-    # matches none of the 3 specific rules is treated as a product variant
-    # (0.6), since it came from related_queries for our own keyword.
-    return 0.6
+def _classify_query_intent(query: str, tiers: dict[str, list[str]]) -> float:
+    """Classify one related query against a single language's intent lexicon
+    (`tiers` = INTENT_LEXICON[language]). Transactional wins first (explicit
+    buy/price/retailer = strongest intent), then curiosity (discovery = weakest,
+    the tier that separates a buying market from a browsing one), then
+    evaluation, then usage. Unmatched → a mild product-variant/brand refinement
+    (it came from related_queries for our own keyword)."""
+    lowered = f" {query.lower()} "  # pad so single-token markers like "vs" match at edges
+    if any(term in lowered for term in tiers.get("transactional", ())):
+        return _TRANSACTIONAL_INTENT
+    if any(term in lowered for term in tiers.get("curiosity", ())):
+        return _CURIOSITY_INTENT
+    if any(term in lowered for term in tiers.get("evaluation", ())):
+        return _EVALUATION_INTENT
+    if any(term in lowered for term in tiers.get("usage", ())):
+        return _USAGE_INTENT
+    return _DEFAULT_INTENT
 
 
-async def compute_search_intent_score(keyword: str, period_key: str) -> RawIndicatorResult:
+async def compute_search_intent_score(keyword: str, period_key: str, language: str | None = None) -> RawIndicatorResult:
     """Cap. 4 §4.2.6 — IntentRaw = weighted average of a lexical intent
-    classification over related_queries.top (never .rising — different
-    scale). related_queries has no country column in the raw schema, so
-    this is scoped by keyword only."""
+    classification over related_queries.top (never .rising — different scale).
+
+    related_queries is keyword-scoped in the raw schema, but each country uses
+    its OWN localized keyword (jamón ibérico / iberico ham / presunto pata
+    negra), so reading by that keyword IS effectively per-country. The queries
+    come back in the country's language, so they're classified with the intent
+    lexicon of that country's search_language (2026-07-14) — canonical English
+    concepts translated per language, frozen in intent_lexicon.py. Unknown
+    language falls back to English."""
+    tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         result = await connection.execute(
@@ -351,7 +376,7 @@ async def compute_search_intent_score(keyword: str, period_key: str) -> RawIndic
             notes="related_queries.top: all values are 0 (Cap. 4 §4.2.6)",
         )
 
-    weighted_sum = sum(w * _classify_query_intent(q) for q, w in rows)
+    weighted_sum = sum(w * _classify_query_intent(q, tiers) for q, w in rows)
     intent_raw = (weighted_sum / total_weight) * 100
     return RawIndicatorResult(
         raw_value=intent_raw,

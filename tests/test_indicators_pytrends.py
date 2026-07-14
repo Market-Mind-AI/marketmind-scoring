@@ -140,20 +140,59 @@ async def test_regional_demand_score_unavailable_when_no_regions() -> None:
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
 
 
-async def test_search_intent_score_weighted_classification() -> None:
-    rows = [("amazon air fryer", 100.0), ("recetas air fryer", 20.0)]
+def test_classify_query_intent_tiers() -> None:
+    # Deterministic unit test with a controlled lexicon (no dependency on the
+    # generated one): each tier returns its weight; unmatched -> default.
+    tiers = {
+        "transactional": ["buy", "amazon"],
+        "curiosity": ["what is", "vs"],
+        "evaluation": ["best", "review"],
+        "usage": ["how to", "recipe"],
+    }
+    classify = pytrends_indicators._classify_query_intent
+    assert classify("buy iberico ham", tiers) == 1.0
+    assert classify("iberico ham vs prosciutto", tiers) == 0.2  # curiosity
+    assert classify("what is iberico ham", tiers) == 0.2
+    assert classify("best iberico ham", tiers) == 0.8
+    assert classify("how to cook iberico ham", tiers) == 0.4
+    assert classify("jamon cebo iberico", tiers) == 0.6  # unmatched variant -> default
+
+
+async def test_search_intent_uses_language_lexicon() -> None:
+    # Integration: classified with the EN lexicon (buy -> transactional 1.0,
+    # what is -> curiosity 0.2). Both terms are stable core concepts.
+    rows = [("buy iberico ham", 80.0), ("what is iberico ham", 20.0)]
     engine = make_mock_engine([result_with_all(rows)])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
-        result = await pytrends_indicators.compute_search_intent_score("air fryer", "2026-07")
+        result = await pytrends_indicators.compute_search_intent_score("iberico ham", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
-    # amazon -> 1.0 * 100 = 100; recetas -> 0.4 * 20 = 8; total=108/120*100
-    assert result.raw_value == pytest.approx(90.0)
+    # buy 1.0*80 + what-is 0.2*20 = 84; /100 *100
+    assert result.raw_value == pytest.approx(84.0)
+
+
+async def test_search_intent_curiosity_scores_low() -> None:
+    # A market only browsing ("what is / vs") scores low.
+    rows = [("what is iberico ham", 100.0), ("iberico ham vs prosciutto", 100.0)]
+    engine = make_mock_engine([result_with_all(rows)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_search_intent_score("iberico ham", "2026-07", language="en")
+
+    assert result.raw_value == pytest.approx(20.0)
+
+
+async def test_search_intent_unknown_language_falls_back_to_english() -> None:
+    rows = [("buy iberico ham", 100.0)]
+    engine = make_mock_engine([result_with_all(rows)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_search_intent_score("iberico ham", "2026-07", language="xx")
+
+    assert result.raw_value == pytest.approx(100.0)  # "buy" still transactional via EN fallback
 
 
 async def test_search_intent_score_unavailable_when_no_queries() -> None:
     engine = make_mock_engine([result_with_all([])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
-        result = await pytrends_indicators.compute_search_intent_score("air fryer", "2026-07")
+        result = await pytrends_indicators.compute_search_intent_score("air fryer", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
