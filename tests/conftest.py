@@ -13,6 +13,20 @@ from app.db.base import Base
 from app.db.session import engine as app_engine
 from app.main import app
 
+# SAFETY GUARD (2026-07-14): this suite TRUNCATES tables (see
+# _reset_database_after_test) and would otherwise wipe/pollute whatever DB it
+# points at. Running it against the live/dev DB (marketmind_core) truncated
+# coverage_index and self-widened normalization_reference into garbage more
+# than once. Refuse to run unless pointed at a dedicated TEST database:
+#   DATABASE_NAME=marketmind_test pytest
+# Create/migrate it once with:
+#   DATABASE_NAME=marketmind_test alembic upgrade head
+if "test" not in settings.database_name.lower():
+    raise RuntimeError(
+        f"Refusing to run the test suite against non-test database '{settings.database_name}'. "
+        "The suite truncates tables. Run with DATABASE_NAME=marketmind_test (see conftest.py)."
+    )
+
 # Reference/seed data that migrations own and tests must never wipe:
 #  - countries: migration 003's ~27-country basket.
 #  - normalization_reference: the fixed absolute bounds seeded by migrations
