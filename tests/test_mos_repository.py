@@ -66,14 +66,14 @@ async def test_upsert_mos_result_creates_then_updates(db_session: AsyncSession) 
 
     updated = await repo.upsert_mos_result(
         entity_key=entity.entity_key, country="USA", period_type="month", period_key=period_key,
-        mos=39.0, mos_before_cap=70.0, capped_by="trend_score_cap", topsis_score=0.7,
+        mos=65.0, mos_before_cap=65.0, capped_by=None, topsis_score=0.65,
         library_topsis_score=0.65, library_mos=65.0,
         availability_status="available", excluded_reason=None,
     )  # fmt: skip
     await db_session.commit()
 
     assert updated.id == created.id
-    assert float(updated.mos or 0) == 39.0
-    assert updated.capped_by == "trend_score_cap"
+    assert float(updated.mos or 0) == 65.0
+    assert updated.capped_by is None
     assert float(updated.library_topsis_score or 0) == 0.65
     assert float(updated.library_mos or 0) == 65.0

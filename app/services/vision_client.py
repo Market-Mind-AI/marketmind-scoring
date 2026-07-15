@@ -25,6 +25,42 @@ class VisionError(MarketMindCoreError):
     """The vision provider call failed or returned something we can't use."""
 
 
+class MarketTerms(BaseModel):
+    """The real search vocabulary for the product in ONE country's market.
+    Demand is measured from ABSOLUTE Google Ads search volume (not Google
+    Trends), so these are the exact terms whose monthly search volumes get
+    summed to the country's demand level — they must be terms local buyers
+    genuinely type, not literal translations."""
+
+    country: str = Field(description="ISO-3166 alpha-3 country code this market entry is for (e.g. 'PRT', 'USA').")
+    primary_name: str = Field(
+        description="The single most-used real search term for this product in this country (a local buyer's default)."
+    )
+    formal_name: str | None = Field(
+        default=None, description="Optional formal/dictionary name for the product in this market, if different."
+    )
+    search_terms: list[str] = Field(
+        description=(
+            "GENEROUS list of every real search term a local buyer plausibly types for this product in this "
+            "country — the genuine colloquial/regional/loanword names, NEVER word-for-word translations. Include "
+            "spelling/spacing variants (e.g. 'air fryer' AND 'airfryer'). The system pulls each term's ABSOLUTE "
+            "monthly search volume and SUMS them for the demand level, so listing more real terms captures more "
+            "real demand — be generous, but every term must genuinely refer to THIS product. Order primary-first. "
+            "Example (Portugal, air fryer): ['air fryer','fritadeira air fryer','fritadeira de ar quente',"
+            "'fritadeira sem óleo']."
+        )
+    )
+    excluded_terms: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ambiguous or wrong-meaning terms to EXCLUDE, so they never pollute the volume. List any term that "
+            "looks related but denotes a different product or concept in this market (e.g. for yerba mate: "
+            "'yerba buena' = mint; for air fryer: 'fritadeira de óleo' = oil deep-fryer)."
+        ),
+    )
+    confidence: float = Field(description="0-1 confidence in this market's terms; low values are flagged for review.")
+
+
 class ProductIdentification(BaseModel):
     """Cap. 4/5 note: `estimated_price` is the one field in this whole
     pipeline that is an LLM guess rather than sourced from a real API —
@@ -33,52 +69,25 @@ class ProductIdentification(BaseModel):
 
     product_name: str = Field(
         description=(
-            "Short, generic, commonly-searched product name — the term a "
-            "shopper would actually type into a search engine (e.g. 'Iberian "
-            "ham', 'Serrano ham', 'air fryer'). This feeds a Google Trends "
-            "query downstream, so an overly specific or descriptive title "
-            "returns zero search volume even for a real, popular product. "
-            "Never include brand, certification labels, breed/percentage "
-            "claims, package size, or parenthetical translations here. "
-            "Plain ASCII only — no accents or diacritics, even if the "
-            "product's native-language name normally has them (e.g. "
-            "'Jamon Iberico', not 'Jamón Ibérico'; 'Cafe', not 'Café')."
+            "Short, generic, commonly-searched canonical product name in plain ASCII (e.g. 'Iberian ham', "
+            "'air fryer'). No brand, certification, breed/percentage, size, or parenthetical translations. "
+            "Strip accents/diacritics (e.g. 'Jamon Iberico', not 'Jamón Ibérico')."
         )
     )
     brand: str | None
     category: str | None = Field(
         description=(
-            "Short, generic product category in English, one level broader "
-            "than `product_name` — the kind of label a store aisle or "
-            "marketplace taxonomy would use (e.g. 'Charcuterie', 'Kitchen "
-            "Appliances', 'Toys'). Always in English regardless of the "
-            "product's own language or origin. This is the fallback search "
-            "term used when `product_name` itself returns no Google Trends "
-            "data, so it must be a real, broad, commonly-searched category — "
-            "never a descriptive phrase, specification list, or marketing copy."
+            "Short, generic product category in English, one level broader than `product_name` (e.g. "
+            "'Charcuterie', 'Kitchen Appliances', 'Toys'). Always English regardless of the product's origin."
         )
     )
-    localized_terms: dict[str, list[str]] = Field(
-        default_factory=dict,
+    markets: list[MarketTerms] = Field(
+        default_factory=list,
         description=(
-            "Map of {ISO-639-1 language code: LIST of real local market names}. "
-            "For each language, list 2-4 terms that a local buyer ACTUALLY types "
-            "into Google to find this product — the genuine colloquial/regional "
-            "names, NEVER a word-for-word translation of `product_name`. This is "
-            "the critical rule: the same product has a different real name in "
-            "each market. Iberian ham is called 'presunto de porco preto' and "
-            "'presunto pata negra' in Portugal (NOT the literal 'presunto "
-            "ibérico'), 'jamón de bellota' / 'jamón pata negra' in Spain, "
-            "'pata negra ham' in the English-speaking world. So give, e.g.: "
-            "pt: ['presunto de porco preto','presunto pata negra','presunto "
-            "ibérico'], es: ['jamón ibérico','jamón de bellota','jamón pata "
-            "negra'], en: ['iberico ham','pata negra ham']. Order each list "
-            "best-guess-first. The system compares ALL of them on Google Trends "
-            "and lets real search volume decide the winner, so include every "
-            "plausible local name rather than betting on one. Provide an entry "
-            "for EVERY language: es, pt, en, de, fr, it, ja, zh, ko, ru, id, tr, "
-            "ar, nl, pl, sv. Keep terms short and brand-free (no size/"
-            "certification), in each language's own script/accents."
+            "One entry per requested country (by ISO-3166 alpha-3), each with that country's real search "
+            "vocabulary. This is the critical field: the same product has a DIFFERENT real name per market "
+            "(Iberian ham = 'presunto pata negra' in Portugal, 'jamón de bellota' in Spain, 'pata negra ham' "
+            "in English). Provide a `markets` entry for EVERY country the caller lists — no more, no less."
         ),
     )
     target_age_min: int | None
@@ -93,36 +102,34 @@ class VisionClient:
         self._client = AsyncAnthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
 
     async def identify_product(
-        self, *, image_base64: str, image_media_type: ImageMediaType, hint_text: str | None
+        self,
+        *,
+        image_base64: str,
+        image_media_type: ImageMediaType,
+        hint_text: str | None,
+        countries: list[str],
     ) -> ProductIdentification:
         if self._client is None:
             raise VisionError("ANTHROPIC_API_KEY is not configured")
 
+        country_list = ", ".join(countries) if countries else "(none provided)"
         instructions = (
-            "Identify this product. `product_name` and `category` both feed "
-            "Google Trends search terms downstream (category is the fallback "
-            "when product_name alone returns no data), so both must be short, "
-            "generic, commonly-searched terms — never a full marketing title, "
-            "specification list, or descriptive phrase. "
-            "`product_name`: the specific product a shopper would type (e.g. "
-            "'Iberian ham', 'Serrano ham', 'air fryer'). Plain ASCII only — "
-            "strip accents/diacritics even if the native-language name "
-            "normally carries them (e.g. 'Jamon Iberico', not 'Jamón Ibérico'). "
-            "`category`: one level broader, always in English regardless of "
-            "the product's own language (e.g. 'Charcuterie', 'Kitchen "
-            "Appliances', 'Toys'). "
-            "Put the brand only in `brand`, never in `product_name` or "
-            "`category`. "
-            "`localized_terms`: for each of the languages es, pt, en, de, fr, "
-            "it, ja, zh, ko, ru, id, tr, ar, nl, pl, sv, give a LIST of 2-4 "
-            "genuine local market names a buyer in that language really types — "
-            "the real colloquial/regional names, NOT word-for-word translations. "
-            "Iberian ham in Portugal is 'presunto de porco preto' / 'presunto "
-            "pata negra' (not the literal 'presunto ibérico'); in Spain 'jamón "
-            "de bellota' / 'jamón pata negra'; in English 'pata negra ham'. "
-            "Include every plausible local name — the system compares all of "
-            "them on Google Trends and lets real search volume pick the winner, "
-            "so this directly drives the demand score."
+            "Identify this product for a cross-country market-demand analysis. "
+            "`product_name`: short, generic, commonly-searched canonical name, plain ASCII, no brand/size/"
+            "certification (e.g. 'Iberian ham', 'air fryer'; 'Jamon Iberico', not 'Jamón Ibérico'). "
+            "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'). "
+            "Put the brand only in `brand`. "
+            "`markets`: provide EXACTLY ONE entry for EACH of these ISO-3166 alpha-3 countries: "
+            f"{country_list}. For each country, `search_terms` is a GENEROUS list of the real terms a local "
+            "buyer actually types for THIS product — genuine colloquial/regional/loanword names and spelling/"
+            "spacing variants, NEVER word-for-word translations. The system pulls each term's ABSOLUTE monthly "
+            "search volume and SUMS them, so more real terms = more captured demand (be generous, but every "
+            "term must truly mean this product). Set `primary_name` to the single most-used term, and use "
+            "`excluded_terms` to list look-alike terms that mean something ELSE in that market (e.g. yerba mate "
+            "vs 'yerba buena'=mint; air fryer vs 'fritadeira de óleo'=oil deep-fryer), so they never pollute "
+            "the volume. Give a `confidence` (0-1) per market. Example — Portugal air fryer: primary_name "
+            "'air fryer', search_terms ['air fryer','fritadeira air fryer','fritadeira de ar quente',"
+            "'fritadeira sem óleo'], excluded_terms ['fritadeira de óleo']."
         )
         prompt = f"{instructions}\n\nAdditional context from the user: {hint_text}" if hint_text else instructions
         image_block: ImageBlockParam = {
@@ -133,7 +140,10 @@ class VisionClient:
         try:
             response = await self._client.messages.parse(
                 model=settings.anthropic_vision_model,
-                max_tokens=1024,
+                # Generous budget: the per-country `markets` (real search terms
+                # for every requested country) is a large structured payload —
+                # 1024 forced the model to return an empty markets list.
+                max_tokens=8192,
                 messages=[{"role": "user", "content": [image_block, text_block]}],
                 output_format=ProductIdentification,
             )

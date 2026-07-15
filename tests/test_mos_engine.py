@@ -107,7 +107,11 @@ async def test_missing_weight_excludes_country(db_session: AsyncSession) -> None
     assert "No calibrated weight" in results[0].excluded_reason
 
 
-async def test_low_trend_score_triggers_non_compensatory_cap(db_session: AsyncSession) -> None:
+async def test_low_trend_score_is_not_capped(db_session: AsyncSession) -> None:
+    # No non-compensatory cap (user decision 2026-07-15): a low Demand signal
+    # just lowers the DEMAND dimension mean; it never hard-caps the MOS.
+    # DEMAND = mean(trend=10, growth/stability/intent=90) = 70, the other 5
+    # dimensions = 90, uniform weights -> TOPSIS closeness 0.85063 -> MOS 85.06.
     entity = await ProductRepository(db_session).create_entity(canonical_title=f"Product {uuid.uuid4()}")
     await db_session.commit()
     period_key = _unique_period_key()
@@ -121,9 +125,9 @@ async def test_low_trend_score_triggers_non_compensatory_cap(db_session: AsyncSe
 
     result = results[0]
     assert result.availability_status == "available"
-    assert result.capped_by == "trend_score_cap"
-    assert float(result.mos or 0) == pytest.approx(39.0)
-    assert float(result.mos_before_cap or 0) > 39.0
+    assert result.capped_by is None
+    assert float(result.mos or 0) == pytest.approx(85.0626, rel=1e-4)
+    assert float(result.mos_before_cap or 0) == pytest.approx(float(result.mos or 0))
 
 
 async def test_high_trend_score_has_no_cap(db_session: AsyncSession) -> None:
@@ -161,5 +165,7 @@ async def test_mos_is_independent_per_country(db_session: AsyncSession) -> None:
     results = await engine.compute_mos(entity_key=entity.entity_key, countries=["USA", "BRA"], period_key=period_key)
 
     by_country = {r.country: r for r in results}
+    # Each country scores on its OWN Demand: USA (trend 90) -> all dims 90 -> 90;
+    # BRA (trend 10) -> DEMAND mean 70, other dims 90 -> 85.06. No cap involved.
     assert float(by_country["USA"].mos or 0) == pytest.approx(90.0)
-    assert float(by_country["BRA"].mos or 0) == pytest.approx(39.0)
+    assert float(by_country["BRA"].mos or 0) == pytest.approx(85.0626, rel=1e-4)

@@ -1,21 +1,30 @@
-"""Cap. 4 §4.2 — raw value computation for the 5 PyTrends-derived MOS
-indicators (docs/marketmind-capitulo4-metricas.md). Reads directly from
-PyTrends' own database (read-only, via app/db/external.py) — same pattern as
-reconciliation_service/enrichment_service, never writes there.
+"""Cap. 4 §4.2 — raw value computation for the Demand indicators, now sourced
+from Google Ads keyword data (ABSOLUTE monthly search volume via DataForSEO),
+NOT Google Trends. Reads read-only from the collector service's own database
+(app/db/external.py, DataSource.PYTRENDS) — the `keyword_search_volume` and
+`keyword_related` tables.
 
-Trend/Growth/Demand Stability read over a rolling 6-month window ending
-today (2026-07-08 fix), not the single calendar month named by period_key —
-Google Trends never has data for the month still in progress (a few days'
-lag plus weekly granularity means the freshest point is always in a
-previous month), so filtering to exactly period_key's month structurally
-always returned zero rows for a "compute this month's MOS now" request.
-period_key still labels which month's MOS this is (calculation_window),
-it just no longer bounds the query. Only MONTH period_key labeling is
-implemented — see app/utils/period.py.
+Why the switch (2026-07-15): Google Trends is structurally RELATIVE (values
+are normalized per query / per region and only comparable across countries for
+a single shared term). Absolute search volume is a real count, directly
+comparable across countries with each market's OWN terms, no shared "worldwide"
+term and no normalization tricks. See marketmind_mos_engine.
+
+The four Demand signals, all per country, from the country's approved terms
+(product_catalog.localized_markets[ISO3]):
+  - LEVEL (trend_score): SUM of the absolute monthly search volume of the
+    country's `search_terms` (deduped), divided by the country's internet users
+    -> demand INTENSITY per online buyer (raw is searches per 1,000 internet
+    users; market SIZE is a separate dimension, so we don't double-count it).
+  - GROWTH: trend of the SUMMED monthly_searches series (trailing 12 months).
+  - DEMAND STABILITY: CV of that same summed monthly series.
+  - SEARCH INTENT: related keywords (`keyword_related`) classified buy-vs-
+    curiosity, weighted by their real volume.
 """
 
+import json
 import math
-from datetime import date
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -24,214 +33,124 @@ from app.db.external import get_external_engine
 from app.domain.enums import AvailabilityStatus, DataSource, IndicatorDirection
 from app.services.indicators.intent_lexicon import INTENT_LEXICON
 from app.services.indicators.results import RawIndicatorResult
-from app.utils.period import last_n_month_period_keys, month_period_to_date_range
-from app.utils.time import utc_now
 
-_TREND_WINDOW_MONTHS = 6
-# Minimum initial-window mean (on Google Trends' 0-100 scale) below which a
-# growth rate is treated as noise rather than signal — see compute_growth_score.
-_MIN_GROWTH_BASELINE = 5.0
-# Minimum series mean (0-100 scale) below which the coefficient of variation is
-# noise rather than signal — see compute_demand_stability_score. A near-zero,
-# spiky series (e.g. a low-volume localized term: mostly 0 with rare 100s)
-# produces an enormous CV that would spuriously read as "maximally unstable"
-# and crush the Demand mean, even though the country's real demand (worldwide
-# trend_score) is fine. Below this, stability isn't reliably measurable.
-_MIN_STABILITY_BASELINE = 5.0
-# Neutral CV on the fixed [0,1] bounds (INVERSE) → normalizes to ~50, so a
-# low-volume series neither rewards nor penalizes the country on stability.
+# Absolute-volume noise guards (Google Ads monthly counts, not the old 0-100
+# Trends scale): below these a growth ratio / CV is noise, not signal.
+_MIN_GROWTH_BASELINE = 10.0
+_MIN_STABILITY_BASELINE = 10.0
 _NEUTRAL_STABILITY_CV = 0.5
 
-
-def _six_month_window() -> tuple[date, date]:
-    period_keys = last_n_month_period_keys(_TREND_WINDOW_MONTHS)
-    start = month_period_to_date_range(period_keys[-1])[0]  # oldest month in the window, most-recent-first list
-    return start, utc_now().date()
-
-
-# Search Intent Score (Cap. 4 §4.2.6) intent tiers and their weights. The
-# per-language marker lists are NOT hardcoded here — they live in
-# intent_lexicon.py (canonical English concepts translated once per language by
-# an offline LLM step, frozen/versioned). This avoids a hand-maintained
-# polyglot dictionary that would always miss a language and break the metric
-# for that country (user decision 2026-07-14). A query is classified with the
-# lexicon of its COUNTRY's search_language.
-#
-# The CURIOSITY tier is the key discriminator: a market mostly searching
-# "what is / vs / taste" is discovering the product (low purchase intent),
-# vs one searching "buy / price / <retailer>" which is transacting.
+# Search Intent tiers/weights (Cap. 4 §4.2.6). Per-language markers live in
+# intent_lexicon.py (offline-LLM-built, frozen). CURIOSITY is the discriminator:
+# "what is / vs" = discovering (low purchase intent) vs "buy / price" = buying.
 _TRANSACTIONAL_INTENT = 1.0
 _EVALUATION_INTENT = 0.8
-_DEFAULT_INTENT = 0.6  # unmatched: treated as a product variant/brand refinement
+_DEFAULT_INTENT = 0.6  # unmatched: a product-variant/brand refinement
 _USAGE_INTENT = 0.4
 _CURIOSITY_INTENT = 0.2
-# Language used when a country's search_language has no lexicon entry.
 _INTENT_FALLBACK_LANGUAGE = "en"
 
-# English is a UNIVERSAL SECONDARY search language: for many countries buyers
-# search global/tech products in English (e.g. Germans search "airfryer", not
-# "heißluftfritteuse"; Indians search entirely in English). So every country is
-# read against its own-language terms AND the English terms, taking the MAX —
-# whichever the market actually uses wins (a native-searching market like Spain
-# for "jamón ibérico" still wins on its native term). English is included ONCE
-# as this shared secondary instead of duplicating loanwords into every
-# language's list (which double-sent terms and gave inconsistent anchor-chained
-# values). User decision 2026-07-14.
-_UNIVERSAL_SEARCH_LANGUAGE = "en"
+
+def _monthly_volumes(monthly_searches: Any) -> list[tuple[int, int, float]]:
+    """Parse a keyword_search_volume.monthly_searches JSONB value into a list of
+    (year, month, volume) tuples, coercing missing/None volumes to 0.0. Accepts
+    either a already-decoded list or a JSON string."""
+    if monthly_searches is None:
+        return []
+    data = json.loads(monthly_searches) if isinstance(monthly_searches, str) else monthly_searches
+    out: list[tuple[int, int, float]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        year, month = item.get("year"), item.get("month")
+        if year is None or month is None:
+            continue
+        vol = item.get("search_volume")
+        out.append((int(year), int(month), 0.0 if vol is None else float(vol)))
+    return out
 
 
-def _read_languages(term_language: str | None) -> list[str] | None:
-    """Languages to read a country's demand against: its own + English (the
-    universal secondary), deduped. None = no language filter (read all rows)."""
-    if term_language is None:
-        return None
-    if term_language == _UNIVERSAL_SEARCH_LANGUAGE:
-        return [_UNIVERSAL_SEARCH_LANGUAGE]
-    return [term_language, _UNIVERSAL_SEARCH_LANGUAGE]
-
-
-async def _fetch_interest_series(
-    connection: AsyncConnection, keyword: str, country_code: str, start: date, end: date
-) -> list[float]:
+async def _fetch_volume_rows(
+    connection: AsyncConnection, search_terms: list[str], location: str
+) -> list[tuple[float, list[tuple[int, int, float]]]]:
+    """Freshest row per approved term for this country, deduped by identical
+    (search_volume, monthly_searches): Google Ads canonicalizes near-variants
+    (e.g. 'air fryer'/'airfryer') and reports the SAME numbers for them, so
+    summing raw would double-count the same reported volume. Distinct real
+    terms (different numbers) are kept and summed — their searches genuinely
+    happened. Returns (search_volume, monthly_series) per distinct entity."""
+    if not search_terms:
+        return []
     result = await connection.execute(
         text(
-            "SELECT interest_value FROM interest_over_time "
-            "WHERE keyword = :keyword AND country = :country AND is_partial = false "
-            "AND date >= :start AND date <= :end ORDER BY date ASC"
+            "SELECT DISTINCT ON (keyword) keyword, search_volume, monthly_searches "
+            "FROM keyword_search_volume WHERE location = :location AND keyword = ANY(:terms) "
+            "ORDER BY keyword, created_at DESC"
         ),
-        {"keyword": keyword, "country": country_code, "start": start, "end": end},
+        {"location": location, "terms": search_terms},
     )
-    return [float(row[0]) for row in result.all() if row[0] is not None]
+    seen: set[tuple[float, tuple[tuple[int, int, float], ...]]] = set()
+    rows: list[tuple[float, list[tuple[int, int, float]]]] = []
+    for row in result.all():
+        volume = 0.0 if row[1] is None else float(row[1])
+        monthly = _monthly_volumes(row[2])
+        key = (volume, tuple(monthly))
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append((volume, monthly))
+    return rows
 
 
-async def has_per_country_series(keyword: str, country_code: str, min_observations: int = 6) -> bool:
-    """True when the per-country interest_over_time series for THIS exact term
-    has enough observations to compute the per-country Demand signals (Growth
-    needs n>=6, Cap. 4 §4.2.2). Used by the analysis coverage guard: the
-    winning localized term can shift between runs as worldwide arbitration data
-    accumulates (e.g. Mexico's air-fryer winner moving from the native
-    'freidora de aire' to the English 'air fryer'), and the keyword-AGNOSTIC
-    coverage_index would otherwise treat the OLD term's series as covering the
-    NEW winner — leaving growth/stability UNAVAILABLE and aborting the
-    completeness gate. Checking the actual series for the current winner forces
-    (re)collection so every country carries the series for the term it scored on."""
-    start, end = _six_month_window()
+def _summed_monthly_series(rows: list[tuple[float, list[tuple[int, int, float]]]]) -> list[float]:
+    """Element-wise sum of the deduped terms' monthly_searches, aligned by
+    (year, month) and returned oldest-first — the product's total monthly
+    demand series in this country."""
+    totals: dict[tuple[int, int], float] = {}
+    for _volume, monthly in rows:
+        for year, month, vol in monthly:
+            totals[(year, month)] = totals.get((year, month), 0.0) + vol
+    return [totals[k] for k in sorted(totals)]
+
+
+async def compute_trend_score(search_terms: list[str], location: str, period_key: str) -> RawIndicatorResult:
+    """Cap. 4 §4.2.1 — cross-country demand LEVEL = SUM of the absolute monthly
+    search volume of the country's approved terms (deduped): the total real
+    online search demand for the product in that country (user decision
+    2026-07-15). The raw value is ln(total) so the 0-100 normalization is
+    LOGARITHMIC (same transform as population_scale): a big market scores clearly
+    higher (more real sales potential) WITHOUT crushing a small-but-strong market
+    to zero — the concrete total is kept in the notes as decision context."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        series = await _fetch_interest_series(connection, keyword, country_code, start, end)
-    return len(series) >= min_observations
+        rows = await _fetch_volume_rows(connection, search_terms, location)
 
-
-async def best_localized_term(base_keyword: str, country_code: str, term_language: str | None, fallback: str) -> str:
-    """The country's WINNING local search term = the variation with the highest
-    worldwide interest_by_country value for that country (2026-07-11). The
-    worldwide multi-term comparison already arbitrated which of the LLM's
-    candidate names is the real one; reuse that verdict for the per-country
-    series (interest_over_time / interest_by_region / related_queries) so they
-    query a term that actually has search volume — the LLM's best-guess-first
-    variation can be too niche to have a standalone per-country time series
-    (e.g. 'presunto de porco preto' returns no series even though 'presunto
-    pata negra' does). Falls back to `fallback` when no worldwide value exists."""
-    engine = get_external_engine(DataSource.PYTRENDS)
-    query = "SELECT term FROM interest_by_country WHERE keyword = :keyword AND country = :country"
-    params: dict[str, object] = {"keyword": base_keyword, "country": country_code}
-    languages = _read_languages(term_language)
-    if languages is not None:
-        query += " AND term_language = ANY(:languages)"
-        params["languages"] = languages
-    query += " ORDER BY interest_value DESC NULLS LAST LIMIT 1"
-    async with engine.connect() as connection:
-        result = await connection.execute(text(query), params)
-        row = result.first()
-    if row is None or row[0] is None:
-        return fallback
-    return str(row[0])
-
-
-async def compute_trend_score(
-    keyword: str, country_code: str, period_key: str, term_language: str | None = None
-) -> RawIndicatorResult:
-    """Cap. 4 §4.2.1 — cross-country demand LEVEL.
-
-    Reads the WORLDWIDE Google Trends breakdown (interest_by_country table,
-    geo='' resolution=COUNTRY collected once per product), where every
-    country sits on a single global 0-100 axis representing the share of
-    that country's searches devoted to the term (2026-07-10 redesign, see
-    marketmind_mos_engine). This is what makes trend_score comparable across
-    countries — the previous per-country interest_over_time was self-scaled
-    to each country's own peak, so a term near its national peak in the US
-    outscored the product's cultural home market (e.g. jamón: Spain), which
-    inverted the MOS ranking. Growth and Demand Stability still read the
-    per-country interest_over_time series (they're ratios/shapes, already
-    comparable). country_code is the ISO-2 code, matched against the
-    worldwide breakdown's per-country rows.
-
-    Keyword localization by data arbitration (2026-07-11): the worldwide query
-    compares MULTIPLE real local-name variations per language on that common
-    axis, so each country is read against the terms in ITS OWN language
-    (term_language = the country's search_language). The score is the MAX over
-    those variations — the single winning local name that real search volume
-    picked (user decision 2026-07-11, replacing SUM). MAX makes the score
-    independent of how many candidates the LLM proposed per language: SUM
-    inflated whoever had more/overlapping synonyms, double-counted near-
-    synonyms (the same searcher counted twice), and — after clamping — tied
-    every strong country at 100 (Spain and Portugal both hit 100). MAX still
-    removes the dependence on the LLM naming the term exactly right — the data
-    decides which candidate is the real one, MAX just reads its value.
-    `keyword` is the product's canonical base keyword (the row's grouping key);
-    when term_language is None (country has no search_language) the max is over
-    all of the country's rows."""
-    # interest_by_country accumulates rows from every collection run (no
-    # upsert — each worldwide call is a new trend_request), so a term can have
-    # a stale duplicate. Reduce to the freshest value per DISTINCT term (max
-    # created_at) first, then take the max across terms.
-    engine = get_external_engine(DataSource.PYTRENDS)
-    inner = (
-        "SELECT DISTINCT ON (term) interest_value AS v "
-        "FROM interest_by_country WHERE keyword = :keyword AND country = :country"
-    )
-    params: dict[str, object] = {"keyword": keyword, "country": country_code}
-    languages = _read_languages(term_language)
-    if languages is not None:
-        inner += " AND term_language = ANY(:languages)"
-        params["languages"] = languages
-    inner += " ORDER BY term, created_at DESC"
-    query = f"SELECT COALESCE(MAX(v), 0), COUNT(*) FROM ({inner}) latest_per_term"
-    async with engine.connect() as connection:
-        result = await connection.execute(text(query), params)
-        row = result.first()
-
-    lang_note = f" (term_language='{term_language}')" if term_language is not None else ""
-    if row is None or row[1] == 0:
+    if not rows:
         return RawIndicatorResult(
             raw_value=None,
             direction=IndicatorDirection.DIRECT,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes=f"interest_by_country: no worldwide value for '{country_code}'{lang_note} (Cap. 4 §4.2.1)",
+            notes=f"keyword_search_volume: no rows for location='{location}' and the approved terms (Cap. 4 §4.2.1)",
         )
 
-    # min(100) is only a safety guard: raw Google Trends cells are already
-    # 0-100, but anchor-chaining (>5 terms) can scale a value slightly past
-    # 100. MAX never sums, so this rarely triggers.
-    trend_raw = min(100.0, float(row[0]))
+    total_volume = sum(volume for volume, _monthly in rows)
     return RawIndicatorResult(
-        raw_value=trend_raw,
+        raw_value=math.log(max(total_volume, 1.0)),  # ln bounds; max(.,1) so 0 demand -> ln(1)=0 (floor), not undefined
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"worldwide interest-by-country (global 0-100 axis, MAX of {row[1]} local variation(s), "
-        f"term_language='{term_language or 'any'}')",
+        notes=f"SUM {total_volume:.0f} monthly searches over {len(rows)} distinct term(s), ln-norm (Cap. 4 §4.2.1)",
     )
 
 
-async def compute_growth_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.2 — GrowthRaw = (media_final - media_inicial) / max(media_inicial, 1) * 100,
-    k = min(30, n // 3), n >= 6 required, over the last 6 months (see module docstring)."""
-    start, end = _six_month_window()
+async def compute_growth_score(search_terms: list[str], location: str, period_key: str) -> RawIndicatorResult:
+    """Cap. 4 §4.2.2 — GrowthRaw = (final_avg - initial_avg)/max(initial_avg,1)*100
+    over the SUMMED monthly_searches series (trailing 12 months), k = n//3."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        series = await _fetch_interest_series(connection, keyword, country_code, start, end)
+        rows = await _fetch_volume_rows(connection, search_terms, location)
+    series = _summed_monthly_series(rows)
 
     n = len(series)
     if n < 6:
@@ -240,28 +159,21 @@ async def compute_growth_score(keyword: str, country_code: str, period_key: str)
             direction=IndicatorDirection.DIRECT,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes=f"interest_over_time: only {n} valid observation(s), need >= 6 (Cap. 4 §4.2.2)",
+            notes=f"monthly_searches: only {n} month(s), need >= 6 (Cap. 4 §4.2.2)",
         )
 
-    k = min(30, n // 3)
+    k = max(1, n // 3)
     initial_avg = sum(series[:k]) / k
     final_avg = sum(series[n - k :]) / k
 
-    # Low-base noise guard (known gap #4): Google Trends interest is 0-100,
-    # so an initial window mean near 0 makes (final-initial)/initial explode
-    # into meaningless four-digit percentages (a real run produced +1835% for
-    # Portugal off an almost-flat baseline, clamped to the bound max). A
-    # near-zero baseline means there's no measurable trend, so report a flat
-    # 0% growth (AVAILABLE) rather than a spurious extreme — 0 normalizes to
-    # a mild below-neutral score and still contributes to the Demand mean,
-    # instead of injecting noise.
+    # Low-base noise guard: a near-zero initial window makes the ratio explode.
     if initial_avg < _MIN_GROWTH_BASELINE:
         return RawIndicatorResult(
             raw_value=0.0,
             direction=IndicatorDirection.DIRECT,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.AVAILABLE,
-            notes=f"initial-window mean {initial_avg:.2f} below {_MIN_GROWTH_BASELINE} — "
+            notes=f"initial-window mean {initial_avg:.1f} below {_MIN_GROWTH_BASELINE} searches — "
             "flat 0% growth (near-zero base, no measurable trend)",
         )
 
@@ -271,17 +183,19 @@ async def compute_growth_score(keyword: str, country_code: str, period_key: str)
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"n={n}, k={k}",
+        notes=f"n={n}, k={k}, initial={initial_avg:.0f}, final={final_avg:.0f}",
     )
 
 
-async def compute_demand_stability_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev / mean (population stddev),
-    over the last 6 months (see module docstring)."""
-    start, end = _six_month_window()
+async def compute_demand_stability_score(
+    search_terms: list[str], location: str, period_key: str
+) -> RawIndicatorResult:
+    """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev/mean (population stddev) of the
+    SUMMED monthly_searches series."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        series = await _fetch_interest_series(connection, keyword, country_code, start, end)
+        rows = await _fetch_volume_rows(connection, search_terms, location)
+    series = _summed_monthly_series(rows)
 
     if len(series) < 2:
         return RawIndicatorResult(
@@ -289,83 +203,38 @@ async def compute_demand_stability_score(keyword: str, country_code: str, period
             direction=IndicatorDirection.INVERSE,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes=f"interest_over_time: only {len(series)} valid observation(s) (Cap. 4 §4.2.3)",
+            notes=f"monthly_searches: only {len(series)} month(s) (Cap. 4 §4.2.3)",
         )
 
     mean = sum(series) / len(series)
-    # Low-volume noise guard (2026-07-11, same rationale as compute_growth_
-    # score's low-base guard): a near-zero, spiky per-country series makes
-    # CV = stddev/mean explode (or be undefined at mean=0), which would read
-    # as "maximally unstable" and unfairly crush the Demand mean for a country
-    # whose real demand (worldwide trend_score) is high — the term just has
-    # low absolute per-country volume. Return a NEUTRAL CV (normalizes to ~50)
-    # rather than a spurious extreme: don't reward or penalize stability when
-    # it can't be reliably measured. Also covers mean=0 (CV undefined).
+    # Low-volume guard: a near-zero, spiky series makes CV explode/undefined.
     if mean < _MIN_STABILITY_BASELINE:
         return RawIndicatorResult(
             raw_value=_NEUTRAL_STABILITY_CV,
             direction=IndicatorDirection.INVERSE,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.AVAILABLE,
-            notes=f"series mean {mean:.2f} below {_MIN_STABILITY_BASELINE} — low-volume, "
-            "stability not reliably measurable, neutral score",
+            notes=f"series mean {mean:.1f} below {_MIN_STABILITY_BASELINE} searches — "
+            "low-volume, stability not reliably measurable, neutral score",
         )
 
     variance = sum((v - mean) ** 2 for v in series) / len(series)
-    stddev = math.sqrt(variance)
+    stddev = variance**0.5
     cv = stddev / mean
     return RawIndicatorResult(
         raw_value=cv,
         direction=IndicatorDirection.INVERSE,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"n={len(series)}, mean={mean:.2f}, stddev={stddev:.2f}",
-    )
-
-
-async def compute_regional_demand_score(keyword: str, country_code: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.4 — RegionalDemandRaw = mean(r_j) across the country's own
-    sub-regions (PyTrends interest_by_region, geo=XX), m >= 1, zero-valued
-    regions kept (not excluded).
-
-    Scope (user decision 2026-07-11): the cross-country-comparable "world
-    total" is the trend_score (worldwide interest_by_country); Regional Demand
-    stays a PER-COUNTRY signal — the geographic spread of interest inside the
-    country — read with the country's own localized keyword (geo=XX)."""
-    engine = get_external_engine(DataSource.PYTRENDS)
-    async with engine.connect() as connection:
-        result = await connection.execute(
-            text("SELECT interest_value FROM interest_by_region WHERE keyword = :keyword AND country = :country"),
-            {"keyword": keyword, "country": country_code},
-        )
-        values = [float(row[0]) for row in result.all() if row[0] is not None]
-
-    if not values:
-        return RawIndicatorResult(
-            raw_value=None,
-            direction=IndicatorDirection.DIRECT,
-            calculation_window=period_key,
-            availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes="interest_by_region: no regions with a valid value (Cap. 4 §4.2.4)",
-        )
-
-    regional_raw = sum(values) / len(values)
-    return RawIndicatorResult(
-        raw_value=regional_raw,
-        direction=IndicatorDirection.DIRECT,
-        calculation_window=period_key,
-        availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"m={len(values)} regions",
+        notes=f"n={len(series)}, mean={mean:.0f}, stddev={stddev:.0f}",
     )
 
 
 def _classify_query_intent(query: str, tiers: dict[str, list[str]]) -> float:
-    """Classify one related query against a single language's intent lexicon
-    (`tiers` = INTENT_LEXICON[language]). Transactional wins first (explicit
-    buy/price/retailer = strongest intent), then curiosity (discovery = weakest,
-    the tier that separates a buying market from a browsing one), then
-    evaluation, then usage. Unmatched → a mild product-variant/brand refinement
-    (it came from related_queries for our own keyword)."""
+    """Classify one related keyword against a language's intent lexicon
+    (`tiers` = INTENT_LEXICON[language]). Transactional first (strongest), then
+    curiosity (weakest — separates buying from browsing), then evaluation, then
+    usage; unmatched -> a mild product-variant/brand refinement."""
     lowered = f" {query.lower()} "  # pad so single-token markers like "vs" match at edges
     if any(term in lowered for term in tiers.get("transactional", ())):
         return _TRANSACTIONAL_INTENT
@@ -378,23 +247,39 @@ def _classify_query_intent(query: str, tiers: dict[str, list[str]]) -> float:
     return _DEFAULT_INTENT
 
 
-async def compute_search_intent_score(keyword: str, period_key: str, language: str | None = None) -> RawIndicatorResult:
-    """Cap. 4 §4.2.6 — IntentRaw = weighted average of a lexical intent
-    classification over related_queries.top (never .rising — different scale).
-
-    related_queries is keyword-scoped in the raw schema, but each country uses
-    its OWN localized keyword (jamón ibérico / iberico ham / presunto pata
-    negra), so reading by that keyword IS effectively per-country. The queries
-    come back in the country's language, so they're classified with the intent
-    lexicon of that country's search_language (2026-07-14) — canonical English
-    concepts translated per language, frozen in intent_lexicon.py. Unknown
-    language falls back to English."""
+async def compute_search_intent_score(
+    seed_terms: list[str], location: str, period_key: str, language: str | None = None
+) -> RawIndicatorResult:
+    """Cap. 4 §4.2.6 — IntentRaw = volume-weighted average of a lexical buy-vs-
+    curiosity classification over the country's related keywords (Google Ads
+    `keyword_related` for the product's seed terms). Weighting by REAL volume
+    (vs the old relative Trends values) makes a market whose volume concentrates
+    on 'buy/price/where to buy' score high, and one on 'what is/recipe' score
+    low. Queries are classified with the country's search_language lexicon
+    (frozen intent_lexicon.py); unknown language falls back to English."""
     tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
+    if not seed_terms:
+        return RawIndicatorResult(
+            raw_value=None,
+            direction=IndicatorDirection.DIRECT,
+            calculation_window=period_key,
+            availability_status=AvailabilityStatus.UNAVAILABLE,
+            notes="no seed terms for related-keyword intent (Cap. 4 §4.2.6)",
+        )
+    # The collector stores one keyword_related row set per keywords-for-keywords
+    # call, tagged with seed_keyword = ", ".join(seed_keywords) — the whole seed
+    # SET, since the related keywords are for the set, not per individual seed.
+    # Match that exact label (analysis_service sends the same search_terms[:20]).
+    seed_label = ", ".join(seed_terms)
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         result = await connection.execute(
-            text("SELECT query, value FROM related_queries WHERE keyword = :keyword AND query_type = 'top'"),
-            {"keyword": keyword},
+            text(
+                "SELECT DISTINCT ON (keyword) keyword, search_volume FROM keyword_related "
+                "WHERE location = :location AND seed_keyword = :seed_label "
+                "ORDER BY keyword, created_at DESC"
+            ),
+            {"location": location, "seed_label": seed_label},
         )
         rows = [(row[0], float(row[1])) for row in result.all() if row[0] is not None and row[1] is not None]
 
@@ -404,7 +289,7 @@ async def compute_search_intent_score(keyword: str, period_key: str, language: s
             direction=IndicatorDirection.DIRECT,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes="related_queries.top: no valid queries (Cap. 4 §4.2.6)",
+            notes="keyword_related: no related keywords with volume (Cap. 4 §4.2.6)",
         )
 
     total_weight = sum(w for _, w in rows)
@@ -414,7 +299,7 @@ async def compute_search_intent_score(keyword: str, period_key: str, language: s
             direction=IndicatorDirection.DIRECT,
             calculation_window=period_key,
             availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes="related_queries.top: all values are 0 (Cap. 4 §4.2.6)",
+            notes="keyword_related: all volumes are 0 (Cap. 4 §4.2.6)",
         )
 
     weighted_sum = sum(w * _classify_query_intent(q, tiers) for q, w in rows)
@@ -424,5 +309,5 @@ async def compute_search_intent_score(keyword: str, period_key: str, language: s
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"{len(rows)} queries classified",
+        notes=f"{len(rows)} related keywords classified, volume-weighted",
     )

@@ -70,29 +70,18 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     analysis_repo.mark_done = AsyncMock()
     analysis_repo.mark_failed = AsyncMock()
 
+    # Demand is now collected from Google Ads keyword data (2026-07-15) with the
+    # country's OWN approved terms in localized_markets[ISO3] — no worldwide
+    # arbitration, no per-country-series guard, no pytrends_indicators calls here.
     product_repo.get_by_entity_key = AsyncMock(
-        return_value=SimpleNamespace(canonical_title="air fryer", localized_terms={"en": "air fryer"})
+        return_value=SimpleNamespace(
+            canonical_title="air fryer",
+            localized_markets={"USA": {"primary_name": "air fryer", "search_terms": ["air fryer", "airfryer"]}},
+        )
     )
     country_repo.get_by_iso3 = AsyncMock(
         return_value=SimpleNamespace(search_language="en", pytrends_geo=None, iso2="US")
     )
-    best_term_patcher = patch(
-        "app.services.analysis_service.pytrends_indicators.best_localized_term",
-        new_callable=AsyncMock,
-        side_effect=lambda base, country_code, lang, fallback: fallback,
-    )
-    best_term_patcher.start()
-    mocks["_patcher_best_term"] = best_term_patcher
-
-    # The keyword-aware guard checks the per-country series exists for the
-    # winning term; default to present so it doesn't force extra collection.
-    series_patcher = patch(
-        "app.services.analysis_service.pytrends_indicators.has_per_country_series",
-        new_callable=AsyncMock,
-        return_value=True,
-    )
-    mocks["has_per_country_series"] = series_patcher.start()
-    mocks["_patcher_has_series"] = series_patcher
 
     coverage_service.check_coverage = AsyncMock(
         side_effect=lambda gaps: [
@@ -158,53 +147,12 @@ async def test_run_dispatches_collection_only_for_missing_gaps() -> None:
     assert len(dispatched_gaps) > 0
 
 
-async def test_forces_per_country_collection_when_winning_term_series_absent() -> None:
-    # Keyword-aware guard (2026-07-14): even when coverage_index says the
-    # per-country PyTrends indicators are fresh (all_covered=True), a shift in
-    # the winning localized term leaves interest_over_time holding only the OLD
-    # term's series. has_per_country_series returns False for the current
-    # winner, so the per-country PyTrends gaps are force-collected anyway.
-    session, mocks = _patched_service(all_covered=True)
-    mocks["has_per_country_series"].return_value = False
-    try:
-        service = AnalysisService(session)
-        with patch("app.services.analysis_service.current_month_period_key", return_value="2026-07"):
-            await service.run(_REQUEST_ID)
-    finally:
-        for key, value in list(mocks.items()):
-            if key.startswith("_patcher_"):
-                value.stop()
-
-    mocks["coverage_service"].check_or_collect.assert_awaited()
-    dispatched = mocks["coverage_service"].check_or_collect.call_args.args[0]
-    pytrends_gaps = [g for g in dispatched if g.source == DataSource.PYTRENDS and g.entity_key is not None]
-    assert len(pytrends_gaps) == 3  # interest_over_time, interest_by_region, related_queries
-    assert all(g.force for g in pytrends_gaps)  # forced past the fresh coverage row
-
-
-async def test_worldwide_demand_gap_sends_all_variations_per_language() -> None:
-    # Data arbitration (2026-07-11): the worldwide interest_by_country
-    # collection compares ALL local-name variations for each distinct search
-    # language among the requested countries, so real search volume can pick
-    # the genuine local name and each country SUMS its language's variations.
+async def test_demand_gaps_built_from_localized_markets() -> None:
+    # Demand (2026-07-15): each country's approved terms in localized_markets[ISO3]
+    # produce exactly two Google Ads gaps — search_volume (level/growth/stability)
+    # and keywords_for_keywords (intent) — with the country's ISO2 location and
+    # search_language. No worldwide arbitration, no per-country-series guard.
     session, mocks = _patched_service(all_covered=False)
-    mocks["analysis_repo"].get = AsyncMock(return_value=_analysis_request(countries=["ESP", "PRT", "MEX"]))
-    mocks["product_repo"].get_by_entity_key = AsyncMock(
-        return_value=SimpleNamespace(
-            canonical_title="jamon iberico",
-            localized_terms={
-                "es": ["jamón ibérico", "jamón pata negra"],
-                "pt": ["presunto de porco preto", "presunto pata negra"],
-            },
-        )
-    )
-    language_by_iso3 = {"ESP": "es", "PRT": "pt", "MEX": "es"}
-    iso2_by_iso3 = {"ESP": "ES", "PRT": "PT", "MEX": "MX"}
-    mocks["country_repo"].get_by_iso3 = AsyncMock(
-        side_effect=lambda iso3: SimpleNamespace(
-            search_language=language_by_iso3[iso3], pytrends_geo=None, iso2=iso2_by_iso3[iso3]
-        )
-    )
     try:
         service = AnalysisService(session)
         await service.run(_REQUEST_ID)
@@ -213,23 +161,20 @@ async def test_worldwide_demand_gap_sends_all_variations_per_language() -> None:
             if key.startswith("_patcher_"):
                 value.stop()
 
-    worldwide_gaps = [
+    dispatched = [
         gap
         for call in mocks["coverage_service"].check_or_collect.await_args_list
         for gap in call.args[0]
-        if gap.indicator_code == "interest_by_country"
     ]
-    assert len(worldwide_gaps) == 1
-    params = worldwide_gaps[0].collection_params
-    assert params["base_keyword"] == "jamon iberico"
-    terms_by_language: dict[str, list[str]] = {}
-    for t in params["terms"]:
-        terms_by_language.setdefault(t["language"], []).append(t["term"])
-    # es and pt only (MEX shares es -> deduped), ALL variations per language
-    assert terms_by_language == {
-        "es": ["jamón ibérico", "jamón pata negra"],
-        "pt": ["presunto de porco preto", "presunto pata negra"],
-    }
+    pytrends_gaps = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS}
+    assert set(pytrends_gaps) == {"search_volume", "keywords_for_keywords"}
+
+    sv = pytrends_gaps["search_volume"]
+    assert sv.entity_key == _ENTITY_KEY
+    assert sv.collection_params == {"location": "US", "language": "en", "keywords": ["air fryer", "airfryer"]}
+
+    kfk = pytrends_gaps["keywords_for_keywords"]
+    assert kfk.collection_params == {"location": "US", "language": "en", "seed_keywords": ["air fryer", "airfryer"]}
 
 
 async def test_run_aborts_when_data_incomplete_never_partial_mos() -> None:
@@ -237,7 +182,7 @@ async def test_run_aborts_when_data_incomplete_never_partial_mos() -> None:
     # indicator after collection, the whole analysis fails — no partial MOS.
     session, mocks = _patched_service(all_covered=True)
     mocks["mos_engine"].find_incomplete_countries = AsyncMock(
-        return_value={"USA": "Missing mandatory indicator(s): regional_demand_score"}
+        return_value={"USA": "Missing mandatory indicator(s): trend_score"}
     )
     try:
         service = AnalysisService(session)

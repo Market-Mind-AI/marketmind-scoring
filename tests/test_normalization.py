@@ -15,8 +15,9 @@ def _reference(min_x: float, max_x: float) -> NormalizationReference:
 
 class TestNormalizationMethod:
     def test_passthrough_indicators(self) -> None:
-        assert normalization_method(IndicatorCode.TREND_SCORE) == NormalizationMethod.PASSTHROUGH
-        assert normalization_method(IndicatorCode.REGIONAL_DEMAND_SCORE) == NormalizationMethod.PASSTHROUGH
+        # TREND_SCORE and REGIONAL_DEMAND are no longer passthrough (2026-07-15,
+        # Google Trends -> Google Ads absolute search volume): TREND_SCORE is now
+        # MINMAX_FIXED (see test_fixed_bounds_indicators), REGIONAL_DEMAND is gone.
         assert normalization_method(IndicatorCode.SEARCH_INTENT_SCORE) == NormalizationMethod.PASSTHROUGH
         assert normalization_method(IndicatorCode.INTERNET_PENETRATION_SCORE) == NormalizationMethod.PASSTHROUGH
         assert normalization_method(IndicatorCode.URBANIZATION_SCORE) == NormalizationMethod.PASSTHROUGH
@@ -26,6 +27,7 @@ class TestNormalizationMethod:
         # Every scored non-passthrough indicator uses fixed bounds now
         # (MINMAX_REFERENCE was removed 2026-07-08).
         for code in (
+            IndicatorCode.TREND_SCORE,
             IndicatorCode.GROWTH_SCORE,
             IndicatorCode.DEMAND_STABILITY_SCORE,
             IndicatorCode.GDP_PER_CAPITA_SCORE,
@@ -49,8 +51,9 @@ class TestNormalizationMethod:
 
 class TestNormalize:
     def test_passthrough_returns_raw_value_unchanged(self) -> None:
+        # SEARCH_INTENT_SCORE is still passthrough (already a 0-100 score).
         score, note = normalize(
-            indicator_code=IndicatorCode.TREND_SCORE, raw_value=60.11, direction=IndicatorDirection.DIRECT,
+            indicator_code=IndicatorCode.SEARCH_INTENT_SCORE, raw_value=60.11, direction=IndicatorDirection.DIRECT,
             reference=None,
         )  # fmt: skip
         assert score == 60.11

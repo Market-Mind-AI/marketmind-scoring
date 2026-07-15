@@ -35,47 +35,73 @@ async def test_resolve_creates_new_entity_when_nothing_matches(db_session: Async
     assert result.canonical_title == text
 
 
-async def test_resolve_persists_localized_terms_on_new_entity(db_session: AsyncSession) -> None:
+async def test_resolve_persists_localized_markets_on_new_entity(db_session: AsyncSession) -> None:
     service = CatalogService(db_session, embedding_client=_mock_embedding_client())
     text = f"Jamon Iberico {uuid.uuid4()}"
-    localized = {
-        "es": ["jamón ibérico", "jamón pata negra"],
-        "pt": ["presunto de porco preto", "presunto pata negra"],
-        "en": ["iberico ham"],
+    localized_markets = {
+        "ESP": {
+            "primary_name": "jamón ibérico",
+            "formal_name": "jamón de bellota",
+            "search_terms": ["jamón ibérico", "jamón pata negra"],
+            "excluded_terms": ["jamón serrano"],
+            "confidence": 0.9,
+        },
+        "PRT": {
+            "primary_name": "presunto pata negra",
+            "formal_name": None,
+            "search_terms": ["presunto pata negra", "presunto de porco preto"],
+            "excluded_terms": [],
+            "confidence": 0.8,
+        },
     }
 
-    result = await service.resolve(text, source="test", localized_terms=localized)
+    result = await service.resolve(text, source="test", localized_markets=localized_markets)
     assert result.method == "created"
 
     from app.repositories.product_repository import ProductRepository
 
     entity = await ProductRepository(db_session).get_by_entity_key(result.entity_key)
     assert entity is not None
-    assert entity.localized_terms == localized
+    assert entity.localized_markets == localized_markets
 
 
-async def test_resolve_accumulates_localized_terms_across_analyses(db_session: AsyncSession) -> None:
-    # The acervo grows on every resolve (not only creation): a second resolve
-    # of the same text merges genuinely-new variations and dedups the rest.
+async def test_resolve_keeps_localized_markets_from_creation_on_later_resolve(db_session: AsyncSession) -> None:
+    # localized_markets is persisted ONLY when a new entity is created; a later
+    # resolve of the same text (exact alias hit) never overwrites or merges it.
     service = CatalogService(db_session, embedding_client=_mock_embedding_client())
     text = f"Presunto {uuid.uuid4()}"
+    at_creation = {
+        "PRT": {
+            "primary_name": "presunto pata negra",
+            "formal_name": None,
+            "search_terms": ["presunto pata negra"],
+            "excluded_terms": [],
+            "confidence": 0.7,
+        }
+    }
 
-    created = await service.resolve(text, source="test", localized_terms={"pt": ["presunto pata negra"]})
+    created = await service.resolve(text, source="test", localized_markets=at_creation)
     again = await service.resolve(
         text,
         source="test",
-        localized_terms={"pt": ["presunto pata negra", "presunto de porco preto"], "es": ["jamón pata negra"]},
+        localized_markets={
+            "ESP": {
+                "primary_name": "jamón pata negra",
+                "formal_name": None,
+                "search_terms": ["jamón pata negra"],
+                "excluded_terms": [],
+                "confidence": 0.6,
+            }
+        },
     )
     assert again.entity_key == created.entity_key  # same entity (exact alias hit)
+    assert again.method == "alias"
 
     from app.repositories.product_repository import ProductRepository
 
     entity = await ProductRepository(db_session).get_by_entity_key(again.entity_key)
     assert entity is not None
-    assert entity.localized_terms == {
-        "pt": ["presunto pata negra", "presunto de porco preto"],  # deduped + appended
-        "es": ["jamón pata negra"],  # new language added
-    }
+    assert entity.localized_markets == at_creation  # unchanged by the second resolve
 
 
 async def test_resolve_second_call_hits_exact_alias(db_session: AsyncSession) -> None:

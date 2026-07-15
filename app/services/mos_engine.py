@@ -2,8 +2,8 @@
 product's dimension vector (product-specific Demand indicators merged with
 country-level macro indicators, entity_key=<product> + entity_key=NULL),
 validates mandatory-indicator availability (Cap. 5 §5.3), runs TOPSIS
-against the fixed ideal=100/anti-ideal=0 (Cap. 5 §5.6), applies the Trend
-Score non-compensatory cap, and upserts one mos_results row per country.
+against the fixed ideal=100/anti-ideal=0 (Cap. 5 §5.6), and upserts one
+mos_results row per country (no non-compensatory cap — user decision 2026-07-15).
 Never combines countries into a single score — MOS is always absolute and
 independent per (product, country, period), see memory marketmind_mos_engine.
 
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import EntityNotFoundError
 from app.core.logging import logger
 from app.db.models.mos_result import MosResult
-from app.domain.enums import AvailabilityStatus, IndicatorCode, IndicatorDimension, PeriodType
+from app.domain.enums import AvailabilityStatus, IndicatorDimension, PeriodType
 from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.mos_repository import MosRepository
@@ -28,7 +28,7 @@ from app.services.mos.country_vectors import CountryVectorBuilder
 from app.services.mos.dimension_mapping import check_availability, compute_dimension_subscores
 from app.services.mos.interpretation import mos_band
 from app.services.mos.library_reference import classical_topsis_scores
-from app.services.mos.topsis import topsis_score, trend_score_cap
+from app.services.mos.topsis import topsis_score
 from app.utils.period import current_month_period_key
 
 _ALL_DIMENSIONS = list(IndicatorDimension)
@@ -132,16 +132,12 @@ class MosEngine:
             weights[dimension] = float(weight_row.weight)
 
         topsis = topsis_score(subscores, weights)
-        mos_before_cap = topsis * 100
-
-        trend_iv = merged[IndicatorCode.TREND_SCORE.value]
-        assert trend_iv.normalized_score is not None  # guaranteed by check_availability (mandatory indicator)
-        cap = trend_score_cap(float(trend_iv.normalized_score))
-
-        if cap is not None and mos_before_cap > cap:
-            mos, capped_by = cap, "trend_score_cap"
-        else:
-            mos, capped_by = mos_before_cap, None
+        # No non-compensatory cap (user decision 2026-07-15): the MOS is the
+        # TOPSIS score directly. Demand is one weighted dimension like the
+        # others; it is not allowed to hard-cap the final score.
+        mos = topsis * 100
+        mos_before_cap = mos
+        capped_by = None
 
         library_topsis, library_mos = await self._classical_comparison(country_iso3, period_key, subscores)
 

@@ -92,7 +92,11 @@ class Settings(BaseSettings):
     # classification task (product name/brand/category/age from one photo),
     # not deep reasoning — cost was the deciding factor (2026-07-08, user
     # request) over Opus's extra capability, which this task doesn't need.
-    anthropic_vision_model: str = "claude-haiku-4-5-20251001"
+    # identify-image now returns a rich per-country `markets` payload (real
+    # search terms for every requested country). Haiku 4.5 degenerated on that
+    # large structured output (repeated-token loop -> invalid JSON), so the
+    # default is a more capable model. Overridable via ANTHROPIC_VISION_MODEL.
+    anthropic_vision_model: str = "claude-opus-4-8"
 
     # Trigram (pg_trgm) similarity threshold to accept a fuzzy alias match
     # without falling through to the more expensive embedding step.

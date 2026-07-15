@@ -53,26 +53,68 @@ class TestResolveSourceCountryCode:
 
 
 class TestBuildRequest:
-    def test_pytrends_interest_over_time_requires_keyword(self) -> None:
+    def test_pytrends_search_volume_requires_keywords(self) -> None:
+        # location + language present, but keywords missing -> raises.
         req = CollectionRequest(
             source=DataSource.PYTRENDS,
-            indicator_code="interest_over_time",
+            indicator_code="search_volume",
             country=_country(),
-            collection_params={},
+            collection_params={"location": "ES", "language": "es"},
         )
         with pytest.raises(CollectionDispatchError):
             _build_request(req)
 
-    def test_pytrends_interest_over_time_payload(self) -> None:
+    def test_pytrends_search_volume_payload(self) -> None:
         req = CollectionRequest(
             source=DataSource.PYTRENDS,
-            indicator_code="interest_over_time",
+            indicator_code="search_volume",
             country=_country(),
-            collection_params={"keyword": "air fryer", "timeframe": "today 12-m"},
+            collection_params={"location": "ES", "language": "es", "keywords": ["air fryer", "freidora de aire"]},
         )
         path, payload = _build_request(req)
-        assert path == "/interest-over-time"
-        assert payload == {"keyword": "air fryer", "country": "ES", "timeframe": "today 12-m"}
+        assert path == "/search-volume"
+        assert payload == {"location": "ES", "language": "es", "keywords": ["air fryer", "freidora de aire"]}
+
+    def test_pytrends_keywords_for_keywords_payload(self) -> None:
+        req = CollectionRequest(
+            source=DataSource.PYTRENDS,
+            indicator_code="keywords_for_keywords",
+            country=_country(),
+            collection_params={"location": "ES", "language": "es", "seed_keywords": ["air fryer"]},
+        )
+        path, payload = _build_request(req)
+        assert path == "/keywords-for-keywords"
+        assert payload == {"location": "ES", "language": "es", "seed_keywords": ["air fryer"]}
+
+    def test_pytrends_keywords_for_keywords_includes_optional_limit(self) -> None:
+        req = CollectionRequest(
+            source=DataSource.PYTRENDS,
+            indicator_code="keywords_for_keywords",
+            country=_country(),
+            collection_params={"location": "ES", "language": "es", "seed_keywords": ["air fryer"], "limit": 50},
+        )
+        _path, payload = _build_request(req)
+        assert payload["limit"] == 50
+
+    def test_pytrends_keywords_for_keywords_requires_seed_keywords(self) -> None:
+        req = CollectionRequest(
+            source=DataSource.PYTRENDS,
+            indicator_code="keywords_for_keywords",
+            country=_country(),
+            collection_params={"location": "ES", "language": "es"},
+        )
+        with pytest.raises(CollectionDispatchError):
+            _build_request(req)
+
+    def test_pytrends_search_volume_requires_location(self) -> None:
+        req = CollectionRequest(
+            source=DataSource.PYTRENDS,
+            indicator_code="search_volume",
+            country=_country(),
+            collection_params={"language": "es", "keywords": ["air fryer"]},
+        )
+        with pytest.raises(CollectionDispatchError):
+            _build_request(req)
 
     def test_pytrends_unknown_indicator_code(self) -> None:
         req = CollectionRequest(

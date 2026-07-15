@@ -31,16 +31,3 @@ def topsis_score(scores: dict[IndicatorDimension, float], weights: dict[Indicato
     if d_plus + d_minus == 0:
         return 0.5  # degenerate: every weighted dimension sits exactly midway
     return d_minus / (d_plus + d_minus)
-
-
-def trend_score_cap(trend_score: float) -> float | None:
-    """Non-compensatory cap (not in Cap. 5 — user decision, see
-    marketmind_mos_engine): macro indicators (population, GDP, internet)
-    must never compensate for a product with no real search demand.
-    Thresholds reuse Cap. 4 §4.2.1's TrendScore interpretation bands.
-    Returns None when no cap applies."""
-    if trend_score < 20:
-        return 39.0
-    if trend_score < 40:
-        return 59.0
-    return None

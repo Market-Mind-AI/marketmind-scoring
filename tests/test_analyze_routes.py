@@ -31,7 +31,7 @@ def test_identify_image_route() -> None:
         client = TestClient(app)
         response = client.post(
             "/catalog/identify-image",
-            json={"image_base64": "ZmFrZQ==", "image_media_type": "image/jpeg"},
+            json={"image_base64": "ZmFrZQ==", "image_media_type": "image/jpeg", "countries": ["USA"]},
         )
         assert response.status_code == 200
         body = response.json()

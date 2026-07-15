@@ -41,10 +41,26 @@ class CatalogEntityResponse(BaseModel):
 ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 
+class LocalizedMarket(BaseModel):
+    """One country's curated search vocabulary, mirroring a value of
+    product_catalog.localized_markets (keyed by ISO3, so `country` lives in
+    the key, not here). Produced by the identify-image LLM and user-reviewable
+    before /analyze."""
+
+    primary_name: str
+    formal_name: str | None = None
+    search_terms: list[str] = Field(default_factory=list)
+    excluded_terms: list[str] = Field(default_factory=list)
+    confidence: float
+
+
 class IdentifyImageRequest(BaseModel):
     image_base64: str = Field(..., min_length=1)
     image_media_type: ImageMediaType
     hint_text: str | None = Field(None, description="Optional user-provided prompt/description alongside the photo")
+    countries: list[str] = Field(
+        ..., min_length=1, description="ISO3 country codes to identify per-market search vocabulary for"
+    )
 
 
 class IdentifyImageResponse(BaseModel):
@@ -57,7 +73,10 @@ class IdentifyImageResponse(BaseModel):
     product_name: str
     brand: str | None
     category: str | None
-    localized_terms: dict[str, list[str]] | None = None
+    # Per-COUNTRY curated search terms, keyed by ISO3 — the shape persisted to
+    # product_catalog.localized_markets. Replaces the old {lang: [names]}
+    # `localized_terms`.
+    localized_markets: dict[str, LocalizedMarket] | None = None
     target_age_min: int | None
     target_age_max: int | None
     estimated_price: float | None

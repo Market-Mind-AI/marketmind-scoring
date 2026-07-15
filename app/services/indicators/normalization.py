@@ -24,10 +24,13 @@ from app.domain.enums import IndicatorCode, IndicatorDirection, NormalizationMet
 
 FIXED_BOUNDS_PERIOD_KEY = "FIXED"
 
+# TREND_SCORE is no longer here (2026-07-15): it used to be the 0-100 Google
+# Trends value (passthrough). It is now the per-capita Google Ads search-volume
+# LEVEL (searches per 1,000 internet users), an unbounded rate — so it
+# normalizes against self-widening fixed bounds like the other absolute metrics.
+# REGIONAL_DEMAND_SCORE is gone entirely (Google Trends removed).
 _PASSTHROUGH_INDICATORS = frozenset(
     {
-        IndicatorCode.TREND_SCORE,
-        IndicatorCode.REGIONAL_DEMAND_SCORE,
         IndicatorCode.SEARCH_INTENT_SCORE,
         IndicatorCode.INTERNET_PENETRATION_SCORE,
         IndicatorCode.URBANIZATION_SCORE,
@@ -42,6 +45,7 @@ _PASSTHROUGH_INDICATORS = frozenset(
 # normalization method for non-passthrough indicators).
 _FIXED_BOUNDS_INDICATORS = frozenset(
     {
+        IndicatorCode.TREND_SCORE,
         IndicatorCode.GROWTH_SCORE,
         IndicatorCode.DEMAND_STABILITY_SCORE,
         IndicatorCode.GDP_PER_CAPITA_SCORE,

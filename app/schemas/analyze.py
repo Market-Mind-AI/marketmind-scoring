@@ -11,9 +11,12 @@ class AnalyzeRequest(BaseModel):
     product_name: str = Field(..., min_length=1)
     brand: str | None = None
     category: str | None = None
-    localized_terms: dict[str, list[str]] | None = Field(
+    localized_markets: dict[str, dict[str, Any]] | None = Field(
         default=None,
-        description="{lang: [real local market names]} from identify-image — per-country keyword localization",
+        description=(
+            "Per-COUNTRY curated search vocabulary from identify-image, keyed by ISO3 "
+            "({\"<ISO3>\": {primary_name, formal_name?, search_terms, excluded_terms, confidence}})."
+        ),
     )
     target_age_min: int | None = None
     target_age_max: int | None = None

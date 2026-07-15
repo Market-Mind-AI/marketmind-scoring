@@ -1,7 +1,7 @@
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,11 +40,12 @@ _COUNTRY_LEVEL_TARGETS = [
     f"{_ENGINE}.worldbank_indicators.compute_trade_openness",
 ]
 
+# Demand from Google Ads absolute search volume (2026-07-15): 4 indicators,
+# no regional_demand and no granularity fallback.
 _PYTRENDS_TARGETS = {
     "trend": f"{_ENGINE}.pytrends_indicators.compute_trend_score",
     "growth": f"{_ENGINE}.pytrends_indicators.compute_growth_score",
     "stability": f"{_ENGINE}.pytrends_indicators.compute_demand_stability_score",
-    "regional": f"{_ENGINE}.pytrends_indicators.compute_regional_demand_score",
     "intent": f"{_ENGINE}.pytrends_indicators.compute_search_intent_score",
 }
 
@@ -81,14 +82,6 @@ def _patched_pytrends(**overrides: RawIndicatorResult | list[RawIndicatorResult]
             else:
                 stack.enter_context(patch(target, return_value=value))
         stack.enter_context(patch(f"{_ENGINE}.undata_indicators.compute_median_age_fit", return_value=_UNAVAILABLE))
-        # Per-country signals now query the WINNING localized term (from the
-        # worldwide interest_by_country arbitration); stub it so the engine
-        # tests don't need that external read.
-        stack.enter_context(
-            patch(
-                f"{_ENGINE}.pytrends_indicators.best_localized_term", new_callable=AsyncMock, return_value="air fryer"
-            )
-        )
         yield
 
 
@@ -132,7 +125,14 @@ async def test_country_level_inflation_from_worldbank_only(db_session: AsyncSess
 
 
 async def test_product_specific_indicators_computed_with_entity_key(db_session: AsyncSession) -> None:
-    entity = await ProductRepository(db_session).create_entity(canonical_title=f"Air Fryer {uuid.uuid4()}")
+    # Demand is now read per country from the product's approved localized terms
+    # (product_catalog.localized_markets[ISO3]); the engine saves 4 pytrends
+    # indicators (trend/growth/stability/intent — no regional_demand) plus the
+    # conditional median-age fit.
+    entity = await ProductRepository(db_session).create_entity(
+        canonical_title=f"Air Fryer {uuid.uuid4()}",
+        localized_markets={"USA": {"primary_name": "air fryer", "search_terms": ["air fryer", "airfryer"]}},
+    )
     await db_session.commit()
 
     trend = RawIndicatorResult(60.0, IndicatorDirection.DIRECT, "2026-07", AvailabilityStatus.AVAILABLE, None)
@@ -146,31 +146,9 @@ async def test_product_specific_indicators_computed_with_entity_key(db_session: 
     by_code = {r.indicator_code: r for r in results if r.entity_key is not None}
     assert by_code["trend_score"].raw_value == 60
     assert by_code["trend_score"].entity_key == entity.entity_key
+    # 4 pytrends Demand indicators + median-age fit, all keyed to the entity.
+    assert {"trend_score", "growth_score", "demand_stability_score", "search_intent_score"} <= set(by_code)
+    assert "regional_demand_score" not in by_code
     assert by_code["median_age_fit_score"].entity_key == entity.entity_key
     country_level = [r for r in results if r.entity_key is None]
     assert len(country_level) >= 8
-
-
-async def test_granularity_fallback_marks_indicators_as_fallback(db_session: AsyncSession) -> None:
-    entity = await ProductRepository(db_session).create_entity(
-        canonical_title=f"Specific SKU {uuid.uuid4()}", category="air fryer"
-    )
-    await db_session.commit()
-
-    category_trend = RawIndicatorResult(70.0, IndicatorDirection.DIRECT, "2026-07", AvailabilityStatus.AVAILABLE, None)
-    category_growth = RawIndicatorResult(10.0, IndicatorDirection.DIRECT, "2026-07", AvailabilityStatus.AVAILABLE, None)
-
-    engine = IndicatorEngine(db_session)
-    with (
-        _patched_country_level(),
-        _patched_pytrends(trend=[_UNAVAILABLE, category_trend], growth=category_growth),
-    ):
-        results = await engine.compute_all(
-            country_iso3="USA", entity_key=entity.entity_key, period_key=_unique_period_key()
-        )
-
-    by_code = {r.indicator_code: r for r in results if r.entity_key is not None}
-    assert by_code["trend_score"].availability_status == "fallback"
-    assert by_code["trend_score"].raw_value == 70
-    assert "category" in (by_code["trend_score"].notes or "")
-    assert by_code["growth_score"].availability_status == "fallback"

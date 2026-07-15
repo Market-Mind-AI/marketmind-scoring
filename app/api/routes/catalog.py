@@ -78,6 +78,7 @@ async def identify_image(
             image_base64=request.image_base64,
             image_media_type=request.image_media_type,
             hint_text=request.hint_text,
+            countries=request.countries,
         )
     except VisionError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

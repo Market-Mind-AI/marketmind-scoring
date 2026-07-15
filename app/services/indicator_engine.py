@@ -150,58 +150,32 @@ class IndicatorEngine:
     async def _compute_pytrends_indicators(
         self, entity: ProductCatalog, country: Country, period_key: str
     ) -> list[IndicatorValue]:
-        country_code = resolve_source_country_code(DataSource.PYTRENDS, country)
-        # trend_score reads the WORLDWIDE interest_by_country (the cross-country
-        # comparable "world total") for (canonical base keyword, this country's
-        # language). growth/stability/regional read the PER-COUNTRY series
-        # (interest_over_time, interest_by_region, geo=XX) searched with the
-        # country's WINNING local term — the variation that scored highest in
-        # the worldwide arbitration (has real volume), not the LLM's first
-        # guess (which can be too niche to have a standalone series). Matches
-        # the term analysis_service collected for those per-country series.
+        # Demand from Google Ads ABSOLUTE search volume (not Trends), 2026-07-15:
+        # each country is measured with its OWN user-approved search terms
+        # (product_catalog.localized_markets[ISO3]). LEVEL = SUM of those terms'
+        # monthly search volume (real total online search demand);
+        # growth/stability from the summed monthly series; intent from the
+        # related keywords. location is the ISO2 code Google Ads expects.
+        location = country.iso2 or resolve_source_country_code(DataSource.PYTRENDS, country)
         language = country.search_language
-        variations = as_term_list((entity.localized_terms or {}).get(language)) if language is not None else []
-        fallback_keyword = variations[0] if variations else entity.canonical_title
-        keyword = await pytrends_indicators.best_localized_term(
-            entity.canonical_title, country_code, language, fallback_keyword
-        )
+        market = (entity.localized_markets or {}).get(country.iso3) or {}
+        search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
+        seed_terms = search_terms[:20]  # keywords_for_keywords accepts up to 20 seeds
 
-        trend = await pytrends_indicators.compute_trend_score(
-            entity.canonical_title, country_code, period_key, term_language=language
-        )
-        granularity_fallback = False
-        if trend.availability_status == AvailabilityStatus.UNAVAILABLE and entity.category:
-            # Cap. 4 "fallback de granularidade SKU->categoria": specific
-            # keyword has insufficient volume, retry with the category term.
-            fallback_trend = await pytrends_indicators.compute_trend_score(
-                entity.category, country_code, period_key, term_language=language
-            )
-            if fallback_trend.availability_status == AvailabilityStatus.AVAILABLE:
-                keyword = entity.category
-                granularity_fallback = True
-                trend = fallback_trend
-
-        growth = await pytrends_indicators.compute_growth_score(keyword, country_code, period_key)
-        stability = await pytrends_indicators.compute_demand_stability_score(keyword, country_code, period_key)
-        regional = await pytrends_indicators.compute_regional_demand_score(keyword, country_code, period_key)
-        intent = await pytrends_indicators.compute_search_intent_score(keyword, period_key, language=language)
+        trend = await pytrends_indicators.compute_trend_score(search_terms, location, period_key)
+        growth = await pytrends_indicators.compute_growth_score(search_terms, location, period_key)
+        stability = await pytrends_indicators.compute_demand_stability_score(search_terms, location, period_key)
+        intent = await pytrends_indicators.compute_search_intent_score(seed_terms, location, period_key, language)
 
         indicator_raws = [
             (IndicatorCode.TREND_SCORE, trend),
             (IndicatorCode.GROWTH_SCORE, growth),
             (IndicatorCode.DEMAND_STABILITY_SCORE, stability),
-            (IndicatorCode.REGIONAL_DEMAND_SCORE, regional),
             (IndicatorCode.SEARCH_INTENT_SCORE, intent),
         ]
 
         saved: list[IndicatorValue] = []
         for code, raw in indicator_raws:
-            if granularity_fallback and raw.availability_status == AvailabilityStatus.AVAILABLE:
-                raw = RawIndicatorResult(
-                    raw.raw_value, raw.direction, raw.calculation_window, AvailabilityStatus.FALLBACK,
-                    f"granularity fallback: keyword='{keyword}' (category) instead of canonical_title "
-                    f"'{entity.canonical_title}' (Cap. 4 fallback de granularidade SKU->categoria)",
-                )  # fmt: skip
             saved.append(
                 await self._normalize_and_save(
                     code, DataSource.PYTRENDS, entity.entity_key, country.iso3, period_key, raw

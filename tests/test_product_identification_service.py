@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.schemas.catalog import CatalogResolveResponse
 from app.services.product_identification_service import ProductIdentificationService
-from app.services.vision_client import ProductIdentification
+from app.services.vision_client import MarketTerms, ProductIdentification
 
 
 def _identification(**overrides: object) -> ProductIdentification:
@@ -11,6 +11,15 @@ def _identification(**overrides: object) -> ProductIdentification:
         "product_name": "air fryer",
         "brand": "Philips",
         "category": "kitchen",
+        "markets": [
+            MarketTerms(
+                country="USA",
+                primary_name="air fryer",
+                search_terms=["air fryer", "airfryer"],
+                excluded_terms=["deep fryer"],
+                confidence=0.95,
+            )
+        ],
         "target_age_min": None,
         "target_age_max": None,
         "estimated_price": 89.9,
@@ -35,17 +44,36 @@ async def test_identify_combines_brand_and_product_name_for_resolve(mock_session
         )
 
         service = ProductIdentificationService(mock_session, vision_client=mock_vision_client)
-        result = await service.identify(image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None)
+        result = await service.identify(
+            image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
+        )
+
+    mock_vision_client.identify_product.assert_awaited_once()
+    assert mock_vision_client.identify_product.call_args.kwargs["countries"] == ["USA"]
 
     mock_catalog_service.resolve.assert_awaited_once()
     call_args = mock_catalog_service.resolve.call_args
     assert call_args.args[0] == "Philips air fryer"
     assert call_args.kwargs["category"] == "kitchen"
+    # markets list mapped into the ISO3-keyed localized_markets dict, both for
+    # persistence (resolve) and the response.
+    expected_markets = {
+        "USA": {
+            "primary_name": "air fryer",
+            "formal_name": None,
+            "search_terms": ["air fryer", "airfryer"],
+            "excluded_terms": ["deep fryer"],
+            "confidence": 0.95,
+        }
+    }
+    assert call_args.kwargs["localized_markets"] == expected_markets
 
     assert result.entity_key == entity_key
     assert result.product_name == "air fryer"
     assert result.brand == "Philips"
     assert result.estimated_price == 89.9
+    assert result.localized_markets is not None
+    assert result.localized_markets["USA"].search_terms == ["air fryer", "airfryer"]
 
 
 async def test_identify_uses_product_name_only_when_no_brand(mock_session: AsyncMock) -> None:
@@ -59,6 +87,8 @@ async def test_identify_uses_product_name_only_when_no_brand(mock_session: Async
         )
 
         service = ProductIdentificationService(mock_session, vision_client=mock_vision_client)
-        await service.identify(image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None)
+        await service.identify(
+            image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
+        )
 
     assert mock_catalog_service.resolve.call_args.args[0] == "air fryer"

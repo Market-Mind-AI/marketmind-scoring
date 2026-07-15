@@ -32,7 +32,9 @@ async def test_identify_product_returns_parsed_output() -> None:
         patch("app.services.vision_client.AsyncAnthropic", return_value=_mock_anthropic_client(identification)),
     ):
         client = VisionClient()
-        result = await client.identify_product(image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None)
+        result = await client.identify_product(
+            image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
+        )
 
     assert result.product_name == "air fryer"
     assert result.brand == "Philips"
@@ -43,7 +45,9 @@ async def test_identify_product_raises_without_api_key() -> None:
     with patch.object(settings, "anthropic_api_key", ""):
         client = VisionClient()
         with pytest.raises(VisionError, match="ANTHROPIC_API_KEY is not configured"):
-            await client.identify_product(image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None)
+            await client.identify_product(
+                image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
+            )
 
 
 async def test_identify_product_wraps_api_errors() -> None:
@@ -56,7 +60,9 @@ async def test_identify_product_wraps_api_errors() -> None:
     ):
         client = VisionClient()
         with pytest.raises(VisionError, match="Failed to call Anthropic vision API"):
-            await client.identify_product(image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None)
+            await client.identify_product(
+                image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
+            )
 
 
 async def test_identify_product_raises_when_no_parsed_output() -> None:
@@ -69,4 +75,6 @@ async def test_identify_product_raises_when_no_parsed_output() -> None:
     ):
         client = VisionClient()
         with pytest.raises(VisionError, match="returned no parseable result"):
-            await client.identify_product(image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None)
+            await client.identify_product(
+                image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
+            )

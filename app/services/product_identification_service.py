@@ -5,6 +5,8 @@ field before submitting the full analysis — never chains straight into
 collection/calculation.
 """
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.catalog import IdentifyImageResponse, ImageMediaType
@@ -19,11 +21,27 @@ class ProductIdentificationService:
         self._catalog_service = CatalogService(session)
 
     async def identify(
-        self, *, image_base64: str, image_media_type: ImageMediaType, hint_text: str | None
+        self, *, image_base64: str, image_media_type: ImageMediaType, hint_text: str | None, countries: list[str]
     ) -> IdentifyImageResponse:
         identification = await self._vision_client.identify_product(
-            image_base64=image_base64, image_media_type=image_media_type, hint_text=hint_text
+            image_base64=image_base64,
+            image_media_type=image_media_type,
+            hint_text=hint_text,
+            countries=countries,
         )
+
+        # Convert the LLM's markets list into the ISO3-keyed localized_markets
+        # dict persisted on product_catalog.localized_markets.
+        localized_markets: dict[str, dict[str, Any]] = {
+            market.country: {
+                "primary_name": market.primary_name,
+                "formal_name": market.formal_name,
+                "search_terms": market.search_terms,
+                "excluded_terms": market.excluded_terms,
+                "confidence": market.confidence,
+            }
+            for market in identification.markets
+        }
 
         resolve_text = (
             f"{identification.brand} {identification.product_name}".strip()
@@ -34,7 +52,7 @@ class ProductIdentificationService:
             resolve_text,
             source="image_identification",
             category=identification.category,
-            localized_terms=identification.localized_terms or None,
+            localized_markets=localized_markets or None,
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
         )
@@ -46,7 +64,7 @@ class ProductIdentificationService:
             product_name=identification.product_name,
             brand=identification.brand,
             category=identification.category,
-            localized_terms=identification.localized_terms or None,
+            localized_markets=localized_markets or None,
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
             estimated_price=identification.estimated_price,

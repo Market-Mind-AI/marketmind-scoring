@@ -44,14 +44,12 @@ _RAW_STATUS_MAP: dict[str, IngestionRunStatus] = {
     "failed": IngestionRunStatus.FAILED,
 }
 
+# The collector service is now Google Ads keyword data (via DataForSEO), not
+# Google Trends (2026-07-15). search_volume backs the demand LEVEL + growth +
+# stability (its monthly_searches array); keywords_for_keywords backs intent.
 _PYTRENDS_ENDPOINTS: dict[str, str] = {
-    "interest_over_time": "/interest-over-time",
-    "interest_by_region": "/interest-by-region",
-    "interest_by_country": "/interest-by-country",
-    "related_queries": "/related-queries",
-    "related_topics": "/related-topics",
-    "suggestions": "/suggestions",
-    "trending_rss": "/trending-rss",
+    "search_volume": "/search-volume",
+    "keywords_for_keywords": "/keywords-for-keywords",
 }
 
 
@@ -112,33 +110,19 @@ def _build_pytrends_request(
     if path is None:
         raise CollectionDispatchError(f"Unknown pytrends indicator_code '{indicator_code}'")
 
-    if indicator_code == "interest_by_country":
-        # WORLDWIDE (geo='') multi-term Google Trends breakdown — the
-        # cross-country-comparable "world total" behind trend_score, each
-        # country read against its own-language term(s) on one global 0-100
-        # axis (see app/services/indicators/pytrends.py compute_trend_score).
-        payload: dict[str, Any] = {
-            "base_keyword": _require(params, "base_keyword"),
-            "terms": _require(params, "terms"),
-        }
-        if "timeframe" in params:
-            payload["timeframe"] = params["timeframe"]
-    elif indicator_code == "suggestions":
-        # Country-less indicator used for google_mid enrichment.
-        payload = {"keyword": _require(params, "keyword")}
-    elif indicator_code == "trending_rss":
-        payload = {"geo": _require_country_code(DataSource.PYTRENDS, country)}
-        if "max_articles" in params:
-            payload["max_articles"] = params["max_articles"]
-    else:
-        payload = {
-            "keyword": _require(params, "keyword"),
-            "country": _require_country_code(DataSource.PYTRENDS, country),
-        }
-        if "timeframe" in params:
-            payload["timeframe"] = params["timeframe"]
-    if "language" in params:
-        payload["language"] = params["language"]
+    # location is the ISO2 country code Google Ads expects; language is the
+    # DataForSEO language_code. Both, plus the term list, are set by
+    # analysis_service from the product's localized_markets[ISO3].
+    payload: dict[str, Any] = {
+        "location": _require(params, "location"),
+        "language": _require(params, "language"),
+    }
+    if indicator_code == "search_volume":
+        payload["keywords"] = _require(params, "keywords")
+    else:  # keywords_for_keywords
+        payload["seed_keywords"] = _require(params, "seed_keywords")
+        if params.get("limit") is not None:
+            payload["limit"] = params["limit"]
     return path, payload
 
 

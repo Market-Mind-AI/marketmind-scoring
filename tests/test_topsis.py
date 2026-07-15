@@ -1,7 +1,7 @@
 import pytest
 
 from app.domain.enums import IndicatorDimension
-from app.services.mos.topsis import topsis_score, trend_score_cap
+from app.services.mos.topsis import topsis_score
 
 _N_DIMENSIONS = len(list(IndicatorDimension))
 
@@ -41,17 +41,3 @@ class TestTopsisScore:
             IndicatorDimension.MACRO_DEMAND_STRUCTURE: 0.1,
         }
         assert topsis_score(scores, demand_heavy_weights) > topsis_score(scores, equal_weights)
-
-
-class TestTrendScoreCap:
-    def test_below_20_caps_at_39(self) -> None:
-        assert trend_score_cap(0.0) == 39.0
-        assert trend_score_cap(19.99) == 39.0
-
-    def test_between_20_and_40_caps_at_59(self) -> None:
-        assert trend_score_cap(20.0) == 59.0
-        assert trend_score_cap(39.99) == 59.0
-
-    def test_40_and_above_has_no_cap(self) -> None:
-        assert trend_score_cap(40.0) is None
-        assert trend_score_cap(100.0) is None
