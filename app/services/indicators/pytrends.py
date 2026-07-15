@@ -104,6 +104,24 @@ async def _fetch_interest_series(
     return [float(row[0]) for row in result.all() if row[0] is not None]
 
 
+async def has_per_country_series(keyword: str, country_code: str, min_observations: int = 6) -> bool:
+    """True when the per-country interest_over_time series for THIS exact term
+    has enough observations to compute the per-country Demand signals (Growth
+    needs n>=6, Cap. 4 §4.2.2). Used by the analysis coverage guard: the
+    winning localized term can shift between runs as worldwide arbitration data
+    accumulates (e.g. Mexico's air-fryer winner moving from the native
+    'freidora de aire' to the English 'air fryer'), and the keyword-AGNOSTIC
+    coverage_index would otherwise treat the OLD term's series as covering the
+    NEW winner — leaving growth/stability UNAVAILABLE and aborting the
+    completeness gate. Checking the actual series for the current winner forces
+    (re)collection so every country carries the series for the term it scored on."""
+    start, end = _six_month_window()
+    engine = get_external_engine(DataSource.PYTRENDS)
+    async with engine.connect() as connection:
+        series = await _fetch_interest_series(connection, keyword, country_code, start, end)
+    return len(series) >= min_observations
+
+
 async def best_localized_term(base_keyword: str, country_code: str, term_language: str | None, fallback: str) -> str:
     """The country's WINNING local search term = the variation with the highest
     worldwide interest_by_country value for that country (2026-07-11). The

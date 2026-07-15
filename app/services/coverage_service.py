@@ -92,7 +92,7 @@ class CoverageService:
         existing = await self._coverage_repo.get(
             gap.source.value, gap.entity_key, gap.country, gap.indicator_code, gap.period_key
         )
-        if self._coverage_repo.is_fresh(existing):
+        if not gap.force and self._coverage_repo.is_fresh(existing):
             task = await self._job_repo.mark_skipped(
                 job_id=job_id,
                 source=gap.source.value,

@@ -27,6 +27,14 @@ class CoverageGap(BaseModel):
     is_closed: bool = False
     ttl_days: int | None = Field(None, description="Overrides settings.default_coverage_ttl_days when set")
     collection_params: dict[str, Any] = Field(default_factory=dict)
+    force: bool = Field(
+        False,
+        description=(
+            "Collect even when the coverage_index row is still fresh. Set by callers that detect "
+            "staleness the keyword-agnostic coverage_index can't see (e.g. the per-country PyTrends "
+            "series exists but for a different/old winning keyword) — see analysis_service."
+        ),
+    )
 
 
 class GapStatus(BaseModel):

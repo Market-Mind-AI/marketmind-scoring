@@ -143,6 +143,8 @@ class AnalysisService:
         (check_or_collect) for the ones actually missing."""
         period_keys = last_n_month_period_keys(_HISTORY_WINDOW_MONTHS)
         gaps: list[CoverageGap] = []
+        keyword: str | None = None
+        country_code: str | None = None
 
         if entity_key is not None:
             entity = await self._product_repo.get_by_entity_key(entity_key)
@@ -157,7 +159,6 @@ class AnalysisService:
             # interest_by_country arbitration — real volume), falling back to
             # the LLM's first guess. Matches what indicator_engine reads. The
             # worldwide collection ran first (above), so the verdict exists.
-            keyword = None
             if entity is not None:
                 keyword = _localized_keyword(entity, country) or entity.canonical_title
                 country_code = (country.pytrends_geo or country.iso2) if country is not None else None
@@ -242,6 +243,30 @@ class AnalysisService:
 
         statuses = await self._coverage_service.check_coverage(unique_gaps)
         missing = [gap for gap, status in zip(unique_gaps, statuses, strict=True) if not status.covered]
+
+        # Keyword-aware per-country PyTrends guard (2026-07-14): coverage_index
+        # freshness is keyword-AGNOSTIC (source/entity/country/indicator/period),
+        # but the winning localized term can shift between runs as worldwide
+        # arbitration data accumulates — Mexico's air-fryer winner moved from the
+        # native "freidora de aire" to the English "air fryer". The stale row
+        # then marks interest_over_time "covered" while it holds only the OLD
+        # term's series, so growth/stability come back UNAVAILABLE and abort the
+        # completeness gate. Force (re)collection of the per-country series
+        # whenever the CURRENT winning keyword has no sufficient series yet, so
+        # EVERY country carries the series for the term it actually scored on.
+        if keyword is not None and country_code is not None and not await pytrends_indicators.has_per_country_series(
+            keyword, country_code
+        ):
+            already_missing = {(g.source.value, g.indicator_code, g.country, g.period_key) for g in missing}
+            for gap in unique_gaps:
+                if gap.source != DataSource.PYTRENDS or gap.entity_key is None:
+                    continue
+                key = (gap.source.value, gap.indicator_code, gap.country, gap.period_key)
+                if key not in already_missing:
+                    # force=True so check_or_collect re-collects despite the
+                    # fresh-but-keyword-stale coverage_index row.
+                    missing.append(gap.model_copy(update={"force": True}))
+
         if missing:
             await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")
 

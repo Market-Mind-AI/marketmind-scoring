@@ -4,6 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from app.domain.enums import DataSource
 from app.schemas.coverage import GapStatus
 from app.schemas.mos import MosResultResponse
 from app.services.analysis_service import AnalysisService
@@ -83,6 +84,16 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     best_term_patcher.start()
     mocks["_patcher_best_term"] = best_term_patcher
 
+    # The keyword-aware guard checks the per-country series exists for the
+    # winning term; default to present so it doesn't force extra collection.
+    series_patcher = patch(
+        "app.services.analysis_service.pytrends_indicators.has_per_country_series",
+        new_callable=AsyncMock,
+        return_value=True,
+    )
+    mocks["has_per_country_series"] = series_patcher.start()
+    mocks["_patcher_has_series"] = series_patcher
+
     coverage_service.check_coverage = AsyncMock(
         side_effect=lambda gaps: [
             GapStatus(
@@ -145,6 +156,30 @@ async def test_run_dispatches_collection_only_for_missing_gaps() -> None:
     mocks["coverage_service"].check_or_collect.assert_awaited()
     dispatched_gaps = mocks["coverage_service"].check_or_collect.call_args.args[0]
     assert len(dispatched_gaps) > 0
+
+
+async def test_forces_per_country_collection_when_winning_term_series_absent() -> None:
+    # Keyword-aware guard (2026-07-14): even when coverage_index says the
+    # per-country PyTrends indicators are fresh (all_covered=True), a shift in
+    # the winning localized term leaves interest_over_time holding only the OLD
+    # term's series. has_per_country_series returns False for the current
+    # winner, so the per-country PyTrends gaps are force-collected anyway.
+    session, mocks = _patched_service(all_covered=True)
+    mocks["has_per_country_series"].return_value = False
+    try:
+        service = AnalysisService(session)
+        with patch("app.services.analysis_service.current_month_period_key", return_value="2026-07"):
+            await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    mocks["coverage_service"].check_or_collect.assert_awaited()
+    dispatched = mocks["coverage_service"].check_or_collect.call_args.args[0]
+    pytrends_gaps = [g for g in dispatched if g.source == DataSource.PYTRENDS and g.entity_key is not None]
+    assert len(pytrends_gaps) == 3  # interest_over_time, interest_by_region, related_queries
+    assert all(g.force for g in pytrends_gaps)  # forced past the fresh coverage row
 
 
 async def test_worldwide_demand_gap_sends_all_variations_per_language() -> None:

@@ -149,6 +149,22 @@ async def test_regional_demand_score_unavailable_when_no_regions() -> None:
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
 
 
+async def test_has_per_country_series_true_when_enough_observations() -> None:
+    # >= 6 non-partial observations for the exact (keyword, country) -> present.
+    series = [(float(v),) for v in range(8)]
+    engine = make_mock_engine([result_with_all(series)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        assert await pytrends_indicators.has_per_country_series("air fryer", "MX") is True
+
+
+async def test_has_per_country_series_false_when_series_absent_for_that_term() -> None:
+    # The winning term shifted (e.g. MX 'freidora de aire' -> 'air fryer') and
+    # the new term has no per-country series yet -> guard forces (re)collection.
+    engine = make_mock_engine([result_with_all([])])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        assert await pytrends_indicators.has_per_country_series("air fryer", "MX") is False
+
+
 def test_classify_query_intent_tiers() -> None:
     # Deterministic unit test with a controlled lexicon (no dependency on the
     # generated one): each tier returns its weight; unmatched -> default.
