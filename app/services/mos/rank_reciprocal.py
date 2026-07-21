@@ -27,31 +27,35 @@ from app.domain.enums import IndicatorDimension
 
 # Explicit priority order, most to least important for judging a specific
 # product's market potential in a country (user decisions 2026-07-03,
-# 2026-07-08, and 2026-07-10):
-# 1. Demand — the most direct, product-specific signal (how much this exact
-#    product is actually wanted here); everything else is a proxy. Now
-#    cross-country comparable via the worldwide Google Trends signal (see
-#    pytrends.py compute_trend_score / interest_by_country).
-# 2. Macro Demand Structure — the country's aggregate demand composition
-#    (GDP = C+I+G+NX); ranked right after Demand because Consumer Spending
-#    is the closest macro proxy to "people actually spending money here".
-# 3. Digital Readiness — can the audience discover/buy the product online;
-#    product-relevant and moved up over the generic "big rich country"
-#    signals below.
-# 4. Economic Readiness — purchasing power + macro stability. Moved DOWN
-#    (2026-07-10, user decision): it's dominated by GDP per capita, which
-#    systematically rewarded large wealthy countries regardless of product
-#    fit (e.g. it was a main reason the USA outranked Spain for jamón).
-#    Reducing its rank cuts that generic-wealth bias without hand-picking
-#    weights (the RR formula does it from the order alone).
-# 5. Demographic Sustainability — long-term population trend, loosely tied
+# 2026-07-08, 2026-07-10, and 2026-07-16):
+# 1. Demand VOLUME — the absolute size of real, product-specific demand (how
+#    many people actually search to buy this product here). This is the most
+#    direct sales-potential signal and, per the 2026-07-16 redesign, the top
+#    priority: a market with far more interested buyers must outrank one with
+#    better macro conditions but little demand. Linear-normalized (proportional
+#    to volume), so the ranking tracks real sales headroom (see pytrends.py
+#    compute_trend_score).
+# 2. Demand QUALITY — is that demand growing, stable, and purchase-oriented
+#    (vs merely curious)? Size-independent shape signals; ranked right after
+#    volume so a small-but-excellent market is still strongly rewarded here
+#    without letting its quality erase a large market's volume advantage.
+# 3. Macro Demand Structure — the country's aggregate demand composition
+#    (GDP = C+I+G+NX); Consumer Spending is the closest macro proxy to
+#    "people actually spending money here".
+# 4. Digital Readiness — can the audience discover/buy the product online.
+# 5. Economic Readiness — purchasing power + macro stability. Kept below the
+#    demand/structure signals (2026-07-10): it's dominated by GDP per capita,
+#    which systematically rewarded large wealthy countries regardless of
+#    product fit (a main reason the USA outranked Spain for jamón).
+# 6. Demographic Sustainability — long-term population trend, loosely tied
 #    to "will this sell now".
-# 6. Market Size — raw population/urbanization scale, the most "generic big
-#    country" signal (a large population isn't product fit). Moved to LAST
-#    (2026-07-10, user decision) for the same generic-size-bias reason as
-#    Economic Readiness above.
+# 7. Market Size — raw population/urbanization scale, the most "generic big
+#    country" signal. LAST because a large population isn't product fit, and
+#    product-specific size is already captured, far better, by Demand Volume
+#    above (raw population would double-count size with non-interested people).
 PRIORITY_ORDER: list[IndicatorDimension] = [
-    IndicatorDimension.DEMAND,
+    IndicatorDimension.DEMAND_VOLUME,
+    IndicatorDimension.DEMAND_QUALITY,
     IndicatorDimension.MACRO_DEMAND_STRUCTURE,
     IndicatorDimension.DIGITAL_READINESS,
     IndicatorDimension.ECONOMIC_READINESS,

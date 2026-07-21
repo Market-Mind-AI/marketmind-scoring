@@ -92,15 +92,19 @@ class TestCheckAvailability:
 
 class TestComputeDimensionSubscores:
     def test_averages_scores_within_a_dimension(self) -> None:
-        # Demand averages its signals like any other dimension — every Demand
-        # signal is mandatory and present for every country (completeness gate),
-        # so the set is uniform and the plain mean stays comparable.
+        # Demand is split (2026-07-16): VOLUME = trend_score alone (absolute
+        # market size), QUALITY = mean of growth/stability/intent (size-
+        # independent shape signals). Other dimensions still average their
+        # indicators.
         values = {
             "trend_score": _iv("trend_score", 80.0),
             "growth_score": _iv("growth_score", 60.0),
+            "demand_stability_score": _iv("demand_stability_score", 90.0),
+            "search_intent_score": _iv("search_intent_score", 30.0),
         }
         subscores = compute_dimension_subscores(values)
-        assert subscores[IndicatorDimension.DEMAND] == 70.0
+        assert subscores[IndicatorDimension.DEMAND_VOLUME] == 80.0
+        assert subscores[IndicatorDimension.DEMAND_QUALITY] == 60.0  # (60+90+30)/3
 
     def test_median_age_fit_contributes_only_when_present(self) -> None:
         without_maf = compute_dimension_subscores({"population_growth_score": _iv("population_growth_score", 50.0)})
@@ -161,7 +165,8 @@ class TestRegionalDemandIsContextOnly:
             "regional_demand_score": _iv("regional_demand_score", 0.0),
         }
         subscores = compute_dimension_subscores(values)
-        assert subscores[IndicatorDimension.DEMAND] == 80.0
+        assert subscores[IndicatorDimension.DEMAND_VOLUME] == 80.0
+        assert IndicatorDimension.MARKET_SIZE not in subscores  # regional leaked nowhere
 
 
 class TestGovernmentExpenditureIsContextOnly:

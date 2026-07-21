@@ -127,7 +127,13 @@ class NormalizationMethod(StrEnum):
 class IndicatorDimension(StrEnum):
     """Agrupamento hierárquico usado na agregação em 2 estágios do MOS (Cap. 5, ver marketmind_mos_engine)."""
 
-    DEMAND = "demand"
+    # Demanda dividida em duas dimensões (2026-07-16): VOLUME (tamanho absoluto
+    # de mercado / potencial de vendas, nível de busca linear) e QUALITY
+    # (crescimento/estabilidade/intenção — sinais de forma, independentes de
+    # tamanho). Separadas porque a média das duas afogava o volume: um mercado
+    # pequeno de alta qualidade empatava um mercado enorme. Ver marketmind_mos_engine.
+    DEMAND_VOLUME = "demand_volume"
+    DEMAND_QUALITY = "demand_quality"
     DIGITAL_READINESS = "digital_readiness"
     ECONOMIC_READINESS = "economic_readiness"
     MARKET_SIZE = "market_size"

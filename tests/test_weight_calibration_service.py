@@ -33,7 +33,7 @@ async def test_calibrate_never_overwrites_a_closed_period(db_session: AsyncSessi
     period_key = _unique_period_key()
     mos_repo = MosRepository(db_session)
     await mos_repo.upsert_weight(
-        indicator_code=IndicatorDimension.DEMAND.value, dimension=IndicatorDimension.DEMAND.value,
+        indicator_code=IndicatorDimension.DEMAND_VOLUME.value, dimension=IndicatorDimension.DEMAND_VOLUME.value,
         period_key=period_key, weight=0.99, is_closed=True,
     )  # fmt: skip
     await db_session.commit()
@@ -41,7 +41,7 @@ async def test_calibrate_never_overwrites_a_closed_period(db_session: AsyncSessi
     service = WeightCalibrationService(db_session)
     await service.calibrate(period_key=period_key)
 
-    row = await mos_repo.get_weight(IndicatorDimension.DEMAND.value, period_key)
+    row = await mos_repo.get_weight(IndicatorDimension.DEMAND_VOLUME.value, period_key)
     assert row is not None
     assert float(row.weight) == 0.99
     assert row.is_closed is True

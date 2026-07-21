@@ -142,6 +142,15 @@ async def compute_population_scale(country_iso2: str) -> RawIndicatorResult:
     )
 
 
+async def population(country_iso2: str) -> float | None:
+    """Latest absolute population count (World Bank SP.POP.TOTL). Context only —
+    used to compute demand PENETRATION (searches per 100k inhabitants) for the
+    LLM narrative, so it can tell 'big because populous' from 'big because a high
+    share of people want it'. Not a scored indicator. None when unavailable."""
+    value = await _latest_value(country_iso2, _POPULATION)
+    return value if value and value > 0 else None
+
+
 async def compute_urbanization(country_iso2: str) -> RawIndicatorResult:
     """Cap. 4 §4.3.6 — UrbanizationRaw = urb_latest, truncated to [0,100]."""
     value = await _latest_value(country_iso2, _URBANIZATION)

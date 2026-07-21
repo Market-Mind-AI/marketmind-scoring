@@ -12,18 +12,19 @@ term and no normalization tricks. See marketmind_mos_engine.
 
 The four Demand signals, all per country, from the country's approved terms
 (product_catalog.localized_markets[ISO3]):
-  - LEVEL (trend_score): SUM of the absolute monthly search volume of the
-    country's `search_terms` (deduped), divided by the country's internet users
-    -> demand INTENSITY per online buyer (raw is searches per 1,000 internet
-    users; market SIZE is a separate dimension, so we don't double-count it).
+  - VOLUME (trend_score): SUM of the absolute monthly search volume of the
+    country's `search_terms` (deduped) = market potential / sales headroom.
+    Raw = the absolute count, normalized LINEARLY (proportional to volume,
+    2026-07-16 redesign — replaced the earlier ln transform). Drives the
+    top-ranked Demand Volume dimension.
   - GROWTH: trend of the SUMMED monthly_searches series (trailing 12 months).
   - DEMAND STABILITY: CV of that same summed monthly series.
   - SEARCH INTENT: related keywords (`keyword_related`) classified buy-vs-
     curiosity, weighted by their real volume.
+Growth/Stability/Intent form the Demand Quality dimension (size-independent).
 """
 
 import json
-import math
 from typing import Any
 
 from sqlalchemy import text
@@ -114,13 +115,17 @@ def _summed_monthly_series(rows: list[tuple[float, list[tuple[int, int, float]]]
 
 
 async def compute_trend_score(search_terms: list[str], location: str, period_key: str) -> RawIndicatorResult:
-    """Cap. 4 §4.2.1 — cross-country demand LEVEL = SUM of the absolute monthly
-    search volume of the country's approved terms (deduped): the total real
-    online search demand for the product in that country (user decision
-    2026-07-15). The raw value is ln(total) so the 0-100 normalization is
-    LOGARITHMIC (same transform as population_scale): a big market scores clearly
-    higher (more real sales potential) WITHOUT crushing a small-but-strong market
-    to zero — the concrete total is kept in the notes as decision context."""
+    """Cap. 4 §4.2.1 — DEMAND VOLUME (market potential): SUM of the absolute
+    monthly search volume of the country's approved terms (deduped). The raw
+    value IS that absolute count, normalized LINEARLY against a fixed ceiling
+    (2026-07-16 redesign): sales potential scales linearly with the number of
+    interested buyers (each searcher ~ a potential sale, no diminishing
+    returns), so the score is proportional to volume — a market with 2x the
+    searches scores ~2x. This drives the top-ranked Demand Volume dimension, so
+    a much bigger market outranks one with better macro but little demand. The
+    concrete absolute total is the raw_value (and in notes) for the LLM's
+    sales-potential narrative; penetration vs population is added by the
+    indicator engine as decision context."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         rows = await _fetch_volume_rows(connection, search_terms, location)
@@ -136,11 +141,11 @@ async def compute_trend_score(search_terms: list[str], location: str, period_key
 
     total_volume = sum(volume for volume, _monthly in rows)
     return RawIndicatorResult(
-        raw_value=math.log(max(total_volume, 1.0)),  # ln bounds; max(.,1) so 0 demand -> ln(1)=0 (floor), not undefined
+        raw_value=total_volume,
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"SUM {total_volume:.0f} monthly searches over {len(rows)} distinct term(s), ln-norm (Cap. 4 §4.2.1)",
+        notes=f"{total_volume:.0f} total monthly searches over {len(rows)} distinct term(s) (Cap. 4 §4.2.1)",
     )
 
 

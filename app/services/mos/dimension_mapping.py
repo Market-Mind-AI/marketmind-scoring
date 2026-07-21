@@ -7,10 +7,16 @@ from app.db.models.indicator_value import IndicatorValue
 from app.domain.enums import AvailabilityStatus, IndicatorCode, IndicatorDimension
 
 DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
-    IndicatorCode.TREND_SCORE: IndicatorDimension.DEMAND,
-    IndicatorCode.GROWTH_SCORE: IndicatorDimension.DEMAND,
-    IndicatorCode.DEMAND_STABILITY_SCORE: IndicatorDimension.DEMAND,
-    IndicatorCode.SEARCH_INTENT_SCORE: IndicatorDimension.DEMAND,
+    # DEMAND split into VOLUME (absolute market size / sales potential) and
+    # QUALITY (shape signals) — 2026-07-16. trend_score is the absolute
+    # search-volume LEVEL (linear-normalized), the sole VOLUME signal; the
+    # other three are size-independent quality ratios. Averaging them together
+    # let a tiny high-quality market tie a huge one; separating makes volume a
+    # dimension of its own so it isn't diluted. See marketmind_mos_engine.
+    IndicatorCode.TREND_SCORE: IndicatorDimension.DEMAND_VOLUME,
+    IndicatorCode.GROWTH_SCORE: IndicatorDimension.DEMAND_QUALITY,
+    IndicatorCode.DEMAND_STABILITY_SCORE: IndicatorDimension.DEMAND_QUALITY,
+    IndicatorCode.SEARCH_INTENT_SCORE: IndicatorDimension.DEMAND_QUALITY,
     # REGIONAL_DEMAND_SCORE is deliberately NOT scored into Demand (2026-07-14):
     # it's the per-country `interest_by_region` mean, self-scaled to each
     # country's OWN top region, so it is NOT cross-country comparable (a

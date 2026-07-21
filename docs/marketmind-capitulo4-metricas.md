@@ -46,20 +46,26 @@ Notación: `X` = conjunto de valores del mismo indicador para todos los mercados
 >
 > **Por quê:** o Google Trends é estruturalmente **relativo** (normaliza por consulta/região; nunca dá um nível comparável entre países sem um "termo mundial" frágil). Depois de várias tentativas (composição multi-termo que somava 100 por país, worldwide term, anchor-chaining), concluiu-se que a **regra de ranking não pode ser construída sobre o Trends**. A demanda passou a vir do **volume ABSOLUTO de busca do Google Ads (via DataForSEO Keywords Data)** — contagens reais de buscas mensais, comparáveis diretamente entre países, cada um nos SEUS termos. O serviço `marketmind-pytrends` foi repaginado para coletor Google Ads (endpoints `/search-volume` e `/keywords-for-keywords`; tabelas `keyword_search_volume` e `keyword_related`); todo o stack de Trends foi desligado.
 >
-> **Os 4 sinais de Demanda (todos por país, dos termos aprovados em `product_catalog.localized_markets[ISO3]`):**
-> - **Nível (`trend_score`)** = **SOMA do volume absoluto mensal** dos `search_terms` do país (deduplicado por volume idêntico, pois o Google Ads funde variantes quase-idênticas). Normalização **logarítmica** (`raw = ln(soma)`, min-max fixo em ln-space como `population_scale`): o mercado grande pontua claramente mais **sem esmagar** o pequeno-forte a zero. O número absoluto concreto fica nas `notes` como contexto de decisão. **(Ponto em aberto — ver abaixo.)**
+> **Os 4 sinais de Demanda (todos por país, dos termos aprovados em `product_catalog.localized_markets[ISO3]`), agrupados em DUAS dimensões (split 2026-07-16):**
+>
+> _Dimensão **DEMAND_VOLUME** (tamanho de mercado / potencial de vendas):_
+> - **Nível (`trend_score`)** = **SOMA do volume absoluto mensal** dos `search_terms` do país (deduplicado por volume idêntico, pois o Google Ads funde variantes quase-idênticas). Normalização **LINEAR** (`raw = soma`, min-max contra teto fixo `[0, 2.000.000]`): o score é **proporcional ao volume** (2× buscas ≈ 2× score) — potencial de venda escala linearmente com o nº de interessados (cada buscador ≈ uma venda potencial, sem retorno decrescente). **Substituiu o `ln` (2026-07-16)**, que comprimia demais (8× de volume virava 1,4× de score). Teto **não** auto-alarga (mercado ≥2M satura em 100), para um produto gigante não encolher retroativamente todos os outros. O número absoluto + população + **penetração** (buscas por 100k habitantes) ficam nas `notes` como contexto de decisão da LLM.
+>
+> _Dimensão **DEMAND_QUALITY** (qualidade da demanda, independente de tamanho):_
 > - **Crescimento (`growth_score`)** = tendência da série `monthly_searches` (12 meses) SOMADA dos termos; guarda de base-baixa (<10 buscas → 0% plano).
 > - **Estabilidade (`demand_stability_score`)** = CV da mesma série somada; guarda de baixo-volume (<10 → neutro 0.5).
 > - **Intenção (`search_intent_score`)** = keywords relacionadas (`keyword_related`, endpoint keywords-for-keywords) classificadas compra×curiosidade pelo léxico, **ponderadas por volume real** (era `related_queries` relativo do Trends).
+>
+> **Por que separar (2026-07-16):** os 3 sinais de qualidade são **independentes de tamanho** (razões/composição). Numa média única com o nível, um mercado pequeno de alta qualidade (ex.: air fryer no Japão, crescimento explosivo) **empatava** um mercado enorme (Brasil) — a média afogava o volume. Separando, VOLUME vira dimensão própria (não diluída) e QUALITY continua premiando o pequeno-bom, mas sem apagar a vantagem de volume do grande. Ver Cap. 5 §5.5.
 > - **Regional Demand: REMOVIDO** (era `interest_by_region`, auto-escalado por país, não comparável; irrelevante pro negócio — decisão do usuário 2026-07-14).
 >
 > **Termos curados pela IA + usuário:** o `/identify-image` recebe **imagem + países** e o LLM (Opus 4.8) devolve, por país, uma lista **generosa** de termos reais de busca (`primary_name`, `search_terms[]`, `excluded_terms[]` para desambiguar, `confidence`), revisável pelo usuário e persistida em `localized_markets`. Isso substitui `localized_terms` `{idioma:[nomes]}` (migração core 013). O coletor busca só as palavras aprovadas.
 >
 > **Cap não-compensatório: REMOVIDO** (decisão do usuário 2026-07-15) — o MOS é o TOPSIS direto; a Demanda é uma dimensão ponderada, não trava mais o score. Ver Cap. 5.
 >
-> **Per-capita: descartado** — o nível é a soma absoluta (não dividida por usuários de internet); tamanho de mercado real importa.
+> **Per-capita: descartado** — o nível é a soma absoluta (não dividida por usuários de internet); tamanho de mercado real importa. A **penetração** (buscas por 100k habitantes) é calculada, mas só como **contexto** para a narrativa da LLM (distinguir "vende porque tem gente" de "vende porque grande % quer comprar"), nunca no score.
 >
-> **⚠️ PONTO EM ABERTO (para revisão — próximo contexto):** validação ao vivo (air fryer, 6 países) mostrou o Brasil com a MAIOR demanda absoluta (1,5M buscas/mês, 2× os EUA) mas caindo pra 5º no MOS, enquanto o Japão (177k, o menor) lidera — porque o macro (economia/PIB) domina o MOS e a Demanda é só 1 de 6 dimensões (Rank Reciprocal). Falta calibrar (a) a normalização do nível (log atual vs linear proporcional ao volume) e (b) o **peso da Demanda no MOS**, para que "onde há mais gente querendo comprar" pese o suficiente. Ver `marketmind_mos_engine` / `marketmind_known_gaps`.
+> **✅ PONTO RESOLVIDO (2026-07-16):** o problema do Brasil (maior demanda, mas 5º no MOS) foi corrigido com **duas mudanças fundamentadas**: (a) normalização do nível trocada de `ln` para **LINEAR** (proporcional ao volume — potencial de venda escala linearmente com nº de interessados); (b) **split da Demanda em VOLUME + QUALITY** e VOLUME promovido a dimensão de topo no Rank Reciprocal (ver Cap. 5). Diagnóstico: nem linearizar sozinho nem repesar sozinho bastava — a causa raiz era o volume ser **diluído na média** com os sinais de qualidade (independentes de tamanho); só separar resolve. Efeito validado (air fryer): Brasil sobe de 5º para **1º**. Ver `marketmind_mos_engine`.
 
 ---
 

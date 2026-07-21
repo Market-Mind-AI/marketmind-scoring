@@ -24,11 +24,10 @@ from app.domain.enums import IndicatorCode, IndicatorDirection, NormalizationMet
 
 FIXED_BOUNDS_PERIOD_KEY = "FIXED"
 
-# TREND_SCORE is no longer here (2026-07-15): it used to be the 0-100 Google
-# Trends value (passthrough). It is now the per-capita Google Ads search-volume
-# LEVEL (searches per 1,000 internet users), an unbounded rate — so it
-# normalizes against self-widening fixed bounds like the other absolute metrics.
-# REGIONAL_DEMAND_SCORE is gone entirely (Google Trends removed).
+# TREND_SCORE (the Demand VOLUME level) is NOT passthrough: it is the absolute
+# Google Ads monthly search volume, normalized LINEARLY against a fixed ceiling
+# (2026-07-16 redesign) so the score is proportional to volume. See
+# _NO_SELF_WIDEN below — its ceiling is deliberately fixed (never self-widens).
 _PASSTHROUGH_INDICATORS = frozenset(
     {
         IndicatorCode.SEARCH_INTENT_SCORE,
@@ -73,6 +72,25 @@ _CONTEXT_ONLY_INDICATORS = frozenset(
         IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE,
     }
 )
+
+
+# Indicators whose fixed bound must NOT self-widen. TREND_SCORE (Demand Volume)
+# uses a fixed ceiling representing "maximal addressable national demand": a
+# market at/above it saturates at 100, everything else scales proportionally
+# below. Self-widening would break this — a single mega-volume product would
+# push the global ceiling up and RETROACTIVELY shrink every other product's
+# volume score, making the demand dimension unstable across analyses. So the
+# ceiling stays fixed and values above it saturate (2026-07-16). Linearity is
+# the founded property; the ceiling is a documented scale anchor (migration 014).
+_NO_SELF_WIDEN: frozenset[IndicatorCode] = frozenset({IndicatorCode.TREND_SCORE})
+
+
+def self_widens(indicator_code: IndicatorCode) -> bool:
+    """Whether a MINMAX_FIXED indicator's bound self-widens on out-of-range
+    observations. False for fixed-ceiling indicators (see _NO_SELF_WIDEN)."""
+    return normalization_method(indicator_code) == NormalizationMethod.MINMAX_FIXED and (
+        indicator_code not in _NO_SELF_WIDEN
+    )
 
 
 def normalization_method(indicator_code: IndicatorCode) -> NormalizationMethod:

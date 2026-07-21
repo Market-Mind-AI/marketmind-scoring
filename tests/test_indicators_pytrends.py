@@ -6,7 +6,6 @@ monthly series; SEARCH INTENT from volume-weighted related-keyword classificatio
 """
 
 import json
-import math
 from typing import Any
 from unittest.mock import patch
 
@@ -34,10 +33,10 @@ def _months(volumes: list[float], *, year: int = 2025, start_month: int = 1) -> 
 # --- LEVEL (compute_trend_score) -------------------------------------------
 
 
-async def test_trend_score_sums_volume_and_ln_normalizes() -> None:
-    # LEVEL = ln(SUM of the country's distinct terms' search_volume). Two
-    # genuinely distinct terms (different numbers) are both kept and summed:
-    # 1000 + 500 = 1500 -> ln(1500).
+async def test_trend_score_sums_volume_linear() -> None:
+    # DEMAND VOLUME = SUM of the country's distinct terms' search_volume (raw is
+    # the absolute count, normalized linearly downstream). Two genuinely distinct
+    # terms are both kept and summed: 1000 + 500 = 1500.
     rows = [
         ("air fryer", 1000.0, _months([100.0] * 12)),
         ("freidora de aire", 500.0, _months([50.0] * 12)),
@@ -48,7 +47,7 @@ async def test_trend_score_sums_volume_and_ln_normalizes() -> None:
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
     assert result.direction == IndicatorDirection.DIRECT
-    assert result.raw_value == pytest.approx(math.log(1500.0))
+    assert result.raw_value == pytest.approx(1500.0)
 
 
 async def test_trend_score_dedups_identical_rows() -> None:
@@ -65,8 +64,8 @@ async def test_trend_score_dedups_identical_rows() -> None:
         result = await pytrends_indicators.compute_trend_score(["air fryer", "airfryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
-    # Only 1000 counted once: ln(1000), not ln(2000).
-    assert result.raw_value == pytest.approx(math.log(1000.0))
+    # Only 1000 counted once: 1000, not 2000.
+    assert result.raw_value == pytest.approx(1000.0)
 
 
 async def test_trend_score_accepts_json_string_monthly_searches() -> None:
@@ -77,7 +76,7 @@ async def test_trend_score_accepts_json_string_monthly_searches() -> None:
         result = await pytrends_indicators.compute_trend_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
-    assert result.raw_value == pytest.approx(math.log(200.0))
+    assert result.raw_value == pytest.approx(200.0)
 
 
 async def test_trend_score_unavailable_when_no_rows() -> None:

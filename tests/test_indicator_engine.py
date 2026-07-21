@@ -82,6 +82,10 @@ def _patched_pytrends(**overrides: RawIndicatorResult | list[RawIndicatorResult]
             else:
                 stack.enter_context(patch(target, return_value=value))
         stack.enter_context(patch(f"{_ENGINE}.undata_indicators.compute_median_age_fit", return_value=_UNAVAILABLE))
+        # trend_score enrichment fetches population to compute penetration
+        # context (searches per 100k inhabitants) — patch it so it never hits
+        # the external World Bank DB.
+        stack.enter_context(patch(f"{_ENGINE}.worldbank_indicators.population", return_value=1_000_000.0))
         yield
 
 

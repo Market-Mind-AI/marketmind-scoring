@@ -37,9 +37,12 @@ class CountryVectorBuilder:
         )
         return compute_dimension_subscores(values)
 
-    async def demand_value(self, country_iso3: str, period_key: str) -> float | None:
-        """Average Demand sub-score across every product already computed
-        for this country/period. None if no product has data there yet."""
+    _DEMAND_DIMENSIONS = (IndicatorDimension.DEMAND_VOLUME, IndicatorDimension.DEMAND_QUALITY)
+
+    async def demand_dims(self, country_iso3: str, period_key: str) -> dict[IndicatorDimension, float]:
+        """Average of each Demand dimension (VOLUME and QUALITY) across every
+        product already computed for this country/period. Empty dict if no
+        product has data there yet. (2026-07-16: Demand is two dimensions now.)"""
         stmt = select(IndicatorValue).where(
             IndicatorValue.entity_key.is_not(None),
             IndicatorValue.country == country_iso3,
@@ -52,22 +55,18 @@ class CountryVectorBuilder:
             assert iv.entity_key is not None  # guaranteed by the entity_key.is_not(None) filter above
             by_entity[iv.entity_key][iv.indicator_code] = iv
 
-        demand_scores = []
+        collected: dict[IndicatorDimension, list[float]] = {d: [] for d in self._DEMAND_DIMENSIONS}
         for entity_values in by_entity.values():
             subscores = compute_dimension_subscores(entity_values)
-            if IndicatorDimension.DEMAND in subscores:
-                demand_scores.append(subscores[IndicatorDimension.DEMAND])
-
-        if not demand_scores:
-            return None
-        return sum(demand_scores) / len(demand_scores)
+            for dimension in self._DEMAND_DIMENSIONS:
+                if dimension in subscores:
+                    collected[dimension].append(subscores[dimension])
+        return {d: sum(vs) / len(vs) for d, vs in collected.items() if vs}
 
     async def full_vector(self, country_iso3: str, period_key: str) -> dict[IndicatorDimension, float]:
-        """All 5 dimensions for one country — may be a partial dict if some
+        """All 7 dimensions for one country — may be a partial dict if some
         dimensions have insufficient data (caller decides how to handle
         missing keys, e.g. requiring a complete row before using it)."""
         vector = await self.macro_vector(country_iso3, period_key)
-        demand = await self.demand_value(country_iso3, period_key)
-        if demand is not None:
-            vector[IndicatorDimension.DEMAND] = demand
+        vector.update(await self.demand_dims(country_iso3, period_key))
         return vector

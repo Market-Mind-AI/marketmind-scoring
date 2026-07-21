@@ -18,7 +18,16 @@ instead of leaving narration entirely to prompt-time LLM judgment.
 from app.domain.enums import IndicatorCode, IndicatorDimension
 
 INDICATOR_MEANING: dict[IndicatorCode, str] = {
-    IndicatorCode.TREND_SCORE: "Is there observable search demand for this product right now?",
+    IndicatorCode.TREND_SCORE: (
+        "DEMAND VOLUME — the total absolute monthly online searches to buy this product in this country "
+        "(the raw_value is that real count). This is market POTENTIAL / sales headroom and is normalized "
+        "proportionally: 2x the searches ~ 2x the score. A high score means many people actually want this "
+        "product here. IMPORTANT for the narrative: a large volume can come from (a) sheer population or "
+        "(b) genuine appetite (a high share of the population wanting it) — read this together with the "
+        "'penetration' figure in notes (searches per 100k inhabitants) to tell them apart. High volume AND "
+        "high penetration = big AND enthusiastic market; high volume but low penetration = big only because "
+        "populous; low volume but high penetration = small but strong appetite (real potential per person)."
+    ),
     IndicatorCode.GROWTH_SCORE: "Is demand for this product growing or declining?",
     IndicatorCode.DEMAND_STABILITY_SCORE: "How stable (vs. volatile) is demand over time?",
     IndicatorCode.REGIONAL_DEMAND_SCORE: "Is interest spread across the country or concentrated in a few regions?",
@@ -58,8 +67,18 @@ INDICATOR_MEANING: dict[IndicatorCode, str] = {
 }
 
 DIMENSION_MEANING: dict[IndicatorDimension, str] = {
-    IndicatorDimension.DEMAND: (
-        "Direct, product-specific evidence that people are searching for and want to buy this product."
+    IndicatorDimension.DEMAND_VOLUME: (
+        "How MANY people actually want to buy this product here — the absolute size of real online "
+        "purchase demand (total monthly searches). This is the sales-potential/market-size signal and the "
+        "highest-priority dimension: a market with far more interested buyers should rank above one with "
+        "better economic conditions but little demand. Cross-reference the per-country absolute numbers and "
+        "penetration (searches per 100k inhabitants) to explain WHETHER the volume comes from population size "
+        "or from genuine appetite."
+    ),
+    IndicatorDimension.DEMAND_QUALITY: (
+        "How GOOD that demand is, independent of market size — is it growing, stable over time, and "
+        "purchase-oriented (people searching to buy) rather than merely curious? A small market can score "
+        "very high here: strong quality flags real potential even when the absolute volume is modest."
     ),
     IndicatorDimension.MACRO_DEMAND_STRUCTURE: (
         "The country's aggregate demand composition (GDP = Consumption + Investment + Government "

@@ -36,7 +36,12 @@ from app.services.indicators import oecd as oecd_indicators
 from app.services.indicators import pytrends as pytrends_indicators
 from app.services.indicators import undata as undata_indicators
 from app.services.indicators import worldbank as worldbank_indicators
-from app.services.indicators.normalization import FIXED_BOUNDS_PERIOD_KEY, normalization_method, normalize
+from app.services.indicators.normalization import (
+    FIXED_BOUNDS_PERIOD_KEY,
+    normalization_method,
+    normalize,
+    self_widens,
+)
 from app.services.indicators.results import RawIndicatorResult
 from app.services.mos.interpretation import INDICATOR_MEANING, score_band
 from app.utils.period import current_month_period_key
@@ -163,6 +168,21 @@ class IndicatorEngine:
         seed_terms = search_terms[:20]  # keywords_for_keywords accepts up to 20 seeds
 
         trend = await pytrends_indicators.compute_trend_score(search_terms, location, period_key)
+        # Decision context for the LLM narrative (not scored): pair the absolute
+        # demand VOLUME with population so it can say WHETHER the volume comes
+        # from sheer population or from genuine appetite. Penetration = searches
+        # per 100k inhabitants — high volume + high penetration = big AND
+        # enthusiastic; high volume + low penetration = big only because
+        # populous; low volume + high penetration = small but strong appetite.
+        if trend.availability_status == AvailabilityStatus.AVAILABLE and trend.raw_value is not None:
+            pop = await worldbank_indicators.population(country.iso2) if country.iso2 else None
+            if pop:
+                penetration = float(trend.raw_value) / pop * 100_000
+                trend = RawIndicatorResult(
+                    trend.raw_value, trend.direction, trend.calculation_window, trend.availability_status,
+                    f"{trend.notes}; population {pop:,.0f}; penetration {penetration:.1f} searches per 100k "
+                    "inhabitants (share of people wanting it — high = genuine appetite, not just population size)",
+                )  # fmt: skip
         growth = await pytrends_indicators.compute_growth_score(search_terms, location, period_key)
         stability = await pytrends_indicators.compute_demand_stability_score(search_terms, location, period_key)
         intent = await pytrends_indicators.compute_search_intent_score(seed_terms, location, period_key, language)
@@ -214,14 +234,21 @@ class IndicatorEngine:
             method = normalization_method(indicator_code)
             reference = None
             if method == NormalizationMethod.MINMAX_FIXED:
-                # Self-widening (never narrows) — see
-                # indicator_repository.py::widen_reference_bounds. Never
-                # compares this country against any other country in the
-                # same request, only against its own indicator's fixed,
-                # absolute yardstick.
-                reference = await self._indicator_repo.widen_reference_bounds(
-                    indicator_code.value, FIXED_BOUNDS_PERIOD_KEY, float(raw.raw_value)
-                )
+                if self_widens(indicator_code):
+                    # Self-widening (never narrows) — see
+                    # indicator_repository.py::widen_reference_bounds. Never
+                    # compares this country against any other country in the
+                    # same request, only against its own indicator's fixed,
+                    # absolute yardstick.
+                    reference = await self._indicator_repo.widen_reference_bounds(
+                        indicator_code.value, FIXED_BOUNDS_PERIOD_KEY, float(raw.raw_value)
+                    )
+                else:
+                    # Fixed ceiling (Demand Volume): never widens, values above
+                    # saturate at 100 (see normalization._NO_SELF_WIDEN).
+                    reference = await self._indicator_repo.get_reference(
+                        indicator_code.value, FIXED_BOUNDS_PERIOD_KEY
+                    )
 
             normalized_score, normalize_note = normalize(
                 indicator_code=indicator_code, raw_value=raw.raw_value, direction=raw.direction, reference=reference

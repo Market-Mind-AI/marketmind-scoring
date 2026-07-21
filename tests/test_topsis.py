@@ -24,7 +24,8 @@ class TestTopsisScore:
 
     def test_higher_weight_on_strong_dimension_increases_score(self) -> None:
         scores = {
-            IndicatorDimension.DEMAND: 100.0,
+            IndicatorDimension.DEMAND_VOLUME: 100.0,  # the strong dimension
+            IndicatorDimension.DEMAND_QUALITY: 50.0,
             IndicatorDimension.DIGITAL_READINESS: 0.0,
             IndicatorDimension.ECONOMIC_READINESS: 50.0,
             IndicatorDimension.MARKET_SIZE: 50.0,
@@ -32,12 +33,7 @@ class TestTopsisScore:
             IndicatorDimension.MACRO_DEMAND_STRUCTURE: 50.0,
         }
         equal_weights = dict.fromkeys(IndicatorDimension, 1 / _N_DIMENSIONS)
-        demand_heavy_weights = {
-            IndicatorDimension.DEMAND: 0.5,
-            IndicatorDimension.DIGITAL_READINESS: 0.1,
-            IndicatorDimension.ECONOMIC_READINESS: 0.1,
-            IndicatorDimension.MARKET_SIZE: 0.1,
-            IndicatorDimension.DEMOGRAPHIC_SUSTAINABILITY: 0.1,
-            IndicatorDimension.MACRO_DEMAND_STRUCTURE: 0.1,
-        }
+        # Demand Volume heavy (0.4), the other 6 dimensions 0.1 each -> sum 1.0.
+        demand_heavy_weights = dict.fromkeys(IndicatorDimension, 0.1)
+        demand_heavy_weights[IndicatorDimension.DEMAND_VOLUME] = 0.4
         assert topsis_score(scores, demand_heavy_weights) > topsis_score(scores, equal_weights)
