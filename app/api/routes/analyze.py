@@ -82,5 +82,6 @@ async def get_analysis(request_id: str, session: AsyncSession = Depends(get_sess
         status=analysis_request.status,
         canonical_title=analysis_request.canonical_title,
         result=analysis_request.result,
+        explanation=analysis_request.explanation,
         error_message=analysis_request.error_message,
     )

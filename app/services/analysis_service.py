@@ -25,6 +25,7 @@ from app.repositories.product_repository import ProductRepository
 from app.schemas.coverage import CoverageGap
 from app.schemas.mos import MosResultResponse
 from app.services.coverage_service import CoverageService
+from app.services.explanation_client import ExplanationClient
 from app.services.indicator_engine import IndicatorEngine
 from app.services.indicators.oecd import RAW_INDICATOR_CODES as OECD_RAW_CODES
 from app.services.indicators.undata import RAW_INDICATOR_CODES as UNDATA_RAW_CODES
@@ -53,6 +54,7 @@ class AnalysisService:
         self._indicator_engine = IndicatorEngine(session)
         self._mos_engine = MosEngine(session)
         self._weight_calibration = WeightCalibrationService(session)
+        self._explanation_client = ExplanationClient(session)
 
     async def run(self, request_id: uuid.UUID) -> None:
         analysis_request = await self._analysis_repo.get(request_id)
@@ -112,7 +114,18 @@ class AnalysisService:
             serialized = [
                 MosResultResponse.model_validate(r, from_attributes=True).model_dump(mode="json") for r in mos_results
             ]
-            await self._analysis_repo.mark_done(analysis_request, result=serialized)
+            # Final LLM inference (best-effort): turn the deterministic MOS into a
+            # business narrative via the local Ollama service. Never blocks or
+            # fails the analysis — null explanation if the service is unavailable.
+            explanation: str | None = None
+            if entity_key is not None and mos_results:
+                explanation = await self._explanation_client.generate(
+                    entity_key=entity_key,
+                    product_name=analysis_request.canonical_title or "",
+                    mos_results=mos_results,
+                    period_key=period_key,
+                )
+            await self._analysis_repo.mark_done(analysis_request, result=serialized, explanation=explanation)
             await self._session.commit()
         except Exception as exc:  # noqa: BLE001 — background task boundary, must never crash the process
             logger.exception(f"AnalysisRequest {request_id} failed")

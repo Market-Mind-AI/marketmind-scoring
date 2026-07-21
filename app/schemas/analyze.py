@@ -35,4 +35,5 @@ class AnalysisStatusResponse(BaseModel):
     status: str  # "pending" | "running" | "done" | "failed"
     canonical_title: str | None
     result: list[dict[str, Any]] | None
+    explanation: str | None = None  # LLM narrative of the ranking (best-effort; null if unavailable)
     error_message: str | None

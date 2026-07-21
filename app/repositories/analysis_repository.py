@@ -45,9 +45,12 @@ class AnalysisRepository:
         analysis_request.status = "running"
         await self._session.flush()
 
-    async def mark_done(self, analysis_request: AnalysisRequest, *, result: list[dict[str, Any]]) -> None:
+    async def mark_done(
+        self, analysis_request: AnalysisRequest, *, result: list[dict[str, Any]], explanation: str | None = None
+    ) -> None:
         analysis_request.status = "done"
         analysis_request.result = result
+        analysis_request.explanation = explanation
         analysis_request.finished_at = utc_now()
         await self._session.flush()
 

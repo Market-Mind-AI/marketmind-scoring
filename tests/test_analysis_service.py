@@ -20,6 +20,7 @@ def _analysis_request(
         id=_REQUEST_ID,
         entity_key=entity_key,
         countries=countries or ["USA"],
+        canonical_title="air fryer",
         status="pending",
     )
 
@@ -64,6 +65,8 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     indicator_engine = _install("indicator_engine", "app.services.analysis_service.IndicatorEngine")
     mos_engine = _install("mos_engine", "app.services.analysis_service.MosEngine")
     weight_calibration = _install("weight_calibration", "app.services.analysis_service.WeightCalibrationService")
+    explanation_client = _install("explanation_client", "app.services.analysis_service.ExplanationClient")
+    explanation_client.generate = AsyncMock(return_value="MOS narrative (mock)")
 
     analysis_repo.get = AsyncMock(return_value=_analysis_request())
     analysis_repo.mark_running = AsyncMock()
@@ -130,6 +133,9 @@ async def test_run_happy_path_marks_done_with_result() -> None:
     result_arg = mocks["analysis_repo"].mark_done.call_args.kwargs["result"]
     assert result_arg[0]["country"] == "USA"
     assert result_arg[0]["mos_interpretation"] == "Good Opportunity"
+    # Final LLM narrative generated (best-effort) and persisted with the result.
+    mocks["explanation_client"].generate.assert_awaited_once()
+    assert mocks["analysis_repo"].mark_done.call_args.kwargs["explanation"] == "MOS narrative (mock)"
 
 
 async def test_run_dispatches_collection_only_for_missing_gaps() -> None:
@@ -226,4 +232,6 @@ async def test_run_skips_mos_when_entity_key_is_none() -> None:
                 value.stop()
 
     mocks["mos_engine"].compute_mos.assert_not_awaited()
-    mocks["analysis_repo"].mark_done.assert_awaited_once_with(mocks["analysis_repo"].get.return_value, result=[])
+    mocks["analysis_repo"].mark_done.assert_awaited_once_with(
+        mocks["analysis_repo"].get.return_value, result=[], explanation=None
+    )

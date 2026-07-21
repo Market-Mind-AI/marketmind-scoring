@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     worldbank_api_base_url: str = "http://host.docker.internal:8003"
     oecd_api_base_url: str = "http://host.docker.internal:8001"
     undata_api_base_url: str = "http://host.docker.internal:8002"
+    # Final LLM inference service (marketmind-ollma-llm, port 8005) — turns the
+    # deterministic MOS + context into a business narrative via a LOCAL Ollama
+    # model (qwen3:14b). Best-effort: if it's down/slow the analysis still
+    # succeeds with the numbers, just without the narrative.
+    ollama_llm_api_base_url: str = "http://host.docker.internal:8005"
+    ollama_llm_timeout_seconds: float = 300.0
+    ollama_llm_narrative_language: str = "pt"
 
     # How long the Core waits for an ingestion run to finish before giving up
     # on a single collection call (the run itself keeps going server-side;
