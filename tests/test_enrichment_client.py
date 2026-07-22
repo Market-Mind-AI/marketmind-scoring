@@ -25,7 +25,6 @@ async def test_localized_markets_returns_structured_markets() -> None:
     )
 
     assert [m.country for m in markets] == ["BRA"]
-    # The structured schema was requested from the provider.
     assert provider.complete.await_args.kwargs["response_model"] is LocalizedMarketsResult
 
 

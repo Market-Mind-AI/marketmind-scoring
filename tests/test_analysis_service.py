@@ -81,9 +81,24 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     product_repo.get_by_entity_key = AsyncMock(
         return_value=SimpleNamespace(
             canonical_title="air fryer",
+            entity_key=_ENTITY_KEY,
             localized_markets={"USA": {"primary_name": "air fryer", "search_terms": ["air fryer", "airfryer"]}},
+            reference_candidates=[{"country": "BRA", "primary_name": "fritadeira", "search_terms": ["air fryer br"]}],
         )
     )
+
+    # Demand Volume ruler: volumes read via compute_trend_score. Patched so the
+    # BRA candidate (terms ["air fryer br"]) is bigger (2000) than requested USA
+    # (1000) — the pool is candidates + requested, so BRA wins the ceiling.
+    def _trend_vol(terms: list[str], location: str, period_key: str) -> SimpleNamespace:
+        return SimpleNamespace(raw_value=2000.0 if "air fryer br" in terms else 1000.0)
+
+    trend_patcher = patch(
+        "app.services.analysis_service.pytrends_indicators.compute_trend_score",
+        AsyncMock(side_effect=_trend_vol),
+    )
+    trend_patcher.start()
+    mocks["_patcher_trend"] = trend_patcher
     country_repo.get_by_iso3 = AsyncMock(
         return_value=SimpleNamespace(search_language="en", pytrends_geo=None, iso2="US")
     )
@@ -139,7 +154,7 @@ async def test_run_happy_path_marks_done_with_result() -> None:
 
     mocks["analysis_repo"].mark_running.assert_awaited_once()
     mocks["indicator_engine"].compute_all.assert_awaited_once_with(
-        country_iso3="USA", entity_key=_ENTITY_KEY, period_key="2026-07"
+        country_iso3="USA", entity_key=_ENTITY_KEY, period_key="2026-07", demand_ceiling=2000.0
     )
     mocks["mos_engine"].compute_mos.assert_awaited_once_with(
         entity_key=_ENTITY_KEY, countries=["USA"], period_key="2026-07"
@@ -152,6 +167,16 @@ async def test_run_happy_path_marks_done_with_result() -> None:
     # Final LLM narrative generated (best-effort) and persisted with the result.
     mocks["explanation_client"].generate.assert_awaited_once()
     assert mocks["analysis_repo"].mark_done.call_args.kwargs["explanation"] == "MOS narrative (mock)"
+    # The Demand Volume ruler (reference market + volume) is handed to the LLM.
+    ruler = mocks["explanation_client"].generate.call_args.kwargs["demand_ruler"]
+    # Ceiling = largest among the CANDIDATES only (deterministic / query-independent);
+    # the requested country USA is NOT in the pool. Candidate BRA -> 2000.
+    assert ruler == {
+        "mode": "reference",
+        "country": "BRA",
+        "volume": 2000.0,
+        "candidates": [{"country": "BRA", "volume": 2000.0}],
+    }
 
 
 async def test_run_dispatches_collection_only_for_missing_gaps() -> None:
@@ -183,20 +208,26 @@ async def test_demand_gaps_built_from_localized_markets() -> None:
             if key.startswith("_patcher_"):
                 value.stop()
 
-    dispatched = [
-        gap
-        for call in mocks["coverage_service"].check_or_collect.await_args_list
-        for gap in call.args[0]
-    ]
-    pytrends_gaps = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS}
-    assert set(pytrends_gaps) == {"search_volume", "keywords_for_keywords"}
+    dispatched = [gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]]
+    # Scope to the REQUESTED country (USA); the reference market (BRA) is a
+    # separate search_volume gap and must not be confused with it.
+    usa_pytrends = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS and g.country == "USA"}
+    assert set(usa_pytrends) == {"search_volume", "keywords_for_keywords"}
 
-    sv = pytrends_gaps["search_volume"]
+    sv = usa_pytrends["search_volume"]
     assert sv.entity_key == _ENTITY_KEY
     assert sv.collection_params == {"location": "US", "language": "en", "keywords": ["air fryer", "airfryer"]}
 
-    kfk = pytrends_gaps["keywords_for_keywords"]
+    kfk = usa_pytrends["keywords_for_keywords"]
     assert kfk.collection_params == {"location": "US", "language": "en", "seed_keywords": ["air fryer", "airfryer"]}
+
+    # The reference market (BRA) is also collected — its own search_volume gap.
+    ref = next(
+        g
+        for g in dispatched
+        if g.source == DataSource.PYTRENDS and g.country == "BRA" and g.indicator_code == "search_volume"
+    )
+    assert ref.collection_params["keywords"] == ["air fryer br"]
 
 
 async def test_forces_recollect_of_unavailable_demand_indicator_even_if_covered() -> None:
@@ -209,9 +240,7 @@ async def test_forces_recollect_of_unavailable_demand_indicator_even_if_covered(
         return_value={
             "trend_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
             "growth_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
-            "demand_stability_score": SimpleNamespace(
-                normalized_score=Decimal("50"), availability_status="available"
-            ),
+            "demand_stability_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
             "search_intent_score": SimpleNamespace(normalized_score=None, availability_status="unavailable"),
         }
     )
@@ -223,9 +252,7 @@ async def test_forces_recollect_of_unavailable_demand_indicator_even_if_covered(
             if key.startswith("_patcher_"):
                 value.stop()
 
-    dispatched = [
-        gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]
-    ]
+    dispatched = [gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]]
     by_code = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS}
     # Only the intent collection is re-run (its indicator was unavailable); the
     # already-available search_volume is left alone.

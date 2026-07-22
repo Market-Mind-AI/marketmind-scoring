@@ -20,13 +20,15 @@ from app.domain.enums import IndicatorCode, IndicatorDimension
 INDICATOR_MEANING: dict[IndicatorCode, str] = {
     IndicatorCode.TREND_SCORE: (
         "DEMAND VOLUME — the total absolute monthly online searches to buy this product in this country "
-        "(the raw_value is that real count). This is market POTENTIAL / sales headroom and is normalized "
-        "proportionally: 2x the searches ~ 2x the score. A high score means many people actually want this "
-        "product here. IMPORTANT for the narrative: a large volume can come from (a) sheer population or "
-        "(b) genuine appetite (a high share of the population wanting it) — read this together with the "
-        "'penetration' figure in notes (searches per 100k inhabitants) to tell them apart. High volume AND "
-        "high penetration = big AND enthusiastic market; high volume but low penetration = big only because "
-        "populous; low volume but high penetration = small but strong appetite (real potential per person)."
+        "(the raw_value is that real count). This is market POTENTIAL / sales headroom, normalized against "
+        "the PRODUCT'S REFERENCE MARKET (its highest-demand country) as the 100-point ceiling: the score is "
+        "this country's demand as a percentage of the product's biggest national market, so a niche product "
+        "is measured on its own scale instead of a fixed global one, and 2x the searches ~ 2x the score. "
+        "IMPORTANT for the narrative: a large volume can come from (a) sheer population or (b) genuine "
+        "appetite (a high share of the population wanting it) — read this together with the 'penetration' "
+        "figure in notes (searches per 100k inhabitants) to tell them apart. High volume AND high penetration "
+        "= big AND enthusiastic market; high volume but low penetration = big only because populous; low "
+        "volume but high penetration = small but strong appetite (real potential per person)."
     ),
     IndicatorCode.GROWTH_SCORE: "Is demand for this product growing or declining?",
     IndicatorCode.DEMAND_STABILITY_SCORE: "How stable (vs. volatile) is demand over time?",

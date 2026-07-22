@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import logger
+from app.db.models.product_catalog import ProductCatalog
 from app.repositories.product_repository import ProductRepository
 from app.schemas.catalog import CatalogResolveResponse
 from app.services.embedding_client import EmbeddingClient, EmbeddingError
@@ -38,6 +39,7 @@ class CatalogService:
         source: str,
         category: str | None = None,
         localized_markets: dict[str, dict[str, Any]] | None = None,
+        reference_candidates: list[dict[str, Any]] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
     ) -> CatalogResolveResponse:
@@ -47,8 +49,17 @@ class CatalogService:
         if existing is not None:
             existing_alias, entity = existing
             await self._repo.bump_alias_hit(existing_alias)
-            # localized_markets is persisted only when a NEW entity is created;
-            # an existing entity keeps the curated markets it was created with.
+            # Re-analysis refreshes the entity with any fields the caller brought
+            # (identify-image / analyze pass-through), so a product's markets and
+            # reference candidates stay current instead of being frozen at creation.
+            self._refresh_entity_fields(
+                entity,
+                category=category,
+                localized_markets=localized_markets,
+                reference_candidates=reference_candidates,
+                target_age_min=target_age_min,
+                target_age_max=target_age_max,
+            )
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="alias"
@@ -58,6 +69,14 @@ class CatalogService:
         if trigram is not None:
             await self._repo.create_alias(
                 alias_normalized=alias_normalized, entity_key=trigram.product.entity_key, source=source
+            )
+            self._refresh_entity_fields(
+                trigram.product,
+                category=category,
+                localized_markets=localized_markets,
+                reference_candidates=reference_candidates,
+                target_age_min=target_age_min,
+                target_age_max=target_age_max,
             )
             await self._session.commit()
             return CatalogResolveResponse(
@@ -74,6 +93,14 @@ class CatalogService:
                 await self._repo.create_alias(
                     alias_normalized=alias_normalized, entity_key=semantic.product.entity_key, source=source
                 )
+                self._refresh_entity_fields(
+                    semantic.product,
+                    category=category,
+                    localized_markets=localized_markets,
+                    reference_candidates=reference_candidates,
+                    target_age_min=target_age_min,
+                    target_age_max=target_age_max,
+                )
                 await self._session.commit()
                 return CatalogResolveResponse(
                     entity_key=semantic.product.entity_key,
@@ -86,6 +113,7 @@ class CatalogService:
             canonical_title=text,
             category=category,
             localized_markets=localized_markets,
+            reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
             embedding=embedding,
@@ -95,6 +123,31 @@ class CatalogService:
         return CatalogResolveResponse(
             entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="created"
         )
+
+    @staticmethod
+    def _refresh_entity_fields(
+        entity: ProductCatalog,
+        *,
+        category: str | None,
+        localized_markets: dict[str, dict[str, Any]] | None,
+        reference_candidates: list[dict[str, Any]] | None,
+        target_age_min: int | None,
+        target_age_max: int | None,
+    ) -> None:
+        """Update an already-resolved entity with the fields a re-analysis
+        brought, so its curated data stays current. Only NON-None values are
+        applied — a text-only resolve (no markets) never wipes existing data.
+        The entity is session-attached, so the surrounding commit persists it."""
+        if category is not None:
+            entity.category = category
+        if localized_markets is not None:
+            entity.localized_markets = localized_markets
+        if reference_candidates is not None:
+            entity.reference_candidates = reference_candidates
+        if target_age_min is not None:
+            entity.target_age_min = target_age_min
+        if target_age_max is not None:
+            entity.target_age_max = target_age_max
 
     async def backfill_missing_embeddings(self, *, limit: int = 50) -> int:
         """Computes embeddings for entities created while the provider was

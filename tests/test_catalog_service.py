@@ -65,9 +65,11 @@ async def test_resolve_persists_localized_markets_on_new_entity(db_session: Asyn
     assert entity.localized_markets == localized_markets
 
 
-async def test_resolve_keeps_localized_markets_from_creation_on_later_resolve(db_session: AsyncSession) -> None:
-    # localized_markets is persisted ONLY when a new entity is created; a later
-    # resolve of the same text (exact alias hit) never overwrites or merges it.
+async def test_resolve_refreshes_curated_fields_on_reanalysis(db_session: AsyncSession) -> None:
+    # Re-analysis of an existing product (exact alias hit) UPDATES its curated
+    # fields with whatever the caller brings (2026-07-22) — so identify-image /
+    # analyze pass-through keeps localized_markets + reference_candidates current
+    # instead of freezing them at creation. Fields NOT provided are left intact.
     service = CatalogService(db_session, embedding_client=_mock_embedding_client())
     text = f"Presunto {uuid.uuid4()}"
     at_creation = {
@@ -79,21 +81,19 @@ async def test_resolve_keeps_localized_markets_from_creation_on_later_resolve(db
             "confidence": 0.7,
         }
     }
+    refreshed = {
+        "ESP": {
+            "primary_name": "jamón pata negra",
+            "formal_name": None,
+            "search_terms": ["jamón pata negra"],
+            "excluded_terms": [],
+            "confidence": 0.6,
+        }
+    }
+    candidates = [{"country": "ESP", "primary_name": "jamón", "search_terms": ["jamon"], "confidence": 0.9}]
 
     created = await service.resolve(text, source="test", localized_markets=at_creation)
-    again = await service.resolve(
-        text,
-        source="test",
-        localized_markets={
-            "ESP": {
-                "primary_name": "jamón pata negra",
-                "formal_name": None,
-                "search_terms": ["jamón pata negra"],
-                "excluded_terms": [],
-                "confidence": 0.6,
-            }
-        },
-    )
+    again = await service.resolve(text, source="test", localized_markets=refreshed, reference_candidates=candidates)
     assert again.entity_key == created.entity_key  # same entity (exact alias hit)
     assert again.method == "alias"
 
@@ -101,7 +101,31 @@ async def test_resolve_keeps_localized_markets_from_creation_on_later_resolve(db
 
     entity = await ProductRepository(db_session).get_by_entity_key(again.entity_key)
     assert entity is not None
-    assert entity.localized_markets == at_creation  # unchanged by the second resolve
+    assert entity.localized_markets == refreshed  # updated by the re-analysis
+    assert entity.reference_candidates == candidates  # newly persisted on re-analysis
+
+
+async def test_resolve_does_not_wipe_curated_fields_when_none_provided(db_session: AsyncSession) -> None:
+    # A text-only resolve (no markets) must NOT wipe existing curated data.
+    service = CatalogService(db_session, embedding_client=_mock_embedding_client())
+    text = f"Presunto {uuid.uuid4()}"
+    at_creation = {
+        "PRT": {
+            "primary_name": "presunto pata negra",
+            "formal_name": None,
+            "search_terms": ["presunto pata negra"],
+            "excluded_terms": [],
+            "confidence": 0.7,
+        }
+    }
+    created = await service.resolve(text, source="test", localized_markets=at_creation)
+    await service.resolve(text, source="test")  # no localized_markets
+
+    from app.repositories.product_repository import ProductRepository
+
+    entity = await ProductRepository(db_session).get_by_entity_key(created.entity_key)
+    assert entity is not None
+    assert entity.localized_markets == at_creation  # preserved
 
 
 async def test_resolve_second_call_hits_exact_alias(db_session: AsyncSession) -> None:

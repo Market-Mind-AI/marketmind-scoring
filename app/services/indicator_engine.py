@@ -41,6 +41,7 @@ from app.services.indicators.normalization import (
     FIXED_BOUNDS_PERIOD_KEY,
     normalization_method,
     normalize,
+    normalize_demand_volume,
     self_widens,
 )
 from app.services.indicators.results import RawIndicatorResult
@@ -58,7 +59,12 @@ class IndicatorEngine:
         self._explanation_repo = MetricExplanationRepository(session)
 
     async def compute_all(
-        self, *, country_iso3: str, entity_key: uuid.UUID | None = None, period_key: str | None = None
+        self,
+        *,
+        country_iso3: str,
+        entity_key: uuid.UUID | None = None,
+        period_key: str | None = None,
+        demand_ceiling: float | None = None,
     ) -> list[IndicatorValue]:
         resolved_period_key = period_key or current_month_period_key()
         country = await self._country_repo.get_by_iso3(country_iso3)
@@ -71,7 +77,9 @@ class IndicatorEngine:
             entity = await self._product_repo.get_by_entity_key(entity_key)
             if entity is None:
                 raise EntityNotFoundError(f"Entity {entity_key} not found")
-            results += await self._compute_pytrends_indicators(entity, country, resolved_period_key)
+            results += await self._compute_pytrends_indicators(
+                entity, country, resolved_period_key, demand_ceiling=demand_ceiling
+            )
             results.append(await self._compute_median_age_fit(entity, country, resolved_period_key))
 
         await self._session.commit()
@@ -155,7 +163,7 @@ class IndicatorEngine:
         ]
 
     async def _compute_pytrends_indicators(
-        self, entity: ProductCatalog, country: Country, period_key: str
+        self, entity: ProductCatalog, country: Country, period_key: str, demand_ceiling: float | None = None
     ) -> list[IndicatorValue]:
         # Demand from Google Ads ABSOLUTE search volume (not Trends), 2026-07-15:
         # each country is measured with its OWN user-approved search terms
@@ -198,10 +206,19 @@ class IndicatorEngine:
 
         saved: list[IndicatorValue] = []
         for code, raw in indicator_raws:
+            # Only Demand Volume (trend) uses the reference-market ceiling; the
+            # others normalize against their own fixed bounds (demand_ceiling ignored).
+            ceiling = demand_ceiling if code == IndicatorCode.TREND_SCORE else None
             saved.append(
                 await self._normalize_and_save(
-                    code, DataSource.PYTRENDS, entity.entity_key, country.iso3, period_key, raw
-                )
+                    code,
+                    DataSource.PYTRENDS,
+                    entity.entity_key,
+                    country.iso3,
+                    period_key,
+                    raw,
+                    demand_ceiling=ceiling,
+                )  # fmt: skip
             )
         return saved
 
@@ -228,11 +245,20 @@ class IndicatorEngine:
         country_iso3: str,
         period_key: str,
         raw: RawIndicatorResult,
+        demand_ceiling: float | None = None,
     ) -> IndicatorValue:
         normalized_score: float | None = None
         note = raw.notes
 
-        if raw.raw_value is not None:
+        if raw.raw_value is not None and indicator_code == IndicatorCode.TREND_SCORE and demand_ceiling is not None:
+            # Demand Volume ruled by the product's reference-market volume
+            # (Cap. 4 §4.2.1, 2026-07-22): score = volume / reference x 100.
+            # Only the last-resort fixed-bound path (demand_ceiling=None) still
+            # uses the old 2M table.
+            normalized_score, normalize_note = normalize_demand_volume(raw.raw_value, demand_ceiling)
+            if normalize_note is not None:
+                note = f"{note}; {normalize_note}" if note else normalize_note
+        elif raw.raw_value is not None:
             method = normalization_method(indicator_code)
             reference = None
             if method == NormalizationMethod.MINMAX_FIXED:

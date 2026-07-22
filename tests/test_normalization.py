@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from app.db.models.normalization_reference import NormalizationReference
 from app.domain.enums import IndicatorCode, IndicatorDirection, NormalizationMethod
-from app.services.indicators.normalization import normalization_method, normalize
+from app.services.indicators.normalization import normalization_method, normalize, normalize_demand_volume
 
 
 def _reference(min_x: float, max_x: float) -> NormalizationReference:
@@ -11,6 +11,27 @@ def _reference(min_x: float, max_x: float) -> NormalizationReference:
         id=uuid.uuid4(), indicator_code="x", period_key="2026-07", min_x=Decimal(str(min_x)), max_x=Decimal(str(max_x)),
         reference_population_size=10, is_closed=False,
     )  # fmt: skip
+
+
+class TestNormalizeDemandVolume:
+    def test_linear_fraction_of_reference_ceiling(self) -> None:
+        # score = volume / reference-market volume x 100.
+        score, note = normalize_demand_volume(65_780, 65_780)
+        assert score == 100.0 and note is None
+        score, _ = normalize_demand_volume(16_690, 65_780)
+        assert round(score or 0, 1) == 25.4
+
+    def test_saturates_at_100_above_ceiling(self) -> None:
+        score, _ = normalize_demand_volume(200_000, 65_780)
+        assert score == 100.0
+
+    def test_zero_volume_is_zero(self) -> None:
+        score, _ = normalize_demand_volume(0, 65_780)
+        assert score == 0.0
+
+    def test_nonpositive_ceiling_returns_none_with_note(self) -> None:
+        score, note = normalize_demand_volume(1000, 0)
+        assert score is None and note is not None
 
 
 class TestNormalizationMethod:

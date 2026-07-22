@@ -13,6 +13,7 @@ MOS per country, same contract as POST /mos/compute.
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,7 @@ from app.schemas.mos import MosResultResponse
 from app.services.coverage_service import CoverageService
 from app.services.explanation_client import ExplanationClient
 from app.services.indicator_engine import IndicatorEngine
+from app.services.indicators import pytrends as pytrends_indicators
 from app.services.indicators.oecd import RAW_INDICATOR_CODES as OECD_RAW_CODES
 from app.services.indicators.undata import RAW_INDICATOR_CODES as UNDATA_RAW_CODES
 from app.services.indicators.worldbank import RAW_INDICATOR_CODES as WORLDBANK_RAW_CODES
@@ -103,9 +105,29 @@ class AnalysisService:
                 await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
 
             period_key = current_month_period_key()
+
+            # Demand Volume ruler (Cap. 4 §4.2.1, 2026-07-22): the ceiling is the
+            # LARGEST real search volume among the product's reference-market
+            # CANDIDATES (a ranked shortlist the enrichment LLM proposed). Each
+            # candidate is collected here (reusing cached data) regardless of the
+            # requested countries, so the ruler is stable / query-independent and
+            # a wrong single LLM guess can't skew it. Falls back to the largest
+            # requested-country volume, then to the old fixed 2M bound — the mode
+            # is carried into the final narrative so the LLM states which ruler
+            # was used.
+            entity = await self._product_repo.get_by_entity_key(entity_key) if entity_key is not None else None
+            demand_ceiling: float | None = None
+            demand_ruler: dict[str, Any] | None = None
+            if entity is not None:
+                await self._ensure_candidates_coverage(entity, countries, period_key=period_key)
+                demand_ceiling, demand_ruler = await self._resolve_demand_ceiling(entity, countries, period_key)
+
             for country_iso3 in countries:
                 await self._indicator_engine.compute_all(
-                    country_iso3=country_iso3, entity_key=entity_key, period_key=period_key
+                    country_iso3=country_iso3,
+                    entity_key=entity_key,
+                    period_key=period_key,
+                    demand_ceiling=demand_ceiling,
                 )
 
             # Dimension weights are deterministic (Rank Reciprocal over a
@@ -154,6 +176,7 @@ class AnalysisService:
                     product_name=analysis_request.canonical_title or "",
                     mos_results=mos_results,
                     period_key=period_key,
+                    demand_ruler=demand_ruler,
                 )
             await self._analysis_repo.mark_done(analysis_request, result=serialized, explanation=explanation)
             await self._session.commit()
@@ -298,3 +321,83 @@ class AnalysisService:
         re-collecting what is already usable."""
         outputs = _DEMAND_COLLECTION_OUTPUTS.get(collection_code, ())
         return any(not _is_available(current, code) for code in outputs)
+
+    async def _ensure_candidates_coverage(self, entity: Any, requested: list[str], *, period_key: str) -> None:
+        """Collect each reference-market candidate's search volume — always,
+        regardless of the requested countries, so the ruler is query-independent.
+        Candidates that are themselves requested countries are skipped here (they
+        are already collected under their own localized terms). Reuses cached
+        data (check_coverage), collecting only what's missing."""
+        gaps: list[CoverageGap] = []
+        for cand in entity.reference_candidates or []:
+            iso3 = cand.get("country")
+            terms = as_term_list(cand.get("search_terms"))
+            if not (iso3 and terms) or iso3 in requested:
+                continue
+            country = await self._country_repo.get_by_iso3(iso3)
+            if country is None or country.iso2 is None:
+                continue
+            gaps.append(
+                CoverageGap(
+                    source=DataSource.PYTRENDS,
+                    entity_key=entity.entity_key,
+                    country=iso3,
+                    indicator_code="search_volume",
+                    period_key=current_month_period_key(),
+                    collection_params={
+                        "location": country.iso2,
+                        "language": (country.search_language or "en"),
+                        "keywords": terms,
+                    },
+                )
+            )
+        if not gaps:
+            return
+        statuses = await self._coverage_service.check_coverage(gaps)
+        missing = [gap for gap, status in zip(gaps, statuses, strict=True) if not status.covered]
+        if missing:
+            await self._coverage_service.check_or_collect(missing, requested_by="analysis_service:reference_candidates")
+
+    async def _resolve_demand_ceiling(
+        self, entity: Any, countries: list[str], period_key: str
+    ) -> tuple[float | None, dict[str, Any]]:
+        """The Demand Volume ruler ceiling + mode, for narration:
+        - reference — the LARGEST real Google-search volume among the product's
+          reference CANDIDATES (a ranked shortlist chosen by a real LLM at
+          identify time). The candidate set is fixed per product and does NOT
+          depend on which countries are requested, so the ruler — and therefore
+          every country's Demand Volume score — is DETERMINISTIC / query-
+          independent (a country scores the same analyzed alone or with 20
+          others). The LLM only proposes plausible big markets; real search
+          volume elects the biggest among them (consistent with the search-based
+          metric — a sales-biggest market like China, barely on Google, won't
+          dominate the ruler).
+        - fixed — None (no candidate had volume), so the engine uses the 2M bound.
+        Volumes are read from already-collected data via compute_trend_score."""
+        measured: list[dict[str, Any]] = []
+        for cand in entity.reference_candidates or []:
+            iso3 = cand.get("country")
+            if not iso3:
+                continue
+            # A candidate that is also requested was collected under its own
+            # localized_markets terms (same coverage key); measure it with those
+            # to avoid reading a never-collected reference-term series.
+            if iso3 in countries:
+                terms = as_term_list((entity.localized_markets or {}).get(iso3, {}).get("search_terms"))
+            else:
+                terms = as_term_list(cand.get("search_terms"))
+            country = await self._country_repo.get_by_iso3(iso3)
+            if not (terms and country is not None and country.iso2 is not None):
+                continue
+            r = await pytrends_indicators.compute_trend_score(terms, country.iso2, period_key)
+            if r.raw_value is not None and float(r.raw_value) > 0:
+                measured.append({"country": iso3, "volume": float(r.raw_value)})
+        if measured:
+            winner = max(measured, key=lambda m: m["volume"])
+            return winner["volume"], {
+                "mode": "reference",
+                "country": winner["country"],
+                "volume": winner["volume"],
+                "candidates": measured,
+            }
+        return None, {"mode": "fixed"}

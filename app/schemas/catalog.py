@@ -54,6 +54,17 @@ class LocalizedMarket(BaseModel):
     confidence: float
 
 
+class ReferenceMarket(LocalizedMarket):
+    """One candidate biggest-market, mirroring an entry of
+    product_catalog.reference_candidates. Carries its own `country` (ISO3),
+    unlike LocalizedMarket where the country is the dict key. The analysis
+    measures each candidate's real search volume; the largest is the Demand
+    Volume ruler ceiling (Cap. 4 §4.2.1). Never scored/ranked itself — context
+    only, explained by the final LLM."""
+
+    country: str
+
+
 class IdentifyImageRequest(BaseModel):
     image_base64: str = Field(..., min_length=1)
     image_media_type: ImageMediaType
@@ -77,6 +88,7 @@ class IdentifyImageResponse(BaseModel):
     # product_catalog.localized_markets. Replaces the old {lang: [names]}
     # `localized_terms`.
     localized_markets: dict[str, LocalizedMarket] | None = None
+    reference_candidates: list[ReferenceMarket] | None = None
     target_age_min: int | None
     target_age_max: int | None
     estimated_price: float | None

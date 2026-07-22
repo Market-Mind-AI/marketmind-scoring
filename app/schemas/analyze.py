@@ -18,6 +18,14 @@ class AnalyzeRequest(BaseModel):
             '({"<ISO3>": {primary_name, formal_name?, search_terms, excluded_terms, confidence}}).'
         ),
     )
+    reference_candidates: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Ranked shortlist of candidate biggest-markets from identify-image "
+            "([{country, primary_name, search_terms, excluded_terms, confidence}, ...]) — the largest by real "
+            "search volume becomes the Demand Volume ruler ceiling."
+        ),
+    )
     target_age_min: int | None = None
     target_age_max: int | None = None
     estimated_price: float | None = None

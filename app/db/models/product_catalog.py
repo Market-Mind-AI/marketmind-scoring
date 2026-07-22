@@ -35,6 +35,20 @@ class ProductCatalog(Base):
     # intent call. Replaces the old Trends-era {lang: [names]} `localized_terms`.
     # See marketmind_mos_engine.
     localized_markets: Mapped[dict[str, dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # reference_candidates (2026-07-22): a RANKED shortlist (up to 5) of the
+    # supported countries most likely to be this product's biggest market,
+    # proposed by the enrichment LLM, each a localized-market entry plus a
+    # "country" (ISO3):
+    #   [{"country": "IND", "primary_name": ..., "search_terms": [...],
+    #     "excluded_terms": [...], "confidence": float}, ...]
+    # The analysis collects each candidate's real search volume (reusing cached
+    # data) and the LARGEST becomes the CEILING of the Demand Volume ruler
+    # (Cap. 4 §4.2.1): trend_score = country_volume / ceiling x 100. Real data
+    # decides the biggest — a wrong single LLM guess can no longer skew the
+    # ruler. Replaces the old fixed 2M ceiling. The winning reference is never
+    # scored/ranked itself — context only, explained by the final LLM. See
+    # marketmind_mos_engine.
+    reference_candidates: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(settings.openai_embedding_dimensions), nullable=True)

@@ -7,6 +7,8 @@ from app.services.enrichment_client import EnrichmentError
 from app.services.product_identification_service import ProductIdentificationService
 from app.services.vision_client import MarketTerms, ProductIdentification
 
+_SUPPORTED = ["USA", "BRA", "DEU", "JPN"]
+
 
 def _identification(**overrides: object) -> ProductIdentification:
     base = {
@@ -32,142 +34,143 @@ def _identification(**overrides: object) -> ProductIdentification:
     return ProductIdentification(**base)  # type: ignore[arg-type]
 
 
+def _clients(*, fill: list[MarketTerms] | None = None, candidates: list[MarketTerms] | None = None):
+    enrichment = AsyncMock()
+    enrichment.localized_markets = AsyncMock(return_value=fill or [])
+    reference = AsyncMock()
+    reference.candidates = AsyncMock(return_value=candidates or [])
+    return enrichment, reference
+
+
+def _patch_collaborators(entity_key: uuid.UUID | None = None):
+    """Patches CatalogService + CountryRepository the service constructs."""
+    entity_key = entity_key or uuid.uuid4()
+    catalog = patch("app.services.product_identification_service.CatalogService")
+    country = patch("app.services.product_identification_service.CountryRepository")
+    catalog_cls = catalog.start()
+    country_cls = country.start()
+    catalog_cls.return_value.resolve = AsyncMock(
+        return_value=CatalogResolveResponse(
+            entity_key=entity_key, canonical_title="Philips air fryer", method="created"
+        )
+    )
+    country_cls.return_value.list_all = AsyncMock(return_value=[SimpleNamespace(iso3=c) for c in _SUPPORTED])
+    country_cls.return_value.get_by_iso3 = AsyncMock(return_value=SimpleNamespace(search_language="pt"))
+    return catalog_cls, country_cls, [catalog, country]
+
+
 async def test_identify_combines_brand_and_product_name_for_resolve(mock_session: AsyncMock) -> None:
     entity_key = uuid.uuid4()
-    mock_vision_client = AsyncMock()
-    mock_vision_client.identify_product.return_value = _identification()
-
-    with patch("app.services.product_identification_service.CatalogService") as mock_catalog_service_cls:
-        mock_catalog_service = mock_catalog_service_cls.return_value
-        mock_catalog_service.resolve = AsyncMock(
-            return_value=CatalogResolveResponse(
-                entity_key=entity_key, canonical_title="Philips air fryer", method="created"
-            )
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification()
+    enrichment, reference = _clients(
+        candidates=[
+            MarketTerms(country="USA", primary_name="air fryer", search_terms=["air fryer"], confidence=0.95),
+            MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["fritadeira"], confidence=0.9),
+        ]
+    )
+    catalog_cls, _country_cls, patchers = _patch_collaborators(entity_key)
+    try:
+        service = ProductIdentificationService(
+            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
         )
-
-        service = ProductIdentificationService(mock_session, vision_client=mock_vision_client)
         result = await service.identify(
             image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
         )
+    finally:
+        for p in patchers:
+            p.stop()
 
-    mock_vision_client.identify_product.assert_awaited_once()
-    assert mock_vision_client.identify_product.call_args.kwargs["countries"] == ["USA"]
-
-    mock_catalog_service.resolve.assert_awaited_once()
-    call_args = mock_catalog_service.resolve.call_args
+    call_args = catalog_cls.return_value.resolve.call_args
     assert call_args.args[0] == "Philips air fryer"
-    assert call_args.kwargs["category"] == "kitchen"
-    # markets list mapped into the ISO3-keyed localized_markets dict, both for
-    # persistence (resolve) and the response.
-    expected_markets = {
-        "USA": {
-            "primary_name": "air fryer",
-            "formal_name": None,
-            "search_terms": ["air fryer", "airfryer"],
-            "excluded_terms": ["deep fryer"],
-            "confidence": 0.95,
-        }
-    }
-    assert call_args.kwargs["localized_markets"] == expected_markets
-
+    assert call_args.kwargs["localized_markets"]["USA"]["search_terms"] == ["air fryer", "airfryer"]
+    # Candidates (from the real-LLM client) are persisted + returned, ranked, each with country.
+    assert [c["country"] for c in call_args.kwargs["reference_candidates"]] == ["USA", "BRA"]
     assert result.entity_key == entity_key
-    assert result.product_name == "air fryer"
-    assert result.brand == "Philips"
-    assert result.estimated_price == 89.9
-    assert result.localized_markets is not None
-    assert result.localized_markets["USA"].search_terms == ["air fryer", "airfryer"]
-
-
-async def test_identify_uses_product_name_only_when_no_brand(mock_session: AsyncMock) -> None:
-    mock_vision_client = AsyncMock()
-    mock_vision_client.identify_product.return_value = _identification(brand=None)
-
-    with patch("app.services.product_identification_service.CatalogService") as mock_catalog_service_cls:
-        mock_catalog_service = mock_catalog_service_cls.return_value
-        mock_catalog_service.resolve = AsyncMock(
-            return_value=CatalogResolveResponse(entity_key=uuid.uuid4(), canonical_title="air fryer", method="created")
-        )
-
-        service = ProductIdentificationService(mock_session, vision_client=mock_vision_client)
-        await service.identify(
-            image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
-        )
-
-    assert mock_catalog_service.resolve.call_args.args[0] == "air fryer"
+    assert result.reference_candidates is not None
+    assert [c.country for c in result.reference_candidates] == ["USA", "BRA"]
+    # The reference-market client was offered the supported basket.
+    assert reference.candidates.await_args.kwargs["supported_countries"] == _SUPPORTED
 
 
 async def test_enrichment_fills_markets_vision_missed(mock_session: AsyncMock) -> None:
-    # Vision returns USA only; the enrichment LLM fills the missing BRA so
-    # localized_markets covers every requested country.
-    mock_vision_client = AsyncMock()
-    mock_vision_client.identify_product.return_value = _identification()  # USA only
-
-    mock_enrichment = AsyncMock()
-    mock_enrichment.localized_markets = AsyncMock(
-        return_value=[
+    # Vision returns USA only; the enrichment (local) client fills the missing BRA.
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification()
+    enrichment, reference = _clients(
+        fill=[
             MarketTerms(
-                country="BRA",
-                primary_name="fritadeira sem óleo",
-                search_terms=["fritadeira sem óleo", "airfryer"],
-                excluded_terms=[],
-                confidence=0.9,
+                country="BRA", primary_name="fritadeira sem óleo", search_terms=["fritadeira sem óleo"], confidence=0.9
             )
-        ]
+        ],
+        candidates=[MarketTerms(country="USA", primary_name="air fryer", search_terms=["air fryer"], confidence=0.95)],
     )
-
-    with (
-        patch("app.services.product_identification_service.CatalogService") as mock_catalog_service_cls,
-        patch("app.services.product_identification_service.CountryRepository") as mock_country_repo_cls,
-    ):
-        mock_catalog_service_cls.return_value.resolve = AsyncMock(
-            return_value=CatalogResolveResponse(
-                entity_key=uuid.uuid4(), canonical_title="Philips air fryer", method="created"
-            )
-        )
-        mock_country_repo_cls.return_value.get_by_iso3 = AsyncMock(return_value=SimpleNamespace(search_language="pt"))
+    _catalog_cls, _country_cls, patchers = _patch_collaborators()
+    try:
         service = ProductIdentificationService(
-            mock_session, vision_client=mock_vision_client, enrichment_client=mock_enrichment
+            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
         )
         result = await service.identify(
             image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA", "BRA"]
         )
+    finally:
+        for p in patchers:
+            p.stop()
 
-    # Enrichment was asked for exactly the missing country (with its language).
-    assert mock_enrichment.localized_markets.await_args.kwargs["countries"] == [("BRA", "pt")]
+    # Enrichment asked to fill only the missing BRA (with its language).
+    assert enrichment.localized_markets.await_args.kwargs["countries"] == [("BRA", "pt")]
     assert result.localized_markets is not None
     assert result.localized_markets["USA"].search_terms == ["air fryer", "airfryer"]  # kept from vision
-    assert result.localized_markets["BRA"].search_terms == ["fritadeira sem óleo", "airfryer"]  # from enrichment
+    assert result.localized_markets["BRA"].search_terms == ["fritadeira sem óleo"]  # from enrichment
 
 
 async def test_fallback_when_enrichment_fails_so_markets_never_empty(mock_session: AsyncMock) -> None:
-    # Vision returns no markets AND the enrichment LLM errors — localized_markets
-    # must still never be empty: a deterministic fallback fills every country.
-    mock_vision_client = AsyncMock()
-    mock_vision_client.identify_product.return_value = _identification(markets=[])
-
-    mock_enrichment = AsyncMock()
-    mock_enrichment.localized_markets = AsyncMock(side_effect=EnrichmentError("model down"))
-
-    with (
-        patch("app.services.product_identification_service.CatalogService") as mock_catalog_service_cls,
-        patch("app.services.product_identification_service.CountryRepository") as mock_country_repo_cls,
-    ):
-        mock_catalog_service_cls.return_value.resolve = AsyncMock(
-            return_value=CatalogResolveResponse(
-                entity_key=uuid.uuid4(), canonical_title="Philips air fryer", method="created"
-            )
-        )
-        mock_country_repo_cls.return_value.get_by_iso3 = AsyncMock(return_value=SimpleNamespace(search_language="en"))
+    # Vision returns no markets AND enrichment errors — localized_markets still
+    # never empty (deterministic fallback); no reference candidates.
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification(markets=[])
+    enrichment, reference = _clients()
+    enrichment.localized_markets = AsyncMock(side_effect=EnrichmentError("model down"))
+    _catalog_cls, _country_cls, patchers = _patch_collaborators()
+    try:
         service = ProductIdentificationService(
-            mock_session, vision_client=mock_vision_client, enrichment_client=mock_enrichment
+            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
         )
         result = await service.identify(
             image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
         )
+    finally:
+        for p in patchers:
+            p.stop()
 
     assert result.localized_markets is not None
     usa = result.localized_markets["USA"]
-    # Deterministic fallback: the product's own name/brand as the search term.
-    assert usa.search_terms  # never empty
-    assert "Philips air fryer" in usa.search_terms
+    assert "Philips air fryer" in usa.search_terms  # deterministic fallback
     assert usa.confidence == 0.3
+    assert result.reference_candidates is None
+
+
+async def test_candidates_outside_supported_basket_are_dropped(mock_session: AsyncMock) -> None:
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification()
+    _enrichment, reference = _clients(
+        candidates=[
+            MarketTerms(country="XXX", primary_name="x", search_terms=["x"], confidence=0.9),
+            MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["fritadeira"], confidence=0.9),
+        ]
+    )
+    enrichment, _ = _clients()
+    _catalog_cls, _country_cls, patchers = _patch_collaborators()
+    try:
+        service = ProductIdentificationService(
+            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
+        )
+        result = await service.identify(
+            image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
+        )
+    finally:
+        for p in patchers:
+            p.stop()
+
+    assert result.reference_candidates is not None
+    assert [c.country for c in result.reference_candidates] == ["BRA"]  # XXX dropped

@@ -3,6 +3,7 @@ from app.services.llm.resolver import (
     resolve_enrichment_llm,
     resolve_explanation_llm,
     resolve_llm,
+    resolve_reference_market_llm,
     resolve_vision_llm,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "resolve_llm",
     "resolve_vision_llm",
     "resolve_enrichment_llm",
+    "resolve_reference_market_llm",
     "resolve_explanation_llm",
 ]

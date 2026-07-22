@@ -59,11 +59,18 @@ class Settings(BaseSettings):
     #   - enrichment: fills the JSON fields the vision model left out — above all
     #     localized_markets, which must never be empty (a TEXT model, not vision:
     #     the local vision model is unreliable at producing localized terms).
+    #   - reference_market: chooses the ranked reference-market CANDIDATES (which
+    #     countries are the product's biggest markets). Real market knowledge, so
+    #     it defaults to a REAL (cloud) LLM — the local model doesn't know actual
+    #     market sizes (e.g. it omitted Brazil for air fryer). Real search volume
+    #     still elects the winner among the candidates; the LLM only proposes.
     #   - explanation: the final MOS-narrative call (text).
     vision_llm_provider: str = "ollama"
     vision_llm_model: str = "qwen3-vl:8b-instruct"
     enrichment_llm_provider: str = "ollama"
     enrichment_llm_model: str = "qwen3:14b"
+    reference_market_llm_provider: str = "claude"
+    reference_market_llm_model: str = "claude-haiku-4-5-20251001"
     explanation_llm_provider: str = "ollama"
     explanation_llm_model: str = "gemma4:12b"
 

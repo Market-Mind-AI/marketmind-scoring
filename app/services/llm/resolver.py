@@ -31,6 +31,12 @@ def resolve_enrichment_llm() -> LLMProvider:
     return resolve_llm(provider=settings.enrichment_llm_provider, model=settings.enrichment_llm_model)
 
 
+def resolve_reference_market_llm() -> LLMProvider:
+    """Chooses the reference-market candidates (the product's biggest markets) —
+    a real-market-knowledge task, so it defaults to a cloud LLM."""
+    return resolve_llm(provider=settings.reference_market_llm_provider, model=settings.reference_market_llm_model)
+
+
 def resolve_explanation_llm() -> LLMProvider:
     """The final MOS-narrative call (text)."""
     return resolve_llm(provider=settings.explanation_llm_provider, model=settings.explanation_llm_model)

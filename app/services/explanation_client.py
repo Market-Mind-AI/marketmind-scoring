@@ -21,9 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.models.mos_result import MosResult
-from app.domain.enums import IndicatorCode
+from app.domain.enums import IndicatorCode, IndicatorDimension
 from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.metric_explanation_repository import MetricExplanationRepository
+from app.repositories.mos_repository import MosRepository
 from app.services.llm import resolve_explanation_llm
 from app.services.mos.dimension_mapping import DIMENSION_BY_INDICATOR, compute_dimension_subscores
 from app.services.mos.explanation_builder import ExplanationCatalog
@@ -58,12 +59,20 @@ Há ainda um `glossary` no topo definindo o que cada métrica mede. USE o `expla
 `glossary` para construir uma explicação RICA, aproveitando TODOS os dados que entram no MOS \
 (todas as dimensões e sinais), não só o volume.
 
-PRODUZA, nesta ordem:
-1) Uma recomendação curta de "onde vender", com os países ranqueados do melhor para o pior, \
-citando o MOS de cada um.
-2) Um parágrafo por país explicando o seu MOS a partir dos seus sinais (signals) e dimensões \
-(dimensions) — cite os scores e as leituras (`explanation`) dos fatores que mais pesam, tanto os \
-favoráveis quanto os desfavoráveis.
+FORMATO (MUITO IMPORTANTE): escreva como um analista humano escreveria um parecer para um executivo — \
+PROSA CORRIDA, fluida e natural. É PROIBIDO usar bullets, listas, tabelas, subtítulos por dimensão ou \
+enumerar "dimensão: score" item a item. As dimensões e números entram TECIDOS nas frases, não em tópicos.
+
+{structure}
+
+RÉGUA DE VOLUME DE DEMANDA (`demand_ruler`) — explique-a DENTRO do texto corrido (sem nota/seção separada):
+- Se `mode` = "reference": o score de Demand Volume de cada país é medido como % do MERCADO-REFERÊNCIA \
+do produto — o país `country` (com `volume` buscas/mês), eleito como o de MAIOR volume REAL entre os \
+mercados avaliados (`candidates` = candidatos propostos + os próprios países analisados). Deixe claro que \
+100 seria igualar esse maior mercado, e que os países analisados valem tanto % disso. O mercado-referência \
+é só a régua — NÃO faz parte do ranking (a menos que também tenha sido pedido).
+- Se `mode` = "fixed": não houve volume em nenhum mercado avaliado; usou-se um teto fixo genérico. \
+**Avise claramente** que os scores de volume são só aproximados nesse caso.
 
 DISTINÇÃO CRÍTICA (torne-a explícita usando o sinal de volume de demanda, cujo `context` traz buscas \
 absolutas + população + penetração por 100 mil habitantes):
@@ -74,7 +83,7 @@ apetite real).
 oportunidade.
 - Cite concretamente os números reais (buscas absolutas, população, penetração por 100 mil).
 
-Seja conciso e com tom de negócio."""
+Tom humano de analista, prosa corrida do início ao fim — nada de bullets, listas ou subtítulos."""
 
 _SYSTEM_PROMPT_EN = """You are a market-entry analyst helping a business decide IN WHICH COUNTRIES \
 to sell a product, based on an "evidence packet" already computed by MarketMind's deterministic \
@@ -95,11 +104,20 @@ top-level `glossary` defines what each metric measures. USE each score's `explan
 `glossary` to build a RICH explanation that draws on ALL the data feeding the MOS (every dimension and \
 signal), not just volume.
 
-PRODUCE, in this order:
-1) A short "where to sell" recommendation, with the countries ranked best to worst, quoting each \
-country's MOS.
-2) One paragraph per country explaining its MOS from its signals and dimensions — cite the scores and \
-readings (`explanation`) of the factors that weigh most, both favourable and unfavourable.
+FORMAT (VERY IMPORTANT): write the way a human analyst writes a brief for an executive — FLOWING PROSE, \
+natural and readable. Bullets, lists, tables, per-dimension sub-headings, or enumerating "dimension: score" \
+item by item are FORBIDDEN. Dimensions and numbers are WOVEN into the sentences, not listed.
+
+{structure}
+
+DEMAND VOLUME RULER (`demand_ruler`) — explain it WITHIN the flowing prose (no separate note/section):
+- If `mode` = "reference": each country's Demand Volume score is measured as a % of the product's \
+REFERENCE MARKET — the country `country` (with `volume` monthly searches), elected as the largest by REAL \
+volume among the evaluated markets (`candidates` = proposed candidates + the analyzed countries themselves). \
+Make clear that 100 would mean matching that biggest market, and the analyzed countries are worth that % of \
+it. The reference market is only the ruler — NOT part of the ranking (unless it was also requested).
+- If `mode` = "fixed": no evaluated market had any volume; a generic fixed ceiling was used. **Warn \
+clearly** that the volume scores are only approximate in this case.
 
 CRITICAL DISTINCTION (make it explicit using the demand-volume signal, whose `context` carries absolute \
 searches + population + penetration per 100k inhabitants):
@@ -109,16 +127,72 @@ appetite).
 - Make clear that a smaller market with high penetration/quality can still be a strong opportunity.
 - Concretely reference the real figures (absolute searches, population, penetration per 100k).
 
-Be concise and business-toned."""
+Human analyst tone, flowing prose throughout — no bullets, lists or sub-headings."""
 
 
-def _system_prompt(language: str) -> str:
+# The output structure depends on how many countries were analyzed: with a
+# SINGLE country there is no ranking/ordering/comparison to make, so the prompt
+# must not ask for one (it produced incoherent "priority order"/"comparing the
+# markets" language before). Injected into the `{structure}` placeholder.
+_STRUCTURE_PT_MULTI = """PRODUZA, nesta ordem:
+1) Uma frase/linha curta de recomendação — a ordem de prioridade dos países pelo MOS (com o MOS de cada um).
+2) UM PARÁGRAFO CORRIDO POR PAÍS (um único parágrafo fluido cada): conte a "história" daquele mercado \
+costurando naturalmente as dimensões e sinais que importam — os pontos fortes E os fracos, com os números \
+reais —, e explique, em linguagem natural, por que o MOS ficou onde ficou. Cubra o essencial das dimensões \
+sem listá-las mecanicamente; deixe claro, dentro do texto, por que uma dimensão forte (ex.: volume) NÃO \
+leva o MOS ao máximo — porque as demais dimensões, somadas ao seu peso, o seguram (o Volume de Demanda é \
+a de maior peso, mas responde por menos da metade do total). Explique a lógica do peso em palavras, sem \
+precisar citar os pesos numéricos.
+3) UM PARÁGRAFO FINAL comparando todos os países entre si — quem lidera e por quê, os trade-offs (volume \
+enorme vs. poder de compra, nicho de alta qualidade vs. escala) e a recomendação de priorização."""
+
+_STRUCTURE_PT_SINGLE = """PRODUZA (há APENAS UM país nesta análise — portanto NÃO use linguagem de "ordem \
+de prioridade", "ranking" ou "comparação entre países"; não há com o que comparar):
+1) Uma frase de abertura com o veredito deste mercado — o país, seu MOS e a banda (ex.: boa/moderada/fraca \
+oportunidade).
+2) UM ou DOIS PARÁGRAFOS CORRIDOS analisando ESTE mercado: conte a "história" dele costurando naturalmente \
+as dimensões e sinais que importam — os pontos fortes E os fracos, com os números reais —, e explique, em \
+linguagem natural, por que o MOS ficou onde ficou (inclusive por que uma dimensão forte, ex.: volume, não \
+leva o MOS ao máximo, porque as demais dimensões, somadas ao seu peso, o seguram; o Volume de Demanda é a \
+de maior peso mas responde por menos da metade do total).
+3) UM PARÁGRAFO DE FECHO com a recomendação prática para ESTE país (entrar agora / testar / esperar / \
+despriorizar) e o principal motivo — SEM comparar com outros países."""
+
+_STRUCTURE_EN_MULTI = """PRODUCE, in this order:
+1) One short recommendation line — the countries' priority order by MOS (quoting each MOS).
+2) ONE FLOWING PARAGRAPH PER COUNTRY (a single cohesive paragraph each): tell that market's "story", \
+weaving in naturally the dimensions and signals that matter — the strengths AND the weaknesses, with the \
+real numbers — and explain, in plain prose, why the MOS landed where it did. Cover the essentials of the \
+dimensions without listing them mechanically; make clear, within the text, why a strong dimension (e.g. \
+volume) does NOT push the MOS to the max — because the other dimensions, plus their weight, hold it back \
+(Demand Volume carries the most weight but less than half the total). Explain the weighting logic in words, \
+no need to quote numeric weights.
+3) ONE FINAL PARAGRAPH comparing all the countries — who leads and why, the trade-offs (huge volume vs. \
+purchasing power, high-quality niche vs. scale), and the prioritization recommendation."""
+
+_STRUCTURE_EN_SINGLE = """PRODUCE (there is ONLY ONE country in this analysis — so do NOT use any \
+"priority order", "ranking" or "comparison between countries" language; there is nothing to compare):
+1) An opening sentence with this market's verdict — the country, its MOS and the band (e.g. good/moderate/\
+weak opportunity).
+2) ONE or TWO FLOWING PARAGRAPHS analysing THIS market: tell its "story", weaving in naturally the \
+dimensions and signals that matter — the strengths AND the weaknesses, with the real numbers — and explain, \
+in plain prose, why the MOS landed where it did (including why a strong dimension, e.g. volume, does not \
+push the MOS to the max, because the other dimensions plus their weight hold it back; Demand Volume carries \
+the most weight but less than half the total).
+3) ONE CLOSING PARAGRAPH with the practical recommendation for THIS country (enter now / test / wait / \
+deprioritize) and the main reason — WITHOUT comparing to other countries."""
+
+
+def _system_prompt(language: str, *, single_country: bool) -> str:
     lang = (language or "").strip().lower()
     if lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português"):
-        return _SYSTEM_PROMPT_PT
+        structure = _STRUCTURE_PT_SINGLE if single_country else _STRUCTURE_PT_MULTI
+        return _SYSTEM_PROMPT_PT.replace("{structure}", structure)
+    structure = _STRUCTURE_EN_SINGLE if single_country else _STRUCTURE_EN_MULTI
+    base = _SYSTEM_PROMPT_EN.replace("{structure}", structure)
     if lang in ("en", "en-us", "en_us", "english"):
-        return _SYSTEM_PROMPT_EN
-    return f'{_SYSTEM_PROMPT_EN}\n\nWrite the entire narrative in this language: "{language}".'
+        return base
+    return f'{base}\n\nWrite the entire narrative in this language: "{language}".'
 
 
 class ExplanationClient:
@@ -128,9 +202,15 @@ class ExplanationClient:
         self._session = session
         self._indicator_repo = IndicatorRepository(session)
         self._explanation_repo = MetricExplanationRepository(session)
+        self._mos_repo = MosRepository(session)
 
     async def _country_evidence(
-        self, entity_key: uuid.UUID, mos_result: MosResult, period_key: str, catalog: ExplanationCatalog
+        self,
+        entity_key: uuid.UUID,
+        mos_result: MosResult,
+        period_key: str,
+        catalog: ExplanationCatalog,
+        weights: dict[str, float],
     ) -> dict[str, Any]:
         country = mos_result.country
         country_values = await self._indicator_repo.get_values_for(
@@ -170,9 +250,12 @@ class ExplanationClient:
                     "label": catalog.label(dim.value),
                     "score": round(score, 1),
                     "band": band,
+                    "weight": weights.get(dim.value),  # Rank-Reciprocal weight in the MOS aggregation
                     "explanation": catalog.render(code=dim.value, score=score, band=band),
                 }
             )
+        # Highest weight first, so the narrative walks dimensions by importance.
+        dimensions.sort(key=lambda d: (d["weight"] is not None, d["weight"] or 0), reverse=True)
         return {
             "country": country,
             "mos": round(float(mos_result.mos), 1) if mos_result.mos is not None else None,
@@ -183,7 +266,13 @@ class ExplanationClient:
         }
 
     async def generate(
-        self, *, entity_key: uuid.UUID, product_name: str, mos_results: list[MosResult], period_key: str
+        self,
+        *,
+        entity_key: uuid.UUID,
+        product_name: str,
+        mos_results: list[MosResult],
+        period_key: str,
+        demand_ruler: dict[str, Any] | None = None,
     ) -> str | None:
         scored = [r for r in mos_results if r.mos is not None]
         if not scored:
@@ -196,10 +285,23 @@ class ExplanationClient:
             glossary = {
                 code: {"label": entry.label, "meaning": entry.meaning} for code, entry in catalog.metrics.items()
             }
-            countries = [await self._country_evidence(entity_key, r, period_key, catalog) for r in scored]
-            system = _system_prompt(settings.ollama_llm_narrative_language)
+            # Rank-Reciprocal dimension weights — so the narrative can explain the
+            # WEIGHTED aggregation (why a country strong on one dimension isn't
+            # automatically a top MOS).
+            weights: dict[str, float] = {}
+            for dim in IndicatorDimension:
+                row = await self._mos_repo.get_weight(dim.value, period_key)
+                if row is not None:
+                    weights[dim.value] = round(float(row.weight), 3)
+            countries = [await self._country_evidence(entity_key, r, period_key, catalog, weights) for r in scored]
+            system = _system_prompt(settings.ollama_llm_narrative_language, single_country=len(scored) == 1)
             user = json.dumps(
-                {"product_name": product_name, "glossary": glossary, "countries": countries},
+                {
+                    "product_name": product_name,
+                    "demand_ruler": demand_ruler,
+                    "glossary": glossary,
+                    "countries": countries,
+                },
                 ensure_ascii=False,
                 indent=2,
             )

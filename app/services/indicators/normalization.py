@@ -101,6 +101,19 @@ def normalization_method(indicator_code: IndicatorCode) -> NormalizationMethod:
     return NormalizationMethod.MINMAX_FIXED
 
 
+def normalize_demand_volume(raw_value: Decimal | float, ceiling: float) -> tuple[float | None, str | None]:
+    """Demand Volume (trend_score) normalized against the PRODUCT'S REFERENCE
+    MARKET volume as the 100-point ceiling (Cap. 4 §4.2.1, 2026-07-22): score =
+    value / ceiling x 100, saturating at 100. Linear (proportional to volume),
+    per-product ruler — replaces the fixed 2M ceiling so a niche product isn't
+    floored. The caller supplies the reference-market volume (or a fallback
+    ceiling) and only uses this when ceiling > 0."""
+    value = float(raw_value)
+    if ceiling <= 0:
+        return None, "Demand Volume reference-market ceiling <= 0 (cannot normalize)"
+    return max(0.0, min(100.0, value / ceiling * 100)), None
+
+
 def normalize(
     *,
     indicator_code: IndicatorCode,

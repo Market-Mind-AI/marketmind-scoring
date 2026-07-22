@@ -1,10 +1,13 @@
 """Fase 5 — POST /catalog/identify-image. The vision model brings everything it
-can read from the photo (product name, brand, category, price/age, and — when
-it manages — the per-country search terms). A separate TEXT LLM then ENRICHES
-the result with whatever is missing, above all `localized_markets`: the local
-vision model is unreliable at producing localized search vocabulary, and demand
-collection cannot run without it. localized_markets therefore NEVER comes back
-empty — vision → enrichment LLM → deterministic fallback, in that order.
+can read from the photo (product name, brand, category, price/age, and — when it
+manages — the per-country search terms). A separate TEXT LLM then ENRICHES the
+result with what vision is unreliable at:
+
+  - localized_markets: filled for every requested country (vision → enrichment →
+    deterministic fallback), so it NEVER comes back empty.
+  - reference_market: the single supported country with the highest online
+    search demand for the product — its absolute volume becomes the Demand
+    Volume ruler ceiling (Cap. 4 §4.2.1). Always determined here.
 
 Synchronous and lightweight, deliberately separate from POST /analyze (user
 request, 2026-07-08): the frontend shows this result and lets the user correct
@@ -20,6 +23,7 @@ from app.repositories.country_repository import CountryRepository
 from app.schemas.catalog import IdentifyImageResponse, ImageMediaType
 from app.services.catalog_service import CatalogService
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
+from app.services.reference_market_client import ReferenceMarketClient, ReferenceMarketError
 from app.services.vision_client import MarketTerms, VisionClient
 
 
@@ -57,10 +61,12 @@ class ProductIdentificationService:
         session: AsyncSession,
         vision_client: VisionClient | None = None,
         enrichment_client: EnrichmentClient | None = None,
+        reference_market_client: ReferenceMarketClient | None = None,
     ) -> None:
         self._session = session
         self._vision_client = vision_client or VisionClient()
         self._enrichment_client = enrichment_client or EnrichmentClient()
+        self._reference_market_client = reference_market_client or ReferenceMarketClient()
         self._catalog_service = CatalogService(session)
         self._country_repo = CountryRepository(session)
 
@@ -74,15 +80,12 @@ class ProductIdentificationService:
             countries=countries,
         )
 
-        # Vision brings whatever markets it managed; the ISO3-keyed dict persisted
-        # on product_catalog.localized_markets is then completed for EVERY
-        # requested country (enrichment LLM, then deterministic fallback).
         localized_markets: dict[str, dict[str, Any]] = {
             market.country: _market_to_dict(market)
             for market in identification.markets
             if _has_terms(_market_to_dict(market))
         }
-        localized_markets = await self._complete_markets(
+        localized_markets, reference_candidates = await self._enrich(
             localized_markets,
             countries=countries,
             product_name=identification.product_name,
@@ -100,6 +103,7 @@ class ProductIdentificationService:
             source="image_identification",
             category=identification.category,
             localized_markets=localized_markets or None,
+            reference_candidates=reference_candidates or None,
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
         )
@@ -112,6 +116,7 @@ class ProductIdentificationService:
             brand=identification.brand,
             category=identification.category,
             localized_markets=localized_markets or None,
+            reference_candidates=reference_candidates or None,
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
             estimated_price=identification.estimated_price,
@@ -119,7 +124,7 @@ class ProductIdentificationService:
             confidence=identification.confidence,
         )
 
-    async def _complete_markets(
+    async def _enrich(
         self,
         localized_markets: dict[str, dict[str, Any]],
         *,
@@ -127,32 +132,51 @@ class ProductIdentificationService:
         product_name: str,
         brand: str | None,
         category: str | None,
-    ) -> dict[str, dict[str, Any]]:
-        """Guarantee a usable localized_markets entry for every requested
-        country: fill the ones vision missed via the enrichment LLM, then a
-        deterministic fallback for anything still missing. Never raises."""
+    ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        """One enrichment call does both: fill the localized markets vision
+        missed AND propose the ranked reference-market candidates. Guarantees
+        localized_markets covers every requested country (enrichment, then
+        deterministic fallback). The candidates are best-effort (empty if the LLM
+        errors — the analysis then falls back to another ruler); real volume
+        picks the winner among them later."""
+        supported = [c.iso3 for c in await self._country_repo.list_all()]
+        supported_set = set(supported)
         missing = [c for c in countries if not _has_terms(localized_markets.get(c))]
-        if not missing:
-            return localized_markets
 
+        # (1) localized_markets for the countries vision missed — local TEXT LLM.
         try:
-            country_langs = [(iso3, await self._search_language(iso3)) for iso3 in missing]
-            enriched = await self._enrichment_client.localized_markets(
-                product_name=product_name, brand=brand, category=category, countries=country_langs
-            )
-            for market in enriched:
+            fill = [(iso3, await self._search_language(iso3)) for iso3 in missing]
+            for market in await self._enrichment_client.localized_markets(
+                product_name=product_name, brand=brand, category=category, countries=fill
+            ):
                 entry = _market_to_dict(market)
                 if market.country in missing and _has_terms(entry):
                     localized_markets[market.country] = entry
         except EnrichmentError as exc:
             logger.warning(f"localized_markets enrichment failed, using deterministic fallback: {exc}")
 
+        # (2) reference-market candidates — a REAL cloud LLM (real market knowledge).
+        reference_candidates: list[dict[str, Any]] = []
+        try:
+            seen: set[str] = set()
+            for cand in await self._reference_market_client.candidates(
+                product_name=product_name, brand=brand, category=category, supported_countries=supported
+            ):
+                entry = _market_to_dict(cand)
+                if cand.country in supported_set and cand.country not in seen and _has_terms(entry):
+                    reference_candidates.append({"country": cand.country, **entry})
+                    seen.add(cand.country)
+        except ReferenceMarketError as exc:
+            logger.warning(f"Reference-market candidates unavailable: {exc}")
+
         still_missing = [c for c in countries if not _has_terms(localized_markets.get(c))]
         for iso3 in still_missing:
             localized_markets[iso3] = _fallback_market(iso3, product_name, brand)
         if still_missing:
             logger.info(f"localized_markets deterministic fallback used for: {', '.join(still_missing)}")
-        return localized_markets
+        if not reference_candidates:
+            logger.info("No reference-market candidates — analysis will fall back to another Demand Volume ruler")
+        return localized_markets, reference_candidates
 
     async def _search_language(self, iso3: str) -> str | None:
         country = await self._country_repo.get_by_iso3(iso3)

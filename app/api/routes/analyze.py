@@ -40,6 +40,7 @@ async def analyze(
         source="analyze",
         category=request.category,
         localized_markets=request.localized_markets,
+        reference_candidates=request.reference_candidates,
         target_age_min=request.target_age_min,
         target_age_max=request.target_age_max,
     )
