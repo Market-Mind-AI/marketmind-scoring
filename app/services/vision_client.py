@@ -1,24 +1,21 @@
 """Vision provider for photo-based product identification (Fase 5,
-app/services/product_identification_service.py). Unlike embedding_client.py
-(OpenAI via raw httpx, a stopgap because Anthropic has no first-party
-embeddings endpoint), Anthropic *does* have a first-party vision endpoint —
-uses the official `anthropic` SDK directly, no stopgap needed. Isolated
-behind this one class so a provider swap stays a single-file change.
+app/services/product_identification_service.py). The actual LLM call goes
+through the provider RESOLVER (app/services/llm) — provider (claude/gpt/ollama)
+and model are chosen per the `vision` site from .env (default: ollama /
+qwen3-vl:8b-instruct), so swapping is an env-only change. This module owns the
+prompt + the structured schema; the provider is pure transport.
 
-Structured output (``output_format``) guarantees a parseable, schema-valid
+Structured output (``response_model``) guarantees a parseable, schema-valid
 result — never free text the caller has to regex out — consistent with the
 rest of this project's "no imputación por IA" ethos: the LLM identifies,
 it never silently invents a field outside the declared schema.
 """
 
-from anthropic import APIError as AnthropicAPIError
-from anthropic import AsyncAnthropic
-from anthropic.types import ImageBlockParam, TextBlockParam
 from pydantic import BaseModel, Field
 
-from app.core.config import settings
 from app.core.exceptions import MarketMindCoreError
 from app.schemas.catalog import ImageMediaType
+from app.services.llm import ImageInput, LLMError, resolve_vision_llm
 
 
 class VisionError(MarketMindCoreError):
@@ -99,7 +96,10 @@ class ProductIdentification(BaseModel):
 
 class VisionClient:
     def __init__(self) -> None:
-        self._client = AsyncAnthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
+        # Provider + model resolved from .env for the `vision` site (default:
+        # ollama / qwen3-vl:8b-instruct). Constructing here fails fast if the
+        # chosen provider is misconfigured (e.g. a missing API key).
+        self._provider = resolve_vision_llm()
 
     async def identify_product(
         self,
@@ -109,9 +109,6 @@ class VisionClient:
         hint_text: str | None,
         countries: list[str],
     ) -> ProductIdentification:
-        if self._client is None:
-            raise VisionError("ANTHROPIC_API_KEY is not configured")
-
         country_list = ", ".join(countries) if countries else "(none provided)"
         instructions = (
             "Identify this product for a cross-country market-demand analysis. "
@@ -122,7 +119,9 @@ class VisionClient:
             "`markets`: provide EXACTLY ONE entry for EACH of these ISO-3166 alpha-3 countries: "
             f"{country_list}. For each country, `search_terms` is a GENEROUS list of the real terms a local "
             "buyer actually types for THIS product — genuine colloquial/regional/loanword names and spelling/"
-            "spacing variants, NEVER word-for-word translations. The system pulls each term's ABSOLUTE monthly "
+            "spacing variants, NEVER word-for-word translations, and ALWAYS also include the original English/"
+            "Latin-script brand+model names (e.g. 'KTM 390 Duke') in every market's list. The system pulls "
+            "each term's ABSOLUTE monthly "
             "search volume and SUMS them, so more real terms = more captured demand (be generous, but every "
             "term must truly mean this product). Set `primary_name` to the single most-used term, and use "
             "`excluded_terms` to list look-alike terms that mean something ELSE in that market (e.g. yerba mate "
@@ -132,24 +131,14 @@ class VisionClient:
             "'fritadeira sem óleo'], excluded_terms ['fritadeira de óleo']."
         )
         prompt = f"{instructions}\n\nAdditional context from the user: {hint_text}" if hint_text else instructions
-        image_block: ImageBlockParam = {
-            "type": "image",
-            "source": {"type": "base64", "media_type": image_media_type, "data": image_base64},
-        }
-        text_block: TextBlockParam = {"type": "text", "text": prompt}
         try:
-            response = await self._client.messages.parse(
-                model=settings.anthropic_vision_model,
-                # Generous budget: the per-country `markets` (real search terms
-                # for every requested country) is a large structured payload —
-                # 1024 forced the model to return an empty markets list.
-                max_tokens=8192,
-                messages=[{"role": "user", "content": [image_block, text_block]}],
-                output_format=ProductIdentification,
+            result = await self._provider.complete(
+                user=prompt,
+                image=ImageInput(base64_data=image_base64, media_type=image_media_type),
+                response_model=ProductIdentification,
             )
-        except AnthropicAPIError as exc:
-            raise VisionError(f"Failed to call Anthropic vision API: {exc}") from exc
-
-        if response.parsed_output is None:
-            raise VisionError(f"Anthropic vision API returned no parseable result (stop_reason={response.stop_reason})")
-        return response.parsed_output
+        except LLMError as exc:
+            raise VisionError(f"Vision LLM call failed: {exc}") from exc
+        if not isinstance(result, ProductIdentification):  # defensive; the schema is enforced by the provider
+            raise VisionError("Vision LLM returned an unexpected result type")
+        return result

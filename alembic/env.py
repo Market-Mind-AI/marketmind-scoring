@@ -12,6 +12,8 @@ from app.db.models import (  # noqa: F401
     IndicatorWeight,
     Job,
     JobTask,
+    MetricBandPhrase,
+    MetricExplanation,
     MonthlySnapshot,
     MosResult,
     NormalizationReference,

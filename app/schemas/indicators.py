@@ -27,6 +27,7 @@ class IndicatorValueResponse(BaseModel):
     notes: str | None
     business_context: str | None
     interpretation_band: str | None
+    explanation: str | None
     computed_at: datetime
 
 

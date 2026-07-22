@@ -66,6 +66,18 @@ INDICATOR_MEANING: dict[IndicatorCode, str] = {
     ),
 }
 
+# The MOS itself (Cap. 5) — the single 0-100 market-opportunity score a country
+# gets, the weighted TOPSIS aggregation of all dimensions. Its own meaning row so
+# the final LLM can narrate the headline number, not only the parts.
+MOS_MEANING: str = (
+    "MARKET OPPORTUNITY SCORE — the single 0-100 verdict on how attractive this country is for "
+    "selling this product right now, aggregating every dimension (demand volume and quality, macro "
+    "demand structure, economic and digital readiness, market size, demographic sustainability) with "
+    "Rank-Reciprocal priority weights via TOPSIS. Higher = a better place to sell. It is a RANKING "
+    "signal ('where to sell first'), not a sales forecast: read it together with the dimension and "
+    "signal breakdown to explain WHY a country lands where it does."
+)
+
 DIMENSION_MEANING: dict[IndicatorDimension, str] = {
     IndicatorDimension.DEMAND_VOLUME: (
         "How MANY people actually want to buy this product here — the absolute size of real online "

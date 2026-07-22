@@ -131,6 +131,7 @@ class IndicatorRepository:
         notes: str | None,
         business_context: str | None = None,
         interpretation_band: str | None = None,
+        explanation: str | None = None,
     ) -> IndicatorValue:
         existing = await self.get_value(entity_key, country, indicator_code, period_type, period_key)
         raw_decimal = None if raw_value is None else Decimal(str(raw_value))
@@ -146,6 +147,7 @@ class IndicatorRepository:
             existing.notes = notes
             existing.business_context = business_context
             existing.interpretation_band = interpretation_band
+            existing.explanation = explanation
             existing.computed_at = utc_now()
             await self._session.flush()
             return existing
@@ -166,6 +168,7 @@ class IndicatorRepository:
             notes=notes,
             business_context=business_context,
             interpretation_band=interpretation_band,
+            explanation=explanation,
             computed_at=utc_now(),
         )
         self._session.add(row)

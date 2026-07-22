@@ -15,7 +15,7 @@ class AnalyzeRequest(BaseModel):
         default=None,
         description=(
             "Per-COUNTRY curated search vocabulary from identify-image, keyed by ISO3 "
-            "({\"<ISO3>\": {primary_name, formal_name?, search_terms, excluded_terms, confidence}})."
+            '({"<ISO3>": {primary_name, formal_name?, search_terms, excluded_terms, confidence}}).'
         ),
     )
     target_age_min: int | None = None

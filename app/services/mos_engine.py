@@ -22,6 +22,7 @@ from app.db.models.mos_result import MosResult
 from app.domain.enums import AvailabilityStatus, IndicatorDimension, PeriodType
 from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
+from app.repositories.metric_explanation_repository import MetricExplanationRepository
 from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
 from app.services.mos.country_vectors import CountryVectorBuilder
@@ -42,6 +43,7 @@ class MosEngine:
         self._product_repo = ProductRepository(session)
         self._country_repo = CountryRepository(session)
         self._vector_builder = CountryVectorBuilder(session)
+        self._explanation_repo = MetricExplanationRepository(session)
 
     async def compute_mos(
         self, *, entity_key: uuid.UUID, countries: list[str], period_key: str | None = None
@@ -141,6 +143,10 @@ class MosEngine:
 
         library_topsis, library_mos = await self._classical_comparison(country_iso3, period_key, subscores)
 
+        band = mos_band(mos)
+        catalog = await self._explanation_repo.catalog()
+        explanation = catalog.render(code="mos", score=mos, band=band)
+
         return await self._mos_repo.upsert_mos_result(
             entity_key=entity_key,
             country=country_iso3,
@@ -152,7 +158,8 @@ class MosEngine:
             topsis_score=topsis,
             library_topsis_score=library_topsis,
             library_mos=library_mos,
-            mos_interpretation=mos_band(mos),
+            mos_interpretation=band,
+            explanation=explanation,
             availability_status=AvailabilityStatus.AVAILABLE.value,
             excluded_reason=None,
         )

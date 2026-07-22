@@ -192,9 +192,7 @@ async def compute_growth_score(search_terms: list[str], location: str, period_ke
     )
 
 
-async def compute_demand_stability_score(
-    search_terms: list[str], location: str, period_key: str
-) -> RawIndicatorResult:
+async def compute_demand_stability_score(search_terms: list[str], location: str, period_key: str) -> RawIndicatorResult:
     """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev/mean (population stddev) of the
     SUMMED monthly_searches series."""
     engine = get_external_engine(DataSource.PYTRENDS)

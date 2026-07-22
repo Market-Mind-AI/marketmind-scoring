@@ -42,6 +42,10 @@ class MosResult(Base):
     library_topsis_score: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     library_mos: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     mos_interpretation: Mapped[str | None] = mapped_column(nullable=True)
+    # Frase determinística que explica ESTE MOS (label + banda + score + a frase
+    # da faixa do MOS de metric_band_phrases), levada ao LLM final junto do
+    # breakdown das dimensões. Ver app/services/mos/explanation_builder.py.
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     availability_status: Mapped[str] = mapped_column(nullable=False)
     excluded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     computed_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)

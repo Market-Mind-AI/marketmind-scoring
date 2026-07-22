@@ -148,6 +148,12 @@ async def test_high_trend_score_has_no_cap(db_session: AsyncSession) -> None:
     assert float(result.mos or 0) == pytest.approx(90.0)
     assert float(result.mos_before_cap or 0) == pytest.approx(90.0)
     assert float(result.topsis_score or 0) == pytest.approx(0.9)
+    # The MOS carries its DB-parametrized per-score explanation (band phrase +
+    # number), built from metric_band_phrases (seeded by migration 016).
+    assert result.explanation is not None
+    assert result.mos_interpretation is not None
+    assert result.mos_interpretation in result.explanation
+    assert "(90/100)" in result.explanation
 
 
 async def test_mos_is_independent_per_country(db_session: AsyncSession) -> None:

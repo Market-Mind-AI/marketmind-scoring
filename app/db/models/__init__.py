@@ -5,6 +5,7 @@ from app.db.models.indicator_value import IndicatorValue
 from app.db.models.indicator_weight import IndicatorWeight
 from app.db.models.job import Job
 from app.db.models.job_task import JobTask
+from app.db.models.metric_explanation import MetricBandPhrase, MetricExplanation
 from app.db.models.monthly_snapshot import MonthlySnapshot
 from app.db.models.mos_result import MosResult
 from app.db.models.normalization_reference import NormalizationReference
@@ -19,6 +20,8 @@ __all__ = [
     "IndicatorWeight",
     "Job",
     "JobTask",
+    "MetricBandPhrase",
+    "MetricExplanation",
     "MonthlySnapshot",
     "MosResult",
     "NormalizationReference",

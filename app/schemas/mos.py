@@ -24,6 +24,7 @@ class MosResultResponse(BaseModel):
     library_topsis_score: Decimal | None
     library_mos: Decimal | None
     mos_interpretation: str | None
+    explanation: str | None
     availability_status: str
     excluded_reason: str | None
     computed_at: datetime

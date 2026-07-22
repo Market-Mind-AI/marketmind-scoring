@@ -50,10 +50,26 @@ class Settings(BaseSettings):
     worldbank_api_base_url: str = "http://host.docker.internal:8003"
     oecd_api_base_url: str = "http://host.docker.internal:8001"
     undata_api_base_url: str = "http://host.docker.internal:8002"
-    # Final LLM inference service (marketmind-ollma-llm, port 8005) — turns the
-    # deterministic MOS + context into a business narrative via a LOCAL Ollama
-    # model (qwen3:14b). Best-effort: if it's down/slow the analysis still
-    # succeeds with the numbers, just without the narrative.
+    # LLM PROVIDER RESOLVER (2026-07-22). Every LLM call site picks its provider
+    # and model INDEPENDENTLY from the env — swap models/providers by editing
+    # .env only, no code change. Provider code is one of: "claude" (Anthropic
+    # SDK), "gpt" (OpenAI SDK), "ollama" (routed through the marketmind-ollma-llm
+    # gateway). See app/services/llm/resolver.py.
+    #   - vision: the identify-image call (needs a VISION model).
+    #   - enrichment: fills the JSON fields the vision model left out — above all
+    #     localized_markets, which must never be empty (a TEXT model, not vision:
+    #     the local vision model is unreliable at producing localized terms).
+    #   - explanation: the final MOS-narrative call (text).
+    vision_llm_provider: str = "ollama"
+    vision_llm_model: str = "qwen3-vl:8b-instruct"
+    enrichment_llm_provider: str = "ollama"
+    enrichment_llm_model: str = "qwen3:14b"
+    explanation_llm_provider: str = "ollama"
+    explanation_llm_model: str = "gemma4:12b"
+
+    # marketmind-ollma-llm gateway (port 8005) — the transport used when a site's
+    # provider is "ollama"; routes to a LOCAL Ollama model. Best-effort for the
+    # explanation (analysis still completes without a narrative if it's down).
     ollama_llm_api_base_url: str = "http://host.docker.internal:8005"
     ollama_llm_timeout_seconds: float = 300.0
     ollama_llm_narrative_language: str = "pt"

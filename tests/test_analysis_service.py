@@ -39,6 +39,7 @@ def _mos_result(country: str) -> MosResultResponse:
         library_topsis_score=None,
         library_mos=None,
         mos_interpretation="Good Opportunity",
+        explanation="Market Opportunity Score - Good Opportunity (70/100): A solid market worth pursuing.",
         availability_status="available",
         excluded_reason=None,
         computed_at=datetime(2026, 7, 8),
@@ -61,6 +62,7 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     analysis_repo = _install("analysis_repo", "app.services.analysis_service.AnalysisRepository")
     product_repo = _install("product_repo", "app.services.analysis_service.ProductRepository")
     country_repo = _install("country_repo", "app.services.analysis_service.CountryRepository")
+    indicator_repo = _install("indicator_repo", "app.services.analysis_service.IndicatorRepository")
     coverage_service = _install("coverage_service", "app.services.analysis_service.CoverageService")
     indicator_engine = _install("indicator_engine", "app.services.analysis_service.IndicatorEngine")
     mos_engine = _install("mos_engine", "app.services.analysis_service.MosEngine")
@@ -85,6 +87,20 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     country_repo.get_by_iso3 = AsyncMock(
         return_value=SimpleNamespace(search_language="en", pytrends_geo=None, iso2="US")
     )
+
+    # Availability-aware coverage (2026-07-22): a demand gap is force-recollected
+    # when its computed indicator is missing/unavailable. Mirror all_covered —
+    # when everything is covered the demand indicators are available (so no
+    # forced re-collection), otherwise they are empty (forces collection).
+    demand_values = (
+        {
+            code: SimpleNamespace(normalized_score=Decimal("50"), availability_status="available")
+            for code in ("trend_score", "growth_score", "demand_stability_score", "search_intent_score")
+        }
+        if all_covered
+        else {}
+    )
+    indicator_repo.get_values_for = AsyncMock(return_value=demand_values)
 
     coverage_service.check_coverage = AsyncMock(
         side_effect=lambda gaps: [
@@ -181,6 +197,41 @@ async def test_demand_gaps_built_from_localized_markets() -> None:
 
     kfk = pytrends_gaps["keywords_for_keywords"]
     assert kfk.collection_params == {"location": "US", "language": "en", "seed_keywords": ["air fryer", "airfryer"]}
+
+
+async def test_forces_recollect_of_unavailable_demand_indicator_even_if_covered() -> None:
+    # The fix (2026-07-22): coverage-fresh is NOT enough — if a computed demand
+    # indicator is unavailable, the feeding collection must re-run so the country
+    # isn't stranded. Here search_volume's indicators are available but intent is
+    # unavailable, so ONLY keywords_for_keywords is force-recollected.
+    session, mocks = _patched_service(all_covered=True)
+    mocks["indicator_repo"].get_values_for = AsyncMock(
+        return_value={
+            "trend_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
+            "growth_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
+            "demand_stability_score": SimpleNamespace(
+                normalized_score=Decimal("50"), availability_status="available"
+            ),
+            "search_intent_score": SimpleNamespace(normalized_score=None, availability_status="unavailable"),
+        }
+    )
+    try:
+        service = AnalysisService(session)
+        await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    dispatched = [
+        gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]
+    ]
+    by_code = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS}
+    # Only the intent collection is re-run (its indicator was unavailable); the
+    # already-available search_volume is left alone.
+    assert "keywords_for_keywords" in by_code
+    assert by_code["keywords_for_keywords"].force is True
+    assert "search_volume" not in by_code
 
 
 async def test_run_aborts_when_data_incomplete_never_partial_mos() -> None:

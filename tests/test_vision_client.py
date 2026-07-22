@@ -1,23 +1,20 @@
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from anthropic import APIConnectionError
 
-from app.core.config import settings
+from app.services.llm import LLMError
 from app.services.vision_client import ProductIdentification, VisionClient, VisionError
 
 
-def _mock_anthropic_client(parsed_output: ProductIdentification | None, stop_reason: str = "end_turn") -> AsyncMock:
-    client = AsyncMock()
-    client.messages.parse = AsyncMock(
-        return_value=SimpleNamespace(parsed_output=parsed_output, stop_reason=stop_reason)
-    )
-    return client
+def _mock_provider(*, returns: object = None, raises: Exception | None = None) -> AsyncMock:
+    """A stand-in LLM provider whose async `complete` returns/raises as told."""
+    provider = AsyncMock()
+    provider.complete = AsyncMock(return_value=returns, side_effect=raises)
+    return provider
 
 
-async def test_identify_product_returns_parsed_output() -> None:
-    identification = ProductIdentification(
+def _identification() -> ProductIdentification:
+    return ProductIdentification(
         product_name="air fryer",
         brand="Philips",
         category="kitchen",
@@ -27,54 +24,42 @@ async def test_identify_product_returns_parsed_output() -> None:
         price_currency="USD",
         confidence=0.9,
     )
-    with (
-        patch.object(settings, "anthropic_api_key", "test-key"),
-        patch("app.services.vision_client.AsyncAnthropic", return_value=_mock_anthropic_client(identification)),
-    ):
+
+
+async def test_identify_product_returns_result() -> None:
+    # VisionClient delegates to the resolved provider (default ollama /
+    # qwen3-vl:8b-instruct) and returns its structured result.
+    provider = _mock_provider(returns=_identification())
+    with patch("app.services.vision_client.resolve_vision_llm", return_value=provider):
         client = VisionClient()
         result = await client.identify_product(
             image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
         )
 
     assert result.product_name == "air fryer"
-    assert result.brand == "Philips"
     assert result.estimated_price == 89.9
+    # The image + structured schema were passed to the provider.
+    _, kwargs = provider.complete.call_args
+    assert kwargs["response_model"] is ProductIdentification
+    assert kwargs["image"].base64_data == "ZmFrZQ=="
 
 
-async def test_identify_product_raises_without_api_key() -> None:
-    with patch.object(settings, "anthropic_api_key", ""):
+async def test_identify_product_wraps_provider_errors() -> None:
+    provider = _mock_provider(raises=LLMError("model unavailable"))
+    with patch("app.services.vision_client.resolve_vision_llm", return_value=provider):
         client = VisionClient()
-        with pytest.raises(VisionError, match="ANTHROPIC_API_KEY is not configured"):
+        with pytest.raises(VisionError, match="Vision LLM call failed"):
             await client.identify_product(
                 image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
             )
 
 
-async def test_identify_product_wraps_api_errors() -> None:
-    fake_request = SimpleNamespace(method="POST", url="https://api.anthropic.com/v1/messages")
-    mock_client = AsyncMock()
-    mock_client.messages.parse = AsyncMock(side_effect=APIConnectionError(request=fake_request))  # type: ignore[arg-type]
-    with (
-        patch.object(settings, "anthropic_api_key", "test-key"),
-        patch("app.services.vision_client.AsyncAnthropic", return_value=mock_client),
-    ):
+async def test_identify_product_rejects_unexpected_result_type() -> None:
+    # If a provider ever returns free text instead of the structured model.
+    provider = _mock_provider(returns="not a ProductIdentification")
+    with patch("app.services.vision_client.resolve_vision_llm", return_value=provider):
         client = VisionClient()
-        with pytest.raises(VisionError, match="Failed to call Anthropic vision API"):
-            await client.identify_product(
-                image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
-            )
-
-
-async def test_identify_product_raises_when_no_parsed_output() -> None:
-    with (
-        patch.object(settings, "anthropic_api_key", "test-key"),
-        patch(
-            "app.services.vision_client.AsyncAnthropic",
-            return_value=_mock_anthropic_client(None, stop_reason="max_tokens"),
-        ),
-    ):
-        client = VisionClient()
-        with pytest.raises(VisionError, match="returned no parseable result"):
+        with pytest.raises(VisionError, match="unexpected result type"):
             await client.identify_product(
                 image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
             )

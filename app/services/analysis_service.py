@@ -18,9 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
-from app.domain.enums import DataSource
+from app.db.models.indicator_value import IndicatorValue
+from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, PeriodType
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.country_repository import CountryRepository
+from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.coverage import CoverageGap
 from app.schemas.mos import MosResultResponse
@@ -43,6 +45,33 @@ _HISTORY_WINDOW_MONTHS = 6
 # freshness tracking, not how much history each source is asked to fetch.
 _ANNUAL_LOOKBACK_YEARS = 10
 
+# Raw PyTrends collection -> the computed demand indicators it feeds (Cap. 4
+# §4.2). Coverage is tracked per raw collection, but "covered" must mean "the
+# indicator is usable", NOT merely "a collection run finished": a run can
+# succeed yet leave its indicator unavailable (e.g. related keywords returned
+# with no search volume). So a demand gap is force-recollected whenever ANY
+# indicator it feeds is still missing/unavailable — the analysis always retries
+# exactly the countries/signals that lack data instead of skipping them as
+# already covered (user 2026-07-22: "o grande problema foi não tentar coletar
+# os outros países").
+_DEMAND_COLLECTION_OUTPUTS: dict[str, tuple[IndicatorCode, ...]] = {
+    "search_volume": (
+        IndicatorCode.TREND_SCORE,
+        IndicatorCode.GROWTH_SCORE,
+        IndicatorCode.DEMAND_STABILITY_SCORE,
+    ),
+    "keywords_for_keywords": (IndicatorCode.SEARCH_INTENT_SCORE,),
+}
+
+
+def _is_available(values: dict[str, IndicatorValue], code: IndicatorCode) -> bool:
+    iv = values.get(code.value)
+    return (
+        iv is not None
+        and iv.normalized_score is not None
+        and iv.availability_status != AvailabilityStatus.UNAVAILABLE.value
+    )
+
 
 class AnalysisService:
     def __init__(self, session: AsyncSession) -> None:
@@ -50,6 +79,7 @@ class AnalysisService:
         self._analysis_repo = AnalysisRepository(session)
         self._product_repo = ProductRepository(session)
         self._country_repo = CountryRepository(session)
+        self._indicator_repo = IndicatorRepository(session)
         self._coverage_service = CoverageService(session)
         self._indicator_engine = IndicatorEngine(session)
         self._mos_engine = MosEngine(session)
@@ -159,6 +189,17 @@ class AnalysisService:
             location = country.iso2 if country is not None else None
             language = (country.search_language if country is not None else None) or "en"
             if search_terms and location is not None:
+                # Force re-collection of any demand gap whose computed indicators
+                # are still missing/unavailable for this country (see
+                # _DEMAND_COLLECTION_OUTPUTS): a prior run may have "covered" the
+                # raw collection while leaving the indicator empty, and skipping
+                # it would strand that country forever.
+                current = await self._indicator_repo.get_values_for(
+                    entity_key=entity_key,
+                    country=country_iso3,
+                    period_type=PeriodType.MONTH.value,
+                    period_key=current_month_period_key(),
+                )
                 gaps.append(
                     CoverageGap(
                         source=DataSource.PYTRENDS,
@@ -167,6 +208,7 @@ class AnalysisService:
                         indicator_code="search_volume",
                         period_key=current_month_period_key(),
                         collection_params={"location": location, "language": language, "keywords": search_terms},
+                        force=self._demand_gap_needs_recollect(current, "search_volume"),
                     )
                 )
                 gaps.append(
@@ -181,6 +223,7 @@ class AnalysisService:
                             "language": language,
                             "seed_keywords": search_terms[:20],
                         },
+                        force=self._demand_gap_needs_recollect(current, "keywords_for_keywords"),
                     )
                 )
 
@@ -240,6 +283,18 @@ class AnalysisService:
             unique_gaps.append(gap)
 
         statuses = await self._coverage_service.check_coverage(unique_gaps)
-        missing = [gap for gap, status in zip(unique_gaps, statuses, strict=True) if not status.covered]
+        # A forced gap (its computed indicator is missing/unavailable) must be
+        # collected even when its raw coverage row looks fresh — otherwise the
+        # stale "covered" flag would strand a country whose indicator is empty.
+        missing = [gap for gap, status in zip(unique_gaps, statuses, strict=True) if gap.force or not status.covered]
         if missing:
             await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")
+
+    @staticmethod
+    def _demand_gap_needs_recollect(current: dict[str, IndicatorValue], collection_code: str) -> bool:
+        """True when a demand collection must (re-)run: any computed indicator it
+        feeds is still missing/unavailable for this country/period. Keeps the
+        analysis filling exactly the gaps a previous run left empty, without
+        re-collecting what is already usable."""
+        outputs = _DEMAND_COLLECTION_OUTPUTS.get(collection_code, ())
+        return any(not _is_available(current, code) for code in outputs)

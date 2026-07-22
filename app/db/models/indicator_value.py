@@ -44,6 +44,11 @@ class IndicatorValue(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     business_context: Mapped[str | None] = mapped_column(Text, nullable=True)
     interpretation_band: Mapped[str | None] = mapped_column(nullable=True)
+    # Frase determinística que explica ESTE número: label + banda + score + a
+    # frase da faixa (metric_band_phrases) + o detalhe concreto quando houver
+    # (ex.: volume/população/penetração da Demand Volume). Montada no cálculo e
+    # levada ao LLM final. Ver app/services/mos/explanation_builder.py.
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     computed_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     __table_args__ = (

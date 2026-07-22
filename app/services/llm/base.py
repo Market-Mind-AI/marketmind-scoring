@@ -1,0 +1,49 @@
+"""Provider-agnostic LLM abstraction (2026-07-22). Every LLM call site in the
+core goes through a provider resolved from the env (see resolver.py), so the
+provider (claude / gpt / ollama) and model can be swapped by editing .env only —
+no code change, and each site is independent.
+
+A provider exposes ONE method, ``complete``, covering the three shapes the core
+needs: plain text, vision (an image), and structured output (a Pydantic model).
+The prompt is always built by the caller (the core) and passed in — providers
+are pure transport, so switching providers never changes what is asked, only who
+answers. Consistent with the project principle that the LLM explains/identifies
+but never computes MOS values (Cap. 4 §4.0)."""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+from pydantic import BaseModel
+
+from app.core.exceptions import MarketMindCoreError
+
+
+class LLMError(MarketMindCoreError):
+    """An LLM provider call failed or returned an unusable result."""
+
+
+@dataclass(frozen=True)
+class ImageInput:
+    """A base64-encoded image for a vision call."""
+
+    base64_data: str
+    media_type: str = "image/jpeg"
+
+
+class LLMProvider(ABC):
+    """One resolved (provider, model) pair. ``complete`` returns a plain string
+    when ``response_model`` is None, or a validated instance of it otherwise
+    (callers pass a response_model and narrow the result with isinstance)."""
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+
+    @abstractmethod
+    async def complete(
+        self,
+        *,
+        system: str | None = None,
+        user: str,
+        image: ImageInput | None = None,
+        response_model: type[BaseModel] | None = None,
+    ) -> str | BaseModel: ...

@@ -42,7 +42,17 @@ if "test" not in settings.database_name.lower():
 # rows (discovered 2026-07-08: product_catalog grew to 767 rows across runs,
 # making embedding/trigram "no match expected" tests flaky — see memory
 # marketmind_known_gaps item 14).
-_PRESERVE_TABLES = {"countries", "normalization_reference"}
+#  - metric_explanations / metric_band_phrases: the explanation content seeded
+#    by migration 016 (the editable per-score/per-band phrases the engines read
+#    to build each score's `explanation`). Truncating them would leave the
+#    catalog empty, so every explanation would come back None after the first
+#    test. Like normalization_reference, they are migration-owned reference data.
+_PRESERVE_TABLES = {
+    "countries",
+    "normalization_reference",
+    "metric_explanations",
+    "metric_band_phrases",
+}
 
 
 @pytest.fixture(scope="session")

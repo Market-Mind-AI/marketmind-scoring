@@ -30,6 +30,7 @@ from app.domain.enums import (
 )
 from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
+from app.repositories.metric_explanation_repository import MetricExplanationRepository
 from app.repositories.product_repository import ProductRepository
 from app.services.collection_client import resolve_source_country_code
 from app.services.indicators import oecd as oecd_indicators
@@ -54,6 +55,7 @@ class IndicatorEngine:
         self._indicator_repo = IndicatorRepository(session)
         self._country_repo = CountryRepository(session)
         self._product_repo = ProductRepository(session)
+        self._explanation_repo = MetricExplanationRepository(session)
 
     async def compute_all(
         self, *, country_iso3: str, entity_key: uuid.UUID | None = None, period_key: str | None = None
@@ -246,15 +248,24 @@ class IndicatorEngine:
                 else:
                     # Fixed ceiling (Demand Volume): never widens, values above
                     # saturate at 100 (see normalization._NO_SELF_WIDEN).
-                    reference = await self._indicator_repo.get_reference(
-                        indicator_code.value, FIXED_BOUNDS_PERIOD_KEY
-                    )
+                    reference = await self._indicator_repo.get_reference(indicator_code.value, FIXED_BOUNDS_PERIOD_KEY)
 
             normalized_score, normalize_note = normalize(
                 indicator_code=indicator_code, raw_value=raw.raw_value, direction=raw.direction, reference=reference
             )
             if normalize_note is not None:
                 note = f"{note}; {normalize_note}" if note else normalize_note
+
+        band = None if normalized_score is None else score_band(normalized_score)
+        # Deterministic per-score explanation from the DB-parametrized content
+        # (label + band phrase), stored on the row and fed to the final LLM. For
+        # Demand Volume, attach the concrete absolute search count (penetration
+        # rides along in `notes`); the LLM narrates, never recomputes.
+        detail = None
+        if indicator_code == IndicatorCode.TREND_SCORE and raw.raw_value is not None:
+            detail = f"about {float(raw.raw_value):,.0f} absolute monthly searches"
+        catalog = await self._explanation_repo.catalog()
+        explanation = catalog.render(code=indicator_code.value, score=normalized_score, band=band, detail=detail)
 
         return await self._indicator_repo.upsert_value(
             entity_key=entity_key,
@@ -270,5 +281,6 @@ class IndicatorEngine:
             availability_status=raw.availability_status.value,
             notes=note,
             business_context=INDICATOR_MEANING.get(indicator_code),
-            interpretation_band=None if normalized_score is None else score_band(normalized_score),
+            interpretation_band=band,
+            explanation=explanation,
         )
