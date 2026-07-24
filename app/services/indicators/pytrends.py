@@ -27,6 +27,7 @@ Growth/Stability/Intent form the Demand Quality dimension (size-independent).
 import json
 import unicodedata
 from collections.abc import Iterable
+from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy import text
@@ -51,6 +52,9 @@ _VOLUME_FLOOR = 10.0
 # (the LLM proposes seeds; Google's related keywords confirm/expand) into the
 # demand sum, capped so a data-rich market isn't disproportionately inflated.
 _EXPANSION_TOP_N = 15
+# Two strings at the SAME reported volume this similar are Google's close-variant
+# grouping of ONE query (e.g. 'airfryer'/'airfryert'), not two searches — merged.
+_NEAR_VARIANT_RATIO = 0.9
 
 # Search Intent blends the lexical buy-vs-curiosity tier with a REAL commercial
 # signal — advertiser competition + CPC (advertisers only pay/compete on queries
@@ -103,18 +107,10 @@ async def _fetch_volume_rows(
     connection: AsyncConnection, search_terms: list[str], location: str
 ) -> list[tuple[float, list[tuple[int, int, float]]]]:
     """Freshest row per approved term for this country → the distinct terms to
-    SUM. Two corrections (2026-07-24, confirmed against live data):
-
-    - Drop ~zero-volume terms (< _VOLUME_FLOOR): LLM-proposed queries nobody
-      actually searches ('motocicleta esportiva da marca KTM').
-    - De-dup ONLY Google's LITERAL duplicates — same normalized string AND
-      identical reported volume+series (e.g. accent variants
-      'fritadeira eletrica'/'fritadeira elétrica', both 110k). Google does NOT
-      group all close variants: 'air fryer' (550k) and 'airfryer' (74k) come
-      back with DIFFERENT numbers, i.e. distinct real searches → kept and
-      SUMMED. The dual key also prevents false-merges from Google's bucketed
-      volumes (two unrelated queries sharing e.g. 74000 are NOT merged unless
-      their normalized strings also match). Returns (volume, monthly_series)."""
+    SUM, after dropping ~zero-volume terms and collapsing Google's duplicate
+    reports of the same query (see _dedup_volume_rows). Growth/Stability use this
+    (approved terms only); the demand VOLUME additionally folds in expansion
+    (see compute_trend_score). Returns (volume, monthly_series)."""
     return _dedup_volume_rows(await _fetch_approved_raw(connection, search_terms, location))
 
 
@@ -198,20 +194,39 @@ def _select_expansion(
 def _dedup_volume_rows(
     raw: Iterable[tuple[str, float, list[tuple[int, int, float]]]],
 ) -> list[tuple[float, list[tuple[int, int, float]]]]:
-    """Drop ~zero-volume rows and collapse Google's literal duplicates (same
-    normalized keyword AND identical volume+series). Input rows are
-    (keyword, volume, monthly_series); output is (volume, monthly_series)."""
-    seen: set[tuple[str, float, tuple[tuple[int, int, float], ...]]] = set()
-    rows: list[tuple[float, list[tuple[int, int, float]]]] = []
+    """Drop ~zero-volume rows and collapse Google's duplicate reports of the SAME
+    query so its volume is counted once. Two passes:
+
+    1. (normalized string, volume) — same normalized term at the same reported
+       volume is one query, whether it differs only in case/accent/spacing OR
+       arrives from both the approved and related tables (series is deliberately
+       NOT in the key, since the two tables report slightly different series for
+       the same term). Distinct real queries with DIFFERENT volumes ('air fryer'
+       550k vs 'airfryer' 74k) keep separate keys and are summed.
+    2. Within an IDENTICAL volume, collapse near-identical strings — Google's
+       close-variant grouping reports the same number under typo variants
+       ('airfryer'/'airfryert'). Never merges different volumes or genuinely
+       different words ('best air fryer'), so real distinct demand is preserved.
+
+    Input rows are (keyword, volume, monthly_series); output is (volume, series)."""
+    seen: set[tuple[str, float]] = set()
+    deduped: list[tuple[str, float, list[tuple[int, int, float]]]] = []
     for keyword, volume, monthly in raw:
         if volume < _VOLUME_FLOOR:
             continue
-        key = (_norm_term(keyword), volume, tuple(monthly))
+        norm = _norm_term(keyword)
+        key = (norm, volume)
         if key in seen:
             continue
         seen.add(key)
-        rows.append((volume, monthly))
-    return rows
+        deduped.append((norm, volume, monthly))
+
+    kept: list[tuple[str, float, list[tuple[int, int, float]]]] = []
+    for norm, volume, monthly in deduped:
+        if any(volume == kv and SequenceMatcher(None, norm, kn).ratio() >= _NEAR_VARIANT_RATIO for kn, kv, _ in kept):
+            continue
+        kept.append((norm, volume, monthly))
+    return [(volume, monthly) for _norm, volume, monthly in kept]
 
 
 def _summed_monthly_series(rows: list[tuple[float, list[tuple[int, int, float]]]]) -> list[float]:

@@ -89,6 +89,26 @@ async def test_trend_score_expands_with_product_related_drops_informational() ->
     assert result.notes is not None and "+1 folded" in result.notes
 
 
+async def test_trend_score_collapses_google_variant_duplicates() -> None:
+    # Google reports the SAME 301k under 'Airfryer' (approved), 'airfryer' (related,
+    # from a different table with a slightly different series) and the typo
+    # 'airfryert' — it's ONE query, counted once. A genuinely distinct product
+    # ('cosori airfryer', different volume) is summed.
+    approved = [("Airfryer", 301000.0, _months([25000.0] * 12))]
+    related = [  # (keyword, volume, monthly, cpc, competition_index)
+        ("airfryer", 301000.0, _months([25010.0] * 12), 0.8, 100),  # same term, other table/series
+        ("airfryert", 301000.0, _months([25000.0] * 12), 0.8, 100),  # typo close-variant
+        ("cosori airfryer", 50000.0, _months([4000.0] * 12), 0.9, 100),  # distinct product -> summed
+    ]
+    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_trend_score(["Airfryer"], "DE", "2026-07", language="de")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    # 301000 counted ONCE + 50000, not 301000 x3 + 50000.
+    assert result.raw_value == pytest.approx(351000.0)
+
+
 async def test_trend_score_accepts_json_string_monthly_searches() -> None:
     # monthly_searches may arrive as a JSON string (raw JSONB) — parsed the same.
     rows = [("air fryer", 200.0, json.dumps(_months([20.0] * 12)))]
