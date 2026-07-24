@@ -17,6 +17,9 @@
 		},
 		{
 			"path": "../marketmind-ollma-llm"
+		},
+		{
+			"path": "../marketmind-ai"
 		}
 	],
 	"settings": {}

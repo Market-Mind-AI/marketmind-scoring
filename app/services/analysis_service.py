@@ -166,19 +166,31 @@ class AnalysisService:
             serialized = [
                 MosResultResponse.model_validate(r, from_attributes=True).model_dump(mode="json") for r in mos_results
             ]
-            # Final LLM inference (best-effort): turn the deterministic MOS into a
-            # business narrative via the local Ollama service. Never blocks or
-            # fails the analysis — null explanation if the service is unavailable.
+            # Evidence packet (deterministic) + final LLM narrative (best-effort).
+            # The packet — glossary, weights, demand ruler, and per country the MOS
+            # + dimension subscores + every scored signal with its explanation — is
+            # persisted (breakdown) so the frontend renders the rich MOS modal from
+            # one GET. The narrative turns that packet into prose via the local
+            # Ollama service, and now also answers the buyer's own free-text prompt
+            # (strictly from the packet). Neither ever blocks or fails the analysis.
             explanation: str | None = None
+            breakdown: dict[str, Any] | None = None
             if entity_key is not None and mos_results:
-                explanation = await self._explanation_client.generate(
+                breakdown = await self._explanation_client.build_evidence(
                     entity_key=entity_key,
-                    product_name=analysis_request.canonical_title or "",
                     mos_results=mos_results,
                     period_key=period_key,
                     demand_ruler=demand_ruler,
                 )
-            await self._analysis_repo.mark_done(analysis_request, result=serialized, explanation=explanation)
+                if breakdown is not None:
+                    explanation = await self._explanation_client.narrate(
+                        packet=breakdown,
+                        product_name=analysis_request.canonical_title or "",
+                        user_prompt=analysis_request.user_prompt,
+                    )
+            await self._analysis_repo.mark_done(
+                analysis_request, result=serialized, explanation=explanation, breakdown=breakdown
+            )
             await self._session.commit()
         except Exception as exc:  # noqa: BLE001 — background task boundary, must never crash the process
             logger.exception(f"AnalysisRequest {request_id} failed")
@@ -234,6 +246,17 @@ class AnalysisService:
                         force=self._demand_gap_needs_recollect(current, "search_volume"),
                     )
                 )
+                # Force a related-keyword re-collection not only when the intent
+                # indicator is missing/unavailable, but also when the collector
+                # has NO related rows for the CURRENT seed label+location. The
+                # intent lookup matches keyword_related on the exact joined seed
+                # label; when a new identify-image overwrites localized_markets
+                # with different terms, the old rows no longer match and the
+                # stale "covered" flag (+ a prior run's still-available value)
+                # would otherwise strand search_intent_score and abort the run.
+                kfk_force = self._demand_gap_needs_recollect(
+                    current, "keywords_for_keywords"
+                ) or not await pytrends_indicators.related_rows_exist(search_terms[:20], location)
                 gaps.append(
                     CoverageGap(
                         source=DataSource.PYTRENDS,
@@ -246,7 +269,7 @@ class AnalysisService:
                             "language": language,
                             "seed_keywords": search_terms[:20],
                         },
-                        force=self._demand_gap_needs_recollect(current, "keywords_for_keywords"),
+                        force=kfk_force,
                     )
                 )
 

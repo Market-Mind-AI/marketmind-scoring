@@ -30,6 +30,15 @@ class AnalyzeRequest(BaseModel):
     target_age_max: int | None = None
     estimated_price: float | None = None
     price_currency: str | None = None
+    user_prompt: str | None = Field(
+        default=None,
+        description=(
+            "The buyer's own free-text description/question (the same text used as "
+            "the identify-image hint). Stored and passed to the final explanation "
+            "LLM so it can answer what the user asked — strictly from the "
+            "deterministic evidence, never inventing data."
+        ),
+    )
     countries: list[str] = Field(..., min_length=1, description="ISO3 country codes")
 
 
@@ -42,6 +51,12 @@ class AnalysisStatusResponse(BaseModel):
     request_id: uuid.UUID
     status: str  # "pending" | "running" | "done" | "failed"
     canonical_title: str | None
+    user_prompt: str | None = None  # the buyer's free-text prompt/question, echoed back for the UI
     result: list[dict[str, Any]] | None
     explanation: str | None = None  # LLM narrative of the ranking (best-effort; null if unavailable)
+    # Full per-country evidence packet (glossary + weights + demand ruler + each
+    # country's MOS, dimension subscores and scored signals with explanations) —
+    # what the frontend renders in the rich MOS modal. Rebuilt lazily on read for
+    # analyses stored before this field existed; null only if nothing was scored.
+    breakdown: dict[str, Any] | None = None
     error_message: str | None

@@ -22,6 +22,7 @@ def _analysis_request(
         countries=countries or ["USA"],
         canonical_title="air fryer",
         status="pending",
+        user_prompt=None,
     )
 
 
@@ -68,7 +69,11 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     mos_engine = _install("mos_engine", "app.services.analysis_service.MosEngine")
     weight_calibration = _install("weight_calibration", "app.services.analysis_service.WeightCalibrationService")
     explanation_client = _install("explanation_client", "app.services.analysis_service.ExplanationClient")
-    explanation_client.generate = AsyncMock(return_value="MOS narrative (mock)")
+    # build_evidence assembles the deterministic packet (persisted as breakdown);
+    # narrate turns it into the best-effort narrative string.
+    _packet = {"countries": [{"country": "USA"}]}
+    explanation_client.build_evidence = AsyncMock(return_value=_packet)
+    explanation_client.narrate = AsyncMock(return_value="MOS narrative (mock)")
 
     analysis_repo.get = AsyncMock(return_value=_analysis_request())
     analysis_repo.mark_running = AsyncMock()
@@ -99,6 +104,14 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     )
     trend_patcher.start()
     mocks["_patcher_trend"] = trend_patcher
+    # Related rows already present for the seed set → no forced keywords_for_keywords
+    # re-collection (so the all_covered path still skips collection).
+    related_patcher = patch(
+        "app.services.analysis_service.pytrends_indicators.related_rows_exist",
+        AsyncMock(return_value=True),
+    )
+    related_patcher.start()
+    mocks["_patcher_related"] = related_patcher
     country_repo.get_by_iso3 = AsyncMock(
         return_value=SimpleNamespace(search_language="en", pytrends_geo=None, iso2="US")
     )
@@ -164,11 +177,14 @@ async def test_run_happy_path_marks_done_with_result() -> None:
     result_arg = mocks["analysis_repo"].mark_done.call_args.kwargs["result"]
     assert result_arg[0]["country"] == "USA"
     assert result_arg[0]["mos_interpretation"] == "Good Opportunity"
-    # Final LLM narrative generated (best-effort) and persisted with the result.
-    mocks["explanation_client"].generate.assert_awaited_once()
+    # Deterministic packet built + persisted (breakdown); best-effort narrative
+    # generated from it and persisted with the result.
+    mocks["explanation_client"].build_evidence.assert_awaited_once()
+    mocks["explanation_client"].narrate.assert_awaited_once()
     assert mocks["analysis_repo"].mark_done.call_args.kwargs["explanation"] == "MOS narrative (mock)"
-    # The Demand Volume ruler (reference market + volume) is handed to the LLM.
-    ruler = mocks["explanation_client"].generate.call_args.kwargs["demand_ruler"]
+    assert mocks["analysis_repo"].mark_done.call_args.kwargs["breakdown"] == {"countries": [{"country": "USA"}]}
+    # The Demand Volume ruler (reference market + volume) is handed to the packet builder.
+    ruler = mocks["explanation_client"].build_evidence.call_args.kwargs["demand_ruler"]
     # Ceiling = largest among the CANDIDATES only (deterministic / query-independent);
     # the requested country USA is NOT in the pool. Candidate BRA -> 2000.
     assert ruler == {
@@ -311,5 +327,5 @@ async def test_run_skips_mos_when_entity_key_is_none() -> None:
 
     mocks["mos_engine"].compute_mos.assert_not_awaited()
     mocks["analysis_repo"].mark_done.assert_awaited_once_with(
-        mocks["analysis_repo"].get.return_value, result=[], explanation=None
+        mocks["analysis_repo"].get.return_value, result=[], explanation=None, breakdown=None
     )

@@ -21,6 +21,7 @@ class AnalysisRepository:
         countries: list[str],
         estimated_price: Decimal | float | None,
         price_currency: str | None,
+        user_prompt: str | None = None,
     ) -> AnalysisRequest:
         row = AnalysisRequest(
             id=uuid.uuid4(),
@@ -30,6 +31,7 @@ class AnalysisRepository:
             countries=countries,
             estimated_price=None if estimated_price is None else Decimal(str(estimated_price)),
             price_currency=price_currency,
+            user_prompt=user_prompt,
             created_at=utc_now(),
         )
         self._session.add(row)
@@ -46,11 +48,17 @@ class AnalysisRepository:
         await self._session.flush()
 
     async def mark_done(
-        self, analysis_request: AnalysisRequest, *, result: list[dict[str, Any]], explanation: str | None = None
+        self,
+        analysis_request: AnalysisRequest,
+        *,
+        result: list[dict[str, Any]],
+        explanation: str | None = None,
+        breakdown: dict[str, Any] | None = None,
     ) -> None:
         analysis_request.status = "done"
         analysis_request.result = result
         analysis_request.explanation = explanation
+        analysis_request.breakdown = breakdown
         analysis_request.finished_at = utc_now()
         await self._session.flush()
 

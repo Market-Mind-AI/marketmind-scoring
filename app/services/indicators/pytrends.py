@@ -160,6 +160,29 @@ async def _fetch_related_rows(connection: AsyncConnection, seed_label: str, loca
     return rows
 
 
+async def related_rows_exist(seed_terms: list[str], location: str) -> bool:
+    """True when the collector already holds related keywords (with volume) for
+    this EXACT seed set + location — the precondition compute_search_intent_score
+    needs (it matches keyword_related on the joined seed label). Used to force a
+    keywords_for_keywords re-collection when the seed set changed (e.g. a new
+    identify-image overwrote localized_markets with different/longer terms): the
+    old related rows no longer match the new label, which would otherwise leave
+    search_intent_score UNAVAILABLE and abort the whole analysis."""
+    if not seed_terms:
+        return False
+    seed_label = ", ".join(seed_terms)
+    engine = get_external_engine(DataSource.PYTRENDS)
+    async with engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                "SELECT 1 FROM keyword_related "
+                "WHERE location = :location AND seed_keyword = :seed_label AND search_volume > 0 LIMIT 1"
+            ),
+            {"location": location, "seed_label": seed_label},
+        )
+        return result.first() is not None
+
+
 def _select_expansion(
     related: list[dict[str, Any]], approved_terms: list[str], tiers: dict[str, list[str]]
 ) -> list[tuple[str, float, list[tuple[int, int, float]]]]:

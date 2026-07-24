@@ -6,6 +6,15 @@ class Settings(BaseSettings):
     app_env: str = "local"
     app_port: int = 8000
 
+    # CORS — the browser frontend (marketmind-ai, Astro dev server) calls this
+    # API directly, so its origin must be allowed. Comma-separated list of
+    # origins; override via the CORS_ALLOW_ORIGINS env var. Use "*" to allow any
+    # origin (dev only). Default covers the Astro dev/preview ports on localhost.
+    cors_allow_origins: str = (
+        "http://localhost:4321,http://127.0.0.1:4321,"
+        "http://localhost:4322,http://127.0.0.1:4322"
+    )
+
     # Core's own database (product catalog, coverage, indicators, MOS, jobs)
     database_host: str = "localhost"
     database_port: int = 5432
@@ -162,6 +171,15 @@ class Settings(BaseSettings):
             f"postgresql://{self.database_user}:{self.database_password}"
             f"@{self.database_host}:{self.database_port}/{self.database_name}"
         )
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        """Parse the comma-separated CORS origins into a list. A bare "*"
+        allows any origin (dev convenience)."""
+        raw = self.cors_allow_origins.strip()
+        if raw == "*":
+            return ["*"]
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
     @property
     def pytrends_database_url(self) -> str:

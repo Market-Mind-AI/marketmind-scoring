@@ -183,16 +183,42 @@ the most weight but less than half the total).
 deprioritize) and the main reason — WITHOUT comparing to other countries."""
 
 
-def _system_prompt(language: str, *, single_country: bool) -> str:
+# Injected only when the buyer typed a free-text prompt/question. The LLM may
+# answer it, but STILL only from the deterministic packet — never inventing data.
+_USER_PROMPT_BLOCK_PT = """PERGUNTA/CONTEXTO DO USUÁRIO — o usuário escreveu o texto abaixo ao enviar o \
+produto. Se ele contiver PERGUNTAS ou pedidos específicos, responda-os ao longo da análise (de forma \
+tecida na prosa, sem virar um bloco de perguntas-e-respostas), mas valem as MESMAS regras invioláveis: \
+use SOMENTE os números do pacote, NUNCA invente, estime ou traga dados externos. Se algo perguntado \
+não puder ser respondido com os dados disponíveis, diga isso com franqueza (ex.: "os dados desta análise \
+não cobrem X"). Mantenha total coerência com o que foi perguntado.
+
+Texto do usuário: "{user_prompt}\""""
+
+_USER_PROMPT_BLOCK_EN = """USER QUESTION/CONTEXT — the user wrote the text below when submitting the \
+product. If it contains QUESTIONS or specific requests, answer them within the analysis (woven into the \
+prose, not as a Q&A block), but the SAME inviolable rules apply: use ONLY the packet's numbers, NEVER \
+invent, estimate or bring in outside data. If something asked cannot be answered from the available data, \
+say so plainly (e.g. "this analysis's data does not cover X"). Stay fully coherent with what was asked.
+
+User text: "{user_prompt}\""""
+
+
+def _system_prompt(language: str, *, single_country: bool, user_prompt: str | None = None) -> str:
     lang = (language or "").strip().lower()
-    if lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português"):
+    is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
+    if is_pt:
         structure = _STRUCTURE_PT_SINGLE if single_country else _STRUCTURE_PT_MULTI
-        return _SYSTEM_PROMPT_PT.replace("{structure}", structure)
-    structure = _STRUCTURE_EN_SINGLE if single_country else _STRUCTURE_EN_MULTI
-    base = _SYSTEM_PROMPT_EN.replace("{structure}", structure)
-    if lang in ("en", "en-us", "en_us", "english"):
-        return base
-    return f'{base}\n\nWrite the entire narrative in this language: "{language}".'
+        base = _SYSTEM_PROMPT_PT.replace("{structure}", structure)
+    else:
+        structure = _STRUCTURE_EN_SINGLE if single_country else _STRUCTURE_EN_MULTI
+        base = _SYSTEM_PROMPT_EN.replace("{structure}", structure)
+        if lang not in ("en", "en-us", "en_us", "english"):
+            base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
+    prompt_text = (user_prompt or "").strip()
+    if prompt_text:
+        block = (_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", prompt_text)
+        base = f"{base}\n\n{block}"
+    return base
 
 
 class ExplanationClient:
@@ -265,41 +291,69 @@ class ExplanationClient:
             "signals": signals,
         }
 
-    async def generate(
+    async def build_evidence(
         self,
         *,
         entity_key: uuid.UUID,
-        product_name: str,
         mos_results: list[MosResult],
         period_key: str,
         demand_ruler: dict[str, Any] | None = None,
-    ) -> str | None:
+    ) -> dict[str, Any] | None:
+        """Assemble the deterministic evidence packet: a glossary, the
+        Rank-Reciprocal dimension weights, the demand ruler, and per country the
+        MOS + the 7 dimension subscores + every scored signal (each with its
+        stored explanation sentence). This is pure DB read + in-memory
+        aggregation — no LLM, no collection, no cost — so it is safe to call at
+        analyze time (to persist) or lazily on read (to rebuild past analyses).
+        Returns None if no country was scored."""
         scored = [r for r in mos_results if r.mos is not None]
         if not scored:
             return None
+        catalog = await self._explanation_repo.catalog()
+        # Metric definitions once at the top (not repeated per country).
+        glossary = {code: {"label": entry.label, "meaning": entry.meaning} for code, entry in catalog.metrics.items()}
+        # Rank-Reciprocal dimension weights — so the WEIGHTED aggregation can be
+        # explained (why a country strong on one dimension isn't automatically top).
+        weights: dict[str, float] = {}
+        for dim in IndicatorDimension:
+            row = await self._mos_repo.get_weight(dim.value, period_key)
+            if row is not None:
+                weights[dim.value] = round(float(row.weight), 3)
+        countries = [await self._country_evidence(entity_key, r, period_key, catalog, weights) for r in scored]
+        return {
+            "period_key": period_key,
+            "demand_ruler": demand_ruler,
+            "glossary": glossary,
+            "weights": weights,
+            "countries": countries,
+        }
+
+    async def narrate(
+        self,
+        *,
+        packet: dict[str, Any],
+        product_name: str,
+        user_prompt: str | None = None,
+    ) -> str | None:
+        """Best-effort: turn a deterministic evidence packet into a business
+        narrative via the resolved explanation LLM. Any failure returns None and
+        is logged — the analysis still completes with the numbers. The LLM only
+        EXPLAINS; it never computes or alters a score (Cap. 4 §4.0)."""
+        countries = packet.get("countries") or []
+        if not countries:
+            return None
         try:
-            catalog = await self._explanation_repo.catalog()
-            # Metric definitions once at the top (not repeated per country) so the
-            # LLM has the full "what each score means" context without bloating
-            # the packet.
-            glossary = {
-                code: {"label": entry.label, "meaning": entry.meaning} for code, entry in catalog.metrics.items()
-            }
-            # Rank-Reciprocal dimension weights — so the narrative can explain the
-            # WEIGHTED aggregation (why a country strong on one dimension isn't
-            # automatically a top MOS).
-            weights: dict[str, float] = {}
-            for dim in IndicatorDimension:
-                row = await self._mos_repo.get_weight(dim.value, period_key)
-                if row is not None:
-                    weights[dim.value] = round(float(row.weight), 3)
-            countries = [await self._country_evidence(entity_key, r, period_key, catalog, weights) for r in scored]
-            system = _system_prompt(settings.ollama_llm_narrative_language, single_country=len(scored) == 1)
+            system = _system_prompt(
+                settings.ollama_llm_narrative_language,
+                single_country=len(countries) == 1,
+                user_prompt=user_prompt,
+            )
             user = json.dumps(
                 {
                     "product_name": product_name,
-                    "demand_ruler": demand_ruler,
-                    "glossary": glossary,
+                    "user_prompt": (user_prompt or "").strip() or None,
+                    "demand_ruler": packet.get("demand_ruler"),
+                    "glossary": packet.get("glossary"),
                     "countries": countries,
                 },
                 ensure_ascii=False,
