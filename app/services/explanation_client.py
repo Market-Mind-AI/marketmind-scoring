@@ -256,12 +256,17 @@ class ExplanationClient:
             # compute time from the DB-parametrized band phrases). Demand Volume
             # also carries the concrete numbers (absolute searches / population /
             # penetration) as `context` for the population-vs-appetite call.
+            # `dimension` groups each signal under its deterministic dimension in
+            # the frontend (the two context-only signals — regional_demand and
+            # government_expenditure — are not scored into any dimension).
+            dim = DIMENSION_BY_INDICATOR.get(code)
             signal: dict[str, Any] = {
                 "code": code.value,
                 "label": catalog.label(code.value),
                 "score": round(float(iv.normalized_score), 1),
                 "band": iv.interpretation_band,
                 "explanation": iv.explanation,
+                "dimension": dim.value if dim is not None else "context",
             }
             if code == IndicatorCode.TREND_SCORE:
                 signal["context"] = iv.notes

@@ -82,7 +82,23 @@ _CONTEXT_ONLY_INDICATORS = frozenset(
 # volume score, making the demand dimension unstable across analyses. So the
 # ceiling stays fixed and values above it saturate (2026-07-16). Linearity is
 # the founded property; the ceiling is a documented scale anchor (migration 014).
-_NO_SELF_WIDEN: frozenset[IndicatorCode] = frozenset({IndicatorCode.TREND_SCORE})
+#
+# The macro indicators below are also fixed (never self-widen) because they have
+# universal, economically-anchored ranges and are exposed to real extreme
+# outliers: a single hyperinflation country (Argentina ~220%) self-widened the
+# inflation ceiling to 220% and crushed every normal economy (2–5%) into ~96,
+# indistinguishable (2026-07-24). With a fixed, economically-sane range the
+# extreme SATURATES at the worst score (0) instead of stretching the ruler for
+# everyone; the yardstick stays stable and comparable across analyses. Their
+# ranges are set by migration 020.
+_NO_SELF_WIDEN: frozenset[IndicatorCode] = frozenset(
+    {
+        IndicatorCode.TREND_SCORE,
+        IndicatorCode.WORLDBANK_INFLATION_SCORE,
+        IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
+        IndicatorCode.DEMAND_STABILITY_SCORE,
+    }
+)
 
 
 def self_widens(indicator_code: IndicatorCode) -> bool:

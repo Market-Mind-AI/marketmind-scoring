@@ -74,14 +74,17 @@ class Settings(BaseSettings):
     #     market sizes (e.g. it omitted Brazil for air fryer). Real search volume
     #     still elects the winner among the candidates; the LLM only proposes.
     #   - explanation: the final MOS-narrative call (text).
-    vision_llm_provider: str = "ollama"
-    vision_llm_model: str = "qwen3-vl:8b-instruct"
-    enrichment_llm_provider: str = "ollama"
-    enrichment_llm_model: str = "qwen3:14b"
-    reference_market_llm_provider: str = "claude"
-    reference_market_llm_model: str = "claude-haiku-4-5-20251001"
-    explanation_llm_provider: str = "ollama"
-    explanation_llm_model: str = "gemma4:12b"
+    # Default to gpt-5 on every site (2026-07-24): validated to fix the
+    # term-quality gap (e.g. Japan's ノンフライヤー) that the local models missed.
+    # Still swappable per-site via .env; production runs on a top model.
+    vision_llm_provider: str = "gpt"
+    vision_llm_model: str = "gpt-5"
+    enrichment_llm_provider: str = "gpt"
+    enrichment_llm_model: str = "gpt-5"
+    reference_market_llm_provider: str = "gpt"
+    reference_market_llm_model: str = "gpt-5"
+    explanation_llm_provider: str = "gpt"
+    explanation_llm_model: str = "gpt-5"
 
     # marketmind-ollma-llm gateway (port 8005) — the transport used when a site's
     # provider is "ollama"; routes to a LOCAL Ollama model. Best-effort for the
