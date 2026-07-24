@@ -323,11 +323,14 @@ class AnalysisService:
         return any(not _is_available(current, code) for code in outputs)
 
     async def _ensure_candidates_coverage(self, entity: Any, requested: list[str], *, period_key: str) -> None:
-        """Collect each reference-market candidate's search volume — always,
-        regardless of the requested countries, so the ruler is query-independent.
-        Candidates that are themselves requested countries are skipped here (they
-        are already collected under their own localized terms). Reuses cached
-        data (check_coverage), collecting only what's missing."""
+        """Collect each reference-market candidate's FULL demand — search_volume
+        AND keywords_for_keywords — exactly like a requested country, so its
+        volume is measured through the identical pipeline (including the related-
+        keyword expansion) and the ruler stays comparable. Collected regardless
+        of the requested set (so the ruler is query-independent) and persisted /
+        reused via the coverage cache. Candidates that ARE requested countries
+        are skipped here — already collected under their own localized terms
+        (pulled once)."""
         gaps: list[CoverageGap] = []
         for cand in entity.reference_candidates or []:
             iso3 = cand.get("country")
@@ -337,6 +340,7 @@ class AnalysisService:
             country = await self._country_repo.get_by_iso3(iso3)
             if country is None or country.iso2 is None:
                 continue
+            language = country.search_language or "en"
             gaps.append(
                 CoverageGap(
                     source=DataSource.PYTRENDS,
@@ -344,11 +348,17 @@ class AnalysisService:
                     country=iso3,
                     indicator_code="search_volume",
                     period_key=current_month_period_key(),
-                    collection_params={
-                        "location": country.iso2,
-                        "language": (country.search_language or "en"),
-                        "keywords": terms,
-                    },
+                    collection_params={"location": country.iso2, "language": language, "keywords": terms},
+                )
+            )
+            gaps.append(
+                CoverageGap(
+                    source=DataSource.PYTRENDS,
+                    entity_key=entity.entity_key,
+                    country=iso3,
+                    indicator_code="keywords_for_keywords",
+                    period_key=current_month_period_key(),
+                    collection_params={"location": country.iso2, "language": language, "seed_keywords": terms[:20]},
                 )
             )
         if not gaps:
@@ -382,14 +392,16 @@ class AnalysisService:
             # A candidate that is also requested was collected under its own
             # localized_markets terms (same coverage key); measure it with those
             # to avoid reading a never-collected reference-term series.
-            if iso3 in countries:
-                terms = as_term_list((entity.localized_markets or {}).get(iso3, {}).get("search_terms"))
-            else:
-                terms = as_term_list(cand.get("search_terms"))
+            market = (entity.localized_markets or {}).get(iso3, {}) if iso3 in countries else cand
+            terms = as_term_list(market.get("search_terms"))
             country = await self._country_repo.get_by_iso3(iso3)
             if not (terms and country is not None and country.iso2 is not None):
                 continue
-            r = await pytrends_indicators.compute_trend_score(terms, country.iso2, period_key)
+            # Identical pipeline to the requested countries — including the
+            # related-keyword expansion — so the ceiling is apples-to-apples.
+            r = await pytrends_indicators.compute_trend_score(
+                terms, country.iso2, period_key, seed_terms=terms[:20], language=country.search_language
+            )
             if r.raw_value is not None and float(r.raw_value) > 0:
                 measured.append({"country": iso3, "volume": float(r.raw_value)})
         if measured:

@@ -25,6 +25,8 @@ Growth/Stability/Intent form the Demand Quality dimension (size-independent).
 """
 
 import json
+import unicodedata
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import text
@@ -40,6 +42,32 @@ from app.services.indicators.results import RawIndicatorResult
 _MIN_GROWTH_BASELINE = 10.0
 _MIN_STABILITY_BASELINE = 10.0
 _NEUTRAL_STABILITY_CV = 0.5
+
+# Demand-term hygiene (Cap. 4 §4.2.1, 2026-07-24). Below this monthly volume a
+# term is "~zero" — noise the LLM proposed that nobody actually searches; drop
+# it so it neither inflates the count nor skews intent.
+_VOLUME_FLOOR = 10.0
+# Conservative expansion: fold at most this many high-volume RELATED keywords
+# (the LLM proposes seeds; Google's related keywords confirm/expand) into the
+# demand sum, capped so a data-rich market isn't disproportionately inflated.
+_EXPANSION_TOP_N = 15
+
+# Search Intent blends the lexical buy-vs-curiosity tier with a REAL commercial
+# signal — advertiser competition + CPC (advertisers only pay/compete on queries
+# with genuine purchase value). Weights sum to 1.0.
+_INTENT_LEXICAL_WEIGHT = 0.6
+_INTENT_COMMERCIAL_WEIGHT = 0.4
+
+
+def _norm_term(term: str) -> str:
+    """Comparison key for a query: lowercase, strip accents, keep only
+    alphanumerics. 'Air Fryer'/'air-fryer'/'airfryer' -> 'airfryer';
+    'elétrica' -> 'eletrica'. Used to detect Google's LITERAL duplicates (same
+    key AND same reported volume+series) — never to merge distinct-volume
+    queries, which are real separate searches and are summed."""
+    folded = unicodedata.normalize("NFKD", term).encode("ascii", "ignore").decode("ascii").lower()
+    return "".join(ch for ch in folded if ch.isalnum())
+
 
 # Search Intent tiers/weights (Cap. 4 §4.2.6). Per-language markers live in
 # intent_lexicon.py (offline-LLM-built, frozen). CURIOSITY is the discriminator:
@@ -74,12 +102,27 @@ def _monthly_volumes(monthly_searches: Any) -> list[tuple[int, int, float]]:
 async def _fetch_volume_rows(
     connection: AsyncConnection, search_terms: list[str], location: str
 ) -> list[tuple[float, list[tuple[int, int, float]]]]:
-    """Freshest row per approved term for this country, deduped by identical
-    (search_volume, monthly_searches): Google Ads canonicalizes near-variants
-    (e.g. 'air fryer'/'airfryer') and reports the SAME numbers for them, so
-    summing raw would double-count the same reported volume. Distinct real
-    terms (different numbers) are kept and summed — their searches genuinely
-    happened. Returns (search_volume, monthly_series) per distinct entity."""
+    """Freshest row per approved term for this country → the distinct terms to
+    SUM. Two corrections (2026-07-24, confirmed against live data):
+
+    - Drop ~zero-volume terms (< _VOLUME_FLOOR): LLM-proposed queries nobody
+      actually searches ('motocicleta esportiva da marca KTM').
+    - De-dup ONLY Google's LITERAL duplicates — same normalized string AND
+      identical reported volume+series (e.g. accent variants
+      'fritadeira eletrica'/'fritadeira elétrica', both 110k). Google does NOT
+      group all close variants: 'air fryer' (550k) and 'airfryer' (74k) come
+      back with DIFFERENT numbers, i.e. distinct real searches → kept and
+      SUMMED. The dual key also prevents false-merges from Google's bucketed
+      volumes (two unrelated queries sharing e.g. 74000 are NOT merged unless
+      their normalized strings also match). Returns (volume, monthly_series)."""
+    return _dedup_volume_rows(await _fetch_approved_raw(connection, search_terms, location))
+
+
+async def _fetch_approved_raw(
+    connection: AsyncConnection, search_terms: list[str], location: str
+) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
+    """Freshest (keyword, volume, monthly_series) per approved term — RAW, before
+    the drop-zero/dedup pass (so callers can merge it with expansion rows first)."""
     if not search_terms:
         return []
     result = await connection.execute(
@@ -90,12 +133,80 @@ async def _fetch_volume_rows(
         ),
         {"location": location, "terms": search_terms},
     )
-    seen: set[tuple[float, tuple[tuple[int, int, float], ...]]] = set()
-    rows: list[tuple[float, list[tuple[int, int, float]]]] = []
+    return [(row[0], 0.0 if row[1] is None else float(row[1]), _monthly_volumes(row[2])) for row in result.all()]
+
+
+async def _fetch_related_rows(connection: AsyncConnection, seed_label: str, location: str) -> list[dict[str, Any]]:
+    """Freshest related keyword per (keyword) for this country's seed set, with
+    volume + monthly series + commercial signals (cpc, competition_index). Shared
+    by demand expansion (compute_trend_score) and intent (compute_search_intent_score)."""
+    result = await connection.execute(
+        text(
+            "SELECT DISTINCT ON (keyword) keyword, search_volume, monthly_searches, cpc, competition_index "
+            "FROM keyword_related WHERE location = :location AND seed_keyword = :seed_label "
+            "ORDER BY keyword, created_at DESC"
+        ),
+        {"location": location, "seed_label": seed_label},
+    )
+    rows: list[dict[str, Any]] = []
     for row in result.all():
-        volume = 0.0 if row[1] is None else float(row[1])
-        monthly = _monthly_volumes(row[2])
-        key = (volume, tuple(monthly))
+        if row[0] is None or row[1] is None:
+            continue
+        rows.append(
+            {
+                "keyword": row[0],
+                "volume": float(row[1]),
+                "monthly": _monthly_volumes(row[2]),
+                "cpc": None if row[3] is None else float(row[3]),
+                "competition_index": None if row[4] is None else int(row[4]),
+            }
+        )
+    return rows
+
+
+def _select_expansion(
+    related: list[dict[str, Any]], approved_terms: list[str], tiers: dict[str, list[str]]
+) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
+    """Conservatively pick related keywords to FOLD into the demand sum, WITHOUT
+    any per-product exclusion list (that doesn't scale). A keyword qualifies when:
+      - its volume clears the floor;
+      - it is clearly the product — its normalized form contains an approved
+        product/brand term (drops unrelated products that bleed in);
+      - its intent is purchase-oriented — NOT the lexicon's `usage`
+        (recipe/how-to/clean = ownership) or `curiosity` (what-is/vs = browsing)
+        tiers, which are not new demand. Kept: transactional/evaluation/default
+        (buying, shopping/reviews, product variants).
+    The lexicon is per-LANGUAGE and product-agnostic — the same one intent uses.
+    (The LLM proposes the seeds; Google's related keywords confirm/expand what
+    real buyers type.) Literal duplicates vs the approved terms are removed later
+    by _dedup_volume_rows on the merged set. Top N by volume."""
+    approved_norms = [n for n in (_norm_term(t) for t in approved_terms) if n]
+    qualifying: list[tuple[str, float, list[tuple[int, int, float]]]] = []
+    for r in related:
+        if r["volume"] < _VOLUME_FLOOR:
+            continue
+        kw_norm = _norm_term(r["keyword"])
+        if not any(a in kw_norm for a in approved_norms):  # relevance: contains a product term
+            continue
+        if _classify_query_intent(r["keyword"], tiers) < _DEFAULT_INTENT:  # drop usage/curiosity (not new demand)
+            continue
+        qualifying.append((r["keyword"], r["volume"], r["monthly"]))
+    qualifying.sort(key=lambda x: x[1], reverse=True)
+    return qualifying[:_EXPANSION_TOP_N]
+
+
+def _dedup_volume_rows(
+    raw: Iterable[tuple[str, float, list[tuple[int, int, float]]]],
+) -> list[tuple[float, list[tuple[int, int, float]]]]:
+    """Drop ~zero-volume rows and collapse Google's literal duplicates (same
+    normalized keyword AND identical volume+series). Input rows are
+    (keyword, volume, monthly_series); output is (volume, monthly_series)."""
+    seen: set[tuple[str, float, tuple[tuple[int, int, float], ...]]] = set()
+    rows: list[tuple[float, list[tuple[int, int, float]]]] = []
+    for keyword, volume, monthly in raw:
+        if volume < _VOLUME_FLOOR:
+            continue
+        key = (_norm_term(keyword), volume, tuple(monthly))
         if key in seen:
             continue
         seen.add(key)
@@ -114,21 +225,33 @@ def _summed_monthly_series(rows: list[tuple[float, list[tuple[int, int, float]]]
     return [totals[k] for k in sorted(totals)]
 
 
-async def compute_trend_score(search_terms: list[str], location: str, period_key: str) -> RawIndicatorResult:
+async def compute_trend_score(
+    search_terms: list[str],
+    location: str,
+    period_key: str,
+    *,
+    seed_terms: list[str] | None = None,
+    language: str | None = None,
+) -> RawIndicatorResult:
     """Cap. 4 §4.2.1 — DEMAND VOLUME (market potential): SUM of the absolute
-    monthly search volume of the country's approved terms (deduped). The raw
-    value IS that absolute count, normalized LINEARLY against a fixed ceiling
-    (2026-07-16 redesign): sales potential scales linearly with the number of
-    interested buyers (each searcher ~ a potential sale, no diminishing
-    returns), so the score is proportional to volume — a market with 2x the
-    searches scores ~2x. This drives the top-ranked Demand Volume dimension, so
-    a much bigger market outranks one with better macro but little demand. The
-    concrete absolute total is the raw_value (and in notes) for the LLM's
-    sales-potential narrative; penetration vs population is added by the
-    indicator engine as decision context."""
+    monthly search volume of the country's approved terms PLUS a conservative
+    expansion of high-volume related keywords that are clearly the product
+    (the LLM proposes seeds; Google's related keywords confirm/expand). ~Zero-
+    volume terms are dropped and only Google's literal duplicates are collapsed
+    (see _dedup_volume_rows) — distinct real queries are summed. The raw value
+    IS that absolute count, normalized against the product's reference-market
+    volume downstream. Same pipeline for every country AND the reference-market
+    candidates, so the ruler stays comparable. Penetration vs population is
+    added by the indicator engine as decision context."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        rows = await _fetch_volume_rows(connection, search_terms, location)
+        approved_raw = await _fetch_approved_raw(connection, search_terms, location)
+        seed_label = ", ".join(seed_terms or search_terms[:20])
+        related = await _fetch_related_rows(connection, seed_label, location) if search_terms else []
+
+    tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
+    expansion = _select_expansion(related, search_terms, tiers)
+    rows = _dedup_volume_rows(approved_raw + expansion)
 
     if not rows:
         return RawIndicatorResult(
@@ -140,12 +263,16 @@ async def compute_trend_score(search_terms: list[str], location: str, period_key
         )
 
     total_volume = sum(volume for volume, _monthly in rows)
+    expansion_note = f" (+{len(expansion)} folded from related keywords)" if expansion else ""
+    notes = (
+        f"{total_volume:.0f} total monthly searches over {len(rows)} distinct term(s){expansion_note} (Cap. 4 §4.2.1)"
+    )
     return RawIndicatorResult(
         raw_value=total_volume,
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"{total_volume:.0f} total monthly searches over {len(rows)} distinct term(s) (Cap. 4 §4.2.1)",
+        notes=notes,
     )
 
 
@@ -276,15 +403,8 @@ async def compute_search_intent_score(
     seed_label = ", ".join(seed_terms)
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT DISTINCT ON (keyword) keyword, search_volume FROM keyword_related "
-                "WHERE location = :location AND seed_keyword = :seed_label "
-                "ORDER BY keyword, created_at DESC"
-            ),
-            {"location": location, "seed_label": seed_label},
-        )
-        rows = [(row[0], float(row[1])) for row in result.all() if row[0] is not None and row[1] is not None]
+        related = await _fetch_related_rows(connection, seed_label, location)
+    rows = [r for r in related if r["volume"] > 0]
 
     if not rows:
         return RawIndicatorResult(
@@ -295,22 +415,33 @@ async def compute_search_intent_score(
             notes="keyword_related: no related keywords with volume (Cap. 4 §4.2.6)",
         )
 
-    total_weight = sum(w for _, w in rows)
-    if total_weight == 0:
-        return RawIndicatorResult(
-            raw_value=None,
-            direction=IndicatorDirection.DIRECT,
-            calculation_window=period_key,
-            availability_status=AvailabilityStatus.UNAVAILABLE,
-            notes="keyword_related: all volumes are 0 (Cap. 4 §4.2.6)",
-        )
+    total_weight = sum(r["volume"] for r in rows)
+    # Commercial signal, normalized within this country's related set:
+    # advertiser competition (0-100) and CPC (relative to the set's max) — both
+    # proxy real purchase value (advertisers only pay/compete on money queries).
+    max_cpc = max((r["cpc"] or 0.0) for r in rows)
 
-    weighted_sum = sum(w * _classify_query_intent(q, tiers) for q, w in rows)
+    def _commercial(r: dict[str, Any]) -> float | None:
+        signals: list[float] = []
+        if r["competition_index"] is not None:
+            signals.append(r["competition_index"] / 100.0)
+        if r["cpc"] is not None and max_cpc > 0:
+            signals.append(min(1.0, r["cpc"] / max_cpc))
+        return sum(signals) / len(signals) if signals else None
+
+    def _intent(r: dict[str, Any]) -> float:
+        lexical = _classify_query_intent(r["keyword"], tiers)
+        commercial = _commercial(r)
+        if commercial is None:  # no CPC/competition data — fall back to pure lexical
+            return lexical
+        return _INTENT_LEXICAL_WEIGHT * lexical + _INTENT_COMMERCIAL_WEIGHT * commercial
+
+    weighted_sum = sum(r["volume"] * _intent(r) for r in rows)
     intent_raw = (weighted_sum / total_weight) * 100
     return RawIndicatorResult(
         raw_value=intent_raw,
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"{len(rows)} related keywords classified, volume-weighted",
+        notes=f"{len(rows)} related keywords, volume-weighted lexical intent + commercial (CPC/competition)",
     )

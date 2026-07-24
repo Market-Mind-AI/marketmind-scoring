@@ -90,7 +90,7 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     # Demand Volume ruler: volumes read via compute_trend_score. Patched so the
     # BRA candidate (terms ["air fryer br"]) is bigger (2000) than requested USA
     # (1000) — the pool is candidates + requested, so BRA wins the ceiling.
-    def _trend_vol(terms: list[str], location: str, period_key: str) -> SimpleNamespace:
+    def _trend_vol(terms: list[str], location: str, period_key: str, **kwargs: object) -> SimpleNamespace:
         return SimpleNamespace(raw_value=2000.0 if "air fryer br" in terms else 1000.0)
 
     trend_patcher = patch(

@@ -177,7 +177,9 @@ class IndicatorEngine:
         search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
         seed_terms = search_terms[:20]  # keywords_for_keywords accepts up to 20 seeds
 
-        trend = await pytrends_indicators.compute_trend_score(search_terms, location, period_key)
+        trend = await pytrends_indicators.compute_trend_score(
+            search_terms, location, period_key, seed_terms=seed_terms, language=language
+        )
         # Decision context for the LLM narrative (not scored): pair the absolute
         # demand VOLUME with population so it can say WHETHER the volume comes
         # from sheer population or from genuine appetite. Penetration = searches

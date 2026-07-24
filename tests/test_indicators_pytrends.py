@@ -41,7 +41,7 @@ async def test_trend_score_sums_volume_linear() -> None:
         ("air fryer", 1000.0, _months([100.0] * 12)),
         ("freidora de aire", 500.0, _months([50.0] * 12)),
     ]
-    engine = make_mock_engine([result_with_all(rows)])
+    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_trend_score(["air fryer", "freidora de aire"], "ES", "2026-07")
 
@@ -59,7 +59,7 @@ async def test_trend_score_dedups_identical_rows() -> None:
         ("air fryer", 1000.0, monthly),
         ("airfryer", 1000.0, monthly),  # identical numbers -> deduped away
     ]
-    engine = make_mock_engine([result_with_all(rows)])
+    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_trend_score(["air fryer", "airfryer"], "ES", "2026-07")
 
@@ -68,10 +68,31 @@ async def test_trend_score_dedups_identical_rows() -> None:
     assert result.raw_value == pytest.approx(1000.0)
 
 
+async def test_trend_score_expands_with_product_related_drops_informational() -> None:
+    # Expansion folds high-volume RELATED that are the product (contain a product
+    # term) AND purchase-oriented; it drops usage/curiosity (recipe/what-is =
+    # ownership/browsing, not new demand) and unrelated products. No excluded list.
+    approved = [("air fryer", 1000.0, _months([100.0] * 12))]
+    related = [  # (keyword, volume, monthly, cpc, competition_index)
+        ("air fryer ninja", 3000.0, _months([300.0] * 12), 1.2, 100),  # product -> folded
+        ("air fryer recipe", 9000.0, _months([900.0] * 12), 0.1, 20),  # usage -> dropped
+        ("what is an air fryer", 5000.0, _months([500.0] * 12), 0.1, 5),  # curiosity -> dropped
+        ("blender", 8000.0, _months([800.0] * 12), 1.0, 100),  # not the product -> dropped
+    ]
+    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_trend_score(["air fryer"], "US", "2026-07", language="en")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    # 1000 (approved) + 3000 (ninja); recipe / what-is / blender all excluded.
+    assert result.raw_value == pytest.approx(4000.0)
+    assert result.notes is not None and "+1 folded" in result.notes
+
+
 async def test_trend_score_accepts_json_string_monthly_searches() -> None:
     # monthly_searches may arrive as a JSON string (raw JSONB) — parsed the same.
     rows = [("air fryer", 200.0, json.dumps(_months([20.0] * 12)))]
-    engine = make_mock_engine([result_with_all(rows)])
+    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_trend_score(["air fryer"], "ES", "2026-07")
 
@@ -80,7 +101,7 @@ async def test_trend_score_accepts_json_string_monthly_searches() -> None:
 
 
 async def test_trend_score_unavailable_when_no_rows() -> None:
-    engine = make_mock_engine([result_with_all([])])
+    engine = make_mock_engine([result_with_all([]), result_with_all([])])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_trend_score(["air fryer"], "ES", "2026-07")
 
@@ -160,7 +181,8 @@ async def test_demand_stability_score_computes_cv() -> None:
 async def test_demand_stability_neutral_on_low_volume_series() -> None:
     # Low-volume noise guard: a near-zero, spiky series (mean < 10) can't yield a
     # reliable CV, so return a NEUTRAL score instead of a spurious extreme.
-    rows = [("presunto pata negra", 3.0, _months([0, 0, 2, 0, 0, 1]))]
+    # (volume 15 clears the term-drop floor; the SERIES mean is what's near-zero.)
+    rows = [("presunto pata negra", 15.0, _months([0, 0, 2, 0, 0, 1]))]
     engine = make_mock_engine([result_with_all(rows)])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_demand_stability_score(["presunto pata negra"], "PT", "2026-07")
@@ -203,8 +225,9 @@ def test_classify_query_intent_tiers() -> None:
 
 async def test_search_intent_uses_language_lexicon() -> None:
     # Integration: classified with the EN lexicon (buy -> transactional 1.0,
-    # what is -> curiosity 0.2), weighted by real volume.
-    rows = [("buy iberico ham", 80.0), ("what is iberico ham", 20.0)]
+    # what is -> curiosity 0.2), weighted by real volume. cpc/competition NULL,
+    # so no commercial signal -> pure lexical (backward-compatible path).
+    rows = [("buy iberico ham", 80.0, None, None, None), ("what is iberico ham", 20.0, None, None, None)]
     engine = make_mock_engine([result_with_all(rows)])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
@@ -214,9 +237,23 @@ async def test_search_intent_uses_language_lexicon() -> None:
     assert result.raw_value == pytest.approx(84.0)
 
 
+async def test_search_intent_blends_commercial_signal() -> None:
+    # With cpc/competition present, the commercial signal blends with the lexical
+    # tier (0.6 lexical + 0.4 commercial). Single query "air fryer" -> lexical
+    # DEFAULT 0.6; competition_index 100 (=1.0), no cpc -> commercial 1.0.
+    # intent = 0.6*0.6 + 0.4*1.0 = 0.76 -> 76.0.
+    rows = [("air fryer", 500.0, None, None, 100)]
+    engine = make_mock_engine([result_with_all(rows)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_search_intent_score(["air fryer"], "US", "2026-07", language="en")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == pytest.approx(76.0)
+
+
 async def test_search_intent_curiosity_scores_low() -> None:
     # A market only browsing ("what is / vs") scores low.
-    rows = [("what is iberico ham", 100.0), ("iberico ham vs prosciutto", 100.0)]
+    rows = [("what is iberico ham", 100.0, None, None, None), ("iberico ham vs prosciutto", 100.0, None, None, None)]
     engine = make_mock_engine([result_with_all(rows)])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
@@ -225,7 +262,7 @@ async def test_search_intent_curiosity_scores_low() -> None:
 
 
 async def test_search_intent_unknown_language_falls_back_to_english() -> None:
-    rows = [("buy iberico ham", 100.0)]
+    rows = [("buy iberico ham", 100.0, None, None, None)]
     engine = make_mock_engine([result_with_all(rows)])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="xx")
@@ -253,8 +290,8 @@ async def test_search_intent_unavailable_when_no_related_keywords() -> None:
 
 
 async def test_search_intent_unavailable_when_total_weight_zero() -> None:
-    # Related keywords present but all volumes are 0 -> no weight -> UNAVAILABLE.
-    rows = [("buy iberico ham", 0.0), ("what is iberico ham", 0.0)]
+    # Related keywords present but all volumes are 0 -> filtered out -> UNAVAILABLE.
+    rows = [("buy iberico ham", 0.0, None, None, None), ("what is iberico ham", 0.0, None, None, None)]
     engine = make_mock_engine([result_with_all(rows)])
     with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
