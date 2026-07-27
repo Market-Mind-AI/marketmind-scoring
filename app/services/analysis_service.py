@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
 from app.db.models.indicator_value import IndicatorValue
+from app.db.models.mos_result import MosResult
 from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.country_repository import CountryRepository
@@ -182,9 +183,35 @@ class AnalysisService:
                 if entity_key is not None
                 else []
             )
-            serialized = [
-                MosResultResponse.model_validate(r, from_attributes=True).model_dump(mode="json") for r in mos_results
-            ]
+
+            # Reference "champion" (2026-07-27): the product's best-MOS market
+            # among the enrichment LLM's reference candidates. MOS uses fixed
+            # 100/0 TOPSIS anchors, so it is query-independent — scoring the
+            # candidates never changes the requested countries' scores. Their
+            # demand is already collected (the ruler), so this adds only free
+            # World Bank/OECD/UN data + compute (~zero paid cost). If the best
+            # market wasn't requested, we surface it (crowned) so the user can
+            # benchmark their picks against the product's standout market —
+            # useful even for a single-country request.
+            champion_country: str | None = None
+            requested_set = set(countries)
+            if entity is not None and entity_key is not None and mos_results:
+                candidate_results = await self._score_reference_candidates(
+                    entity=entity, requested=countries, period_key=period_key, demand_ceiling=demand_ceiling
+                )
+                scored_all = [r for r in [*mos_results, *candidate_results] if r.mos is not None]
+                if scored_all:
+                    champion = max(scored_all, key=lambda r: float(r.mos))
+                    champion_country = champion.country
+                    if champion.country not in requested_set:
+                        mos_results = [*mos_results, champion]  # off-request → surface for benchmark
+
+            serialized = []
+            for r in mos_results:
+                row = MosResultResponse.model_validate(r, from_attributes=True).model_dump(mode="json")
+                row["requested"] = r.country in requested_set
+                row["is_champion"] = champion_country is not None and r.country == champion_country
+                serialized.append(row)
             # Evidence packet (deterministic) + final LLM narrative (best-effort).
             # The packet — glossary, weights, demand ruler, and per country the MOS
             # + dimension subscores + every scored signal with its explanation — is
@@ -202,6 +229,13 @@ class AnalysisService:
                     demand_ruler=demand_ruler,
                 )
                 if breakdown is not None:
+                    # Tag which markets were requested vs the off-request champion
+                    # so both the narrative and the frontend can crown/benchmark it.
+                    for c in breakdown.get("countries") or []:
+                        c["requested"] = c.get("country") in requested_set
+                        c["is_champion"] = champion_country is not None and c.get("country") == champion_country
+                    breakdown["champion_country"] = champion_country
+                    breakdown["requested_countries"] = list(countries)
                     explanation = await self._explanation_client.narrate(
                         packet=breakdown,
                         product_name=analysis_request.canonical_title or "",
@@ -436,6 +470,13 @@ class AnalysisService:
                     collection_params={"location": country.iso2, "language": language, "keywords": terms},
                 )
             )
+            seed_terms = terms[:20]
+            # Force collection when related rows are absent under THIS seed set
+            # (a stale "covered" flag from a prior run under different seeds must
+            # not strand the candidate's search_intent — same fix as requested
+            # countries). Needed so the candidate can be fully scored for the
+            # off-request "champion" benchmark, not just measured for the ruler.
+            related_exists = await pytrends_indicators.related_rows_exist(seed_terms, country.iso2)
             gaps.append(
                 CoverageGap(
                     source=DataSource.PYTRENDS,
@@ -443,13 +484,16 @@ class AnalysisService:
                     country=iso3,
                     indicator_code="keywords_for_keywords",
                     period_key=current_month_period_key(),
-                    collection_params={"location": country.iso2, "language": language, "seed_keywords": terms[:20]},
+                    collection_params={"location": country.iso2, "language": language, "seed_keywords": seed_terms},
+                    force=not related_exists,
                 )
             )
         if not gaps:
             return
         statuses = await self._coverage_service.check_coverage(gaps)
-        missing = [gap for gap, status in zip(gaps, statuses, strict=True) if not status.covered]
+        # Honor gap.force (kfk with absent related rows) even when the raw coverage
+        # row looks fresh — otherwise the stale flag strands search_intent.
+        missing = [gap for gap, status in zip(gaps, statuses, strict=True) if gap.force or not status.covered]
         if missing:
             await self._coverage_service.check_or_collect(missing, requested_by="analysis_service:reference_candidates")
 
@@ -498,3 +542,46 @@ class AnalysisService:
                 "candidates": measured,
             }
         return None, {"mode": "fixed"}
+
+    async def _score_reference_candidates(
+        self, *, entity: Any, requested: list[str], period_key: str, demand_ceiling: float | None
+    ) -> list[MosResult]:
+        """Best-effort MOS for the product's reference-candidate markets the user
+        did NOT request, so the best-MOS market (the "champion") can be surfaced
+        for benchmark even when it wasn't selected. MOS uses fixed 100/0 TOPSIS
+        anchors → query-independent, so this never changes the requested scores.
+        The candidates' demand is already collected (the ruler); only free World
+        Bank/OECD/UN data + compute remain, so ~zero paid cost. A candidate that
+        can't be fully scored is simply skipped (never aborts the analysis)."""
+        entity_key = entity.entity_key
+        if entity_key is None:
+            return []
+        requested_set = set(requested)
+        attempted: list[str] = []
+        seen: set[str] = set()
+        for cand in entity.reference_candidates or []:
+            iso3 = cand.get("country")
+            terms = as_term_list(cand.get("search_terms"))
+            if not (iso3 and terms) or iso3 in requested_set or iso3 in seen:
+                continue
+            seen.add(iso3)
+            country = await self._country_repo.get_by_iso3(iso3)
+            if country is None or country.iso2 is None:
+                continue
+            try:
+                await self._ensure_coverage(country_iso3=iso3, entity_key=entity_key)
+                await self._indicator_engine.compute_all(
+                    country_iso3=iso3,
+                    entity_key=entity_key,
+                    period_key=period_key,
+                    demand_ceiling=demand_ceiling,
+                    terms_override=terms,
+                )
+                attempted.append(iso3)
+            except Exception as exc:  # noqa: BLE001 — benchmark is best-effort, never fails the analysis
+                logger.warning(f"Reference candidate {iso3} could not be scored (skipped): {exc}")
+        if not attempted:
+            return []
+        return await self._mos_engine.compute_mos(
+            entity_key=entity_key, countries=attempted, period_key=period_key
+        )

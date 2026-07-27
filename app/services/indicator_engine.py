@@ -65,6 +65,7 @@ class IndicatorEngine:
         entity_key: uuid.UUID | None = None,
         period_key: str | None = None,
         demand_ceiling: float | None = None,
+        terms_override: list[str] | None = None,
     ) -> list[IndicatorValue]:
         resolved_period_key = period_key or current_month_period_key()
         country = await self._country_repo.get_by_iso3(country_iso3)
@@ -78,7 +79,7 @@ class IndicatorEngine:
             if entity is None:
                 raise EntityNotFoundError(f"Entity {entity_key} not found")
             results += await self._compute_pytrends_indicators(
-                entity, country, resolved_period_key, demand_ceiling=demand_ceiling
+                entity, country, resolved_period_key, demand_ceiling=demand_ceiling, terms_override=terms_override
             )
             results.append(await self._compute_median_age_fit(entity, country, resolved_period_key))
 
@@ -163,7 +164,12 @@ class IndicatorEngine:
         ]
 
     async def _compute_pytrends_indicators(
-        self, entity: ProductCatalog, country: Country, period_key: str, demand_ceiling: float | None = None
+        self,
+        entity: ProductCatalog,
+        country: Country,
+        period_key: str,
+        demand_ceiling: float | None = None,
+        terms_override: list[str] | None = None,
     ) -> list[IndicatorValue]:
         # Demand from Google Ads ABSOLUTE search volume (not Trends), 2026-07-15:
         # each country is measured with its OWN user-approved search terms
@@ -171,10 +177,16 @@ class IndicatorEngine:
         # monthly search volume (real total online search demand);
         # growth/stability from the summed monthly series; intent from the
         # related keywords. location is the ISO2 code Google Ads expects.
+        # `terms_override` scores a reference-candidate country (not in
+        # localized_markets) with the SAME reference terms its demand was
+        # collected under — used only for the off-request "champion" benchmark.
         location = country.iso2 or resolve_source_country_code(DataSource.PYTRENDS, country)
         language = country.search_language
-        market = (entity.localized_markets or {}).get(country.iso3) or {}
-        search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
+        if terms_override:
+            search_terms = as_term_list(terms_override)
+        else:
+            market = (entity.localized_markets or {}).get(country.iso3) or {}
+            search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
         seed_terms = search_terms[:20]  # keywords_for_keywords accepts up to 20 seeds
 
         trend = await pytrends_indicators.compute_trend_score(

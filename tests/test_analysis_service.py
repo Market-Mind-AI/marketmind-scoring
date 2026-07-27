@@ -183,10 +183,13 @@ async def test_run_happy_path_marks_done_with_result() -> None:
                 value.stop()
 
     mocks["analysis_repo"].mark_running.assert_awaited_once()
-    mocks["indicator_engine"].compute_all.assert_awaited_once_with(
+    mocks["indicator_engine"].compute_all.assert_any_await(
         country_iso3="USA", entity_key=_ENTITY_KEY, period_key="2026-07", demand_ceiling=2000.0
     )
-    mocks["mos_engine"].compute_mos.assert_awaited_once_with(
+    # compute_all runs for the requested market (USA) AND the off-request
+    # reference candidate (BRA), which is scored for the champion benchmark.
+    assert mocks["indicator_engine"].compute_all.await_count == 2
+    mocks["mos_engine"].compute_mos.assert_any_await(
         entity_key=_ENTITY_KEY, countries=["USA"], period_key="2026-07"
     )
     mocks["coverage_service"].check_or_collect.assert_not_awaited()  # everything already covered
@@ -194,12 +197,19 @@ async def test_run_happy_path_marks_done_with_result() -> None:
     result_arg = mocks["analysis_repo"].mark_done.call_args.kwargs["result"]
     assert result_arg[0]["country"] == "USA"
     assert result_arg[0]["mos_interpretation"] == "Good Opportunity"
+    assert result_arg[0]["requested"] is True
+    # USA is the only scored market here, so it is also the champion.
+    assert result_arg[0]["is_champion"] is True
     # Deterministic packet built + persisted (breakdown); best-effort narrative
     # generated from it and persisted with the result.
     mocks["explanation_client"].build_evidence.assert_awaited_once()
     mocks["explanation_client"].narrate.assert_awaited_once()
     assert mocks["analysis_repo"].mark_done.call_args.kwargs["explanation"] == "MOS narrative (mock)"
-    assert mocks["analysis_repo"].mark_done.call_args.kwargs["breakdown"] == {"countries": [{"country": "USA"}]}
+    assert mocks["analysis_repo"].mark_done.call_args.kwargs["breakdown"] == {
+        "countries": [{"country": "USA", "requested": True, "is_champion": True}],
+        "champion_country": "USA",
+        "requested_countries": ["USA"],
+    }
     # The Demand Volume ruler (reference market + volume) is handed to the packet builder.
     ruler = mocks["explanation_client"].build_evidence.call_args.kwargs["demand_ruler"]
     # Ceiling = largest among the CANDIDATES only (deterministic / query-independent);
@@ -210,6 +220,49 @@ async def test_run_happy_path_marks_done_with_result() -> None:
         "volume": 2000.0,
         "candidates": [{"country": "BRA", "volume": 2000.0}],
     }
+
+
+async def test_off_request_champion_is_surfaced_and_crowned() -> None:
+    """When the best-MOS market is a reference candidate the user did NOT request,
+    it is appended to the results, flagged requested=False + is_champion=True, and
+    the requested market keeps requested=True (crowned only if it's the top)."""
+    session, mocks = _patched_service(all_covered=True)
+    # BRA (candidate) scores higher than requested USA → BRA is the champion.
+    def _mos_by_country(*, entity_key: object, countries: list[str], period_key: str) -> list[MosResultResponse]:
+        out = []
+        for c in countries:
+            r = _mos_result(c)
+            if c == "BRA":
+                r.mos = Decimal("85.0")
+            out.append(r)
+        return out
+
+    mocks["mos_engine"].compute_mos = AsyncMock(side_effect=_mos_by_country)
+    # build_evidence packet must carry both countries so run() can annotate them.
+    mocks["explanation_client"].build_evidence = AsyncMock(
+        return_value={"countries": [{"country": "USA"}, {"country": "BRA"}]}
+    )
+    try:
+        with patch("app.services.analysis_service.current_month_period_key", return_value="2026-07"):
+            service = AnalysisService(session)
+            await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    result_arg = mocks["analysis_repo"].mark_done.call_args.kwargs["result"]
+    by_country = {r["country"]: r for r in result_arg}
+    assert set(by_country) == {"USA", "BRA"}  # off-request champion appended
+    assert by_country["USA"]["requested"] is True
+    assert by_country["USA"]["is_champion"] is False
+    assert by_country["BRA"]["requested"] is False  # not requested — benchmark only
+    assert by_country["BRA"]["is_champion"] is True  # crowned
+    breakdown = mocks["analysis_repo"].mark_done.call_args.kwargs["breakdown"]
+    assert breakdown["champion_country"] == "BRA"
+    assert breakdown["requested_countries"] == ["USA"]
+    bra = next(c for c in breakdown["countries"] if c["country"] == "BRA")
+    assert bra["is_champion"] is True and bra["requested"] is False
 
 
 async def test_run_dispatches_collection_only_for_missing_gaps() -> None:

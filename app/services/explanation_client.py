@@ -113,16 +113,14 @@ def _flag_demand_outliers(countries: list[dict[str, Any]]) -> None:
         )
 
 _SYSTEM_PROMPT_PT = """Você é um analista de entrada em mercados (market-entry) que ajuda um negócio \
-a decidir EM QUAIS PAÍSES vender um produto, a partir de um "pacote de evidências" já calculado \
+a {scope_intro}, a partir de um "pacote de evidências" já calculado \
 pelo motor determinístico de MOS (Market Opportunity Score) da MarketMind.
 
 REGRAS INVIOLÁVEIS:
 - Use SOMENTE os números fornecidos no pacote. NUNCA invente, estime, arredonde de forma nova \
 ou recalcule qualquer valor. Não escreva nenhum número que não esteja no input.
 - Você EXPLICA os resultados determinísticos; você não os recalcula nem os contesta.
-- Inclua TODOS os países do pacote (não omita nenhum), na ordem do MOS (maior primeiro). \
-Cite o MOS de cada país EXATAMENTE como está no input — o ranking já é final, não reordene \
-nem recalcule por conta própria.
+- {country_rule}
 
 O PACOTE traz, para CADA país: o MOS (com banda e um campo `explanation` em texto), a lista de \
 `dimensions` e a lista de `signals` (indicadores). CADA item — MOS, dimensão e sinal — tem um campo \
@@ -142,7 +140,7 @@ RÉGUA DE VOLUME DE DEMANDA (`demand_ruler`) — explique-a DENTRO do texto corr
 do produto — o país `country` (com `volume` buscas/mês), eleito como o de MAIOR volume REAL entre os \
 mercados avaliados (`candidates` = candidatos propostos + os próprios países analisados). Deixe claro que \
 100 seria igualar esse maior mercado, e que os países analisados valem tanto % disso. O mercado-referência \
-é só a régua — NÃO faz parte do ranking (a menos que também tenha sido pedido).
+é só a régua — NÃO faz parte {ruler_scope} (a menos que também tenha sido pedido).
 - Se `mode` = "fixed": não houve volume em nenhum mercado avaliado; usou-se um teto fixo genérico. \
 **Avise claramente** que os scores de volume são só aproximados nesse caso.
 
@@ -157,17 +155,15 @@ oportunidade.
 
 Tom humano de analista, prosa corrida do início ao fim — nada de bullets, listas ou subtítulos."""
 
-_SYSTEM_PROMPT_EN = """You are a market-entry analyst helping a business decide IN WHICH COUNTRIES \
-to sell a product, based on an "evidence packet" already computed by MarketMind's deterministic \
+_SYSTEM_PROMPT_EN = """You are a market-entry analyst helping a business {scope_intro}, \
+based on an "evidence packet" already computed by MarketMind's deterministic \
 MOS (Market Opportunity Score) engine.
 
 INVIOLABLE RULES:
 - Use ONLY the numbers provided in the packet. NEVER invent, estimate, re-round or recompute any \
 value. Do not write any number that is not in the input.
 - You EXPLAIN the deterministic results; you do not recompute or dispute them.
-- Include EVERY country in the packet (omit none), ordered by MOS (highest first). Quote each \
-country's MOS EXACTLY as given in the input — the ranking is already final, do not reorder or \
-recompute it yourself.
+- {country_rule}
 
 The PACKET carries, for EACH country: the MOS (with band and an `explanation` string), the list of \
 `dimensions` and the list of `signals` (indicators). EVERY item — MOS, dimension and signal — has an \
@@ -187,7 +183,7 @@ DEMAND VOLUME RULER (`demand_ruler`) — explain it WITHIN the flowing prose (no
 REFERENCE MARKET — the country `country` (with `volume` monthly searches), elected as the largest by REAL \
 volume among the evaluated markets (`candidates` = proposed candidates + the analyzed countries themselves). \
 Make clear that 100 would mean matching that biggest market, and the analyzed countries are worth that % of \
-it. The reference market is only the ruler — NOT part of the ranking (unless it was also requested).
+it. The reference market is only the ruler — NOT part of {ruler_scope} (unless it was also requested).
 - If `mode` = "fixed": no evaluated market had any volume; a generic fixed ceiling was used. **Warn \
 clearly** that the volume scores are only approximate in this case.
 
@@ -275,6 +271,24 @@ say so plainly (e.g. "this analysis's data does not cover X"). Stay fully cohere
 User text: "{user_prompt}\""""
 
 
+_CHAMPION_RULE_PT = (
+    "MERCADO DESTAQUE (\"rei\" 👑): um país no pacote está marcado com `is_champion` = true e `requested` = false "
+    "— é o mercado de MAIOR MOS para este produto entre os candidatos de referência e NÃO foi solicitado pelo "
+    "usuário. Inclua-o como BENCHMARK: diga que é o mercado de maior potencial para o produto (com o MOS dele), "
+    "deixe EXPLÍCITO que não estava entre os mercados pedidos, e compare o(s) mercado(s) solicitado(s) com ele "
+    "(quão perto ou longe estão do melhor mercado). NÃO o trate como um alvo pedido nem o inclua na recomendação "
+    "de priorização dos mercados solicitados."
+)
+_CHAMPION_RULE_EN = (
+    "STANDOUT MARKET (\"king\" 👑): one country in the packet is flagged `is_champion` = true and `requested` = "
+    "false — it is the HIGHEST-MOS market for this product among the reference candidates and was NOT requested by "
+    "the user. Include it as a BENCHMARK: state it is the product's highest-potential market (with its MOS), make it "
+    "EXPLICIT that it was not among the requested markets, and compare the requested market(s) against it (how close "
+    "or far they are from the best market). Do NOT treat it as a requested target nor include it in the "
+    "prioritization recommendation for the requested markets."
+)
+
+
 _DEMAND_CONFIDENCE_RULE_PT = (
     "CONFIANÇA DA DEMANDA: se algum país trouxer `demand_confidence` = \"low\" (com `demand_confidence_note`), "
     "AVISE explicitamente, dentro da prosa daquele país, que o volume de demanda dele pode estar SUBESTIMADO "
@@ -287,18 +301,72 @@ _DEMAND_CONFIDENCE_RULE_EN = (
 )
 
 
-def _system_prompt(language: str, *, single_country: bool, user_prompt: str | None = None) -> str:
+# Scope-dependent phrasing woven into the base prompt. With a SINGLE country the
+# opener, the "include every country ordered by MOS / the ranking is final" rule,
+# and the demand-ruler's "not part of the ranking" clause must NOT carry any
+# ranking/ordering/comparison connotation (there is nothing to rank).
+_SCOPE_INTRO_PT = {
+    True: "avaliar se UM mercado é uma boa oportunidade para vender um produto",
+    False: "decidir EM QUAIS PAÍSES vender um produto",
+}
+_COUNTRY_RULE_PT = {
+    True: (
+        "Cite o MOS deste país EXATAMENTE como está no input — ele já é final, não recalcule "
+        "por conta própria. Há APENAS UM país nesta análise; NÃO use linguagem de ranking, "
+        "ordenação ou comparação entre países."
+    ),
+    False: (
+        "Inclua TODOS os países do pacote (não omita nenhum), na ordem do MOS (maior primeiro). "
+        "Cite o MOS de cada país EXATAMENTE como está no input — o ranking já é final, não reordene "
+        "nem recalcule por conta própria."
+    ),
+}
+_RULER_SCOPE_PT = {True: "da pontuação do mercado analisado", False: "do ranking"}
+_SCOPE_INTRO_EN = {
+    True: "assess whether ONE market is a good opportunity to sell a product",
+    False: "decide IN WHICH COUNTRIES to sell a product",
+}
+_COUNTRY_RULE_EN = {
+    True: (
+        "Quote this country's MOS EXACTLY as given in the input — it is already final, do not "
+        "recompute it yourself. There is ONLY ONE country in this analysis; do NOT use any ranking, "
+        "ordering or country-to-country comparison language."
+    ),
+    False: (
+        "Include EVERY country in the packet (omit none), ordered by MOS (highest first). Quote each "
+        "country's MOS EXACTLY as given in the input — the ranking is already final, do not reorder or "
+        "recompute it yourself."
+    ),
+}
+_RULER_SCOPE_EN = {True: "the analyzed market's score", False: "the ranking"}
+
+
+def _system_prompt(
+    language: str, *, single_country: bool, user_prompt: str | None = None, external_champion: bool = False
+) -> str:
     lang = (language or "").strip().lower()
     is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
     if is_pt:
         structure = _STRUCTURE_PT_SINGLE if single_country else _STRUCTURE_PT_MULTI
-        base = _SYSTEM_PROMPT_PT.replace("{structure}", structure)
+        base = (
+            _SYSTEM_PROMPT_PT.replace("{structure}", structure)
+            .replace("{scope_intro}", _SCOPE_INTRO_PT[single_country])
+            .replace("{country_rule}", _COUNTRY_RULE_PT[single_country])
+            .replace("{ruler_scope}", _RULER_SCOPE_PT[single_country])
+        )
     else:
         structure = _STRUCTURE_EN_SINGLE if single_country else _STRUCTURE_EN_MULTI
-        base = _SYSTEM_PROMPT_EN.replace("{structure}", structure)
+        base = (
+            _SYSTEM_PROMPT_EN.replace("{structure}", structure)
+            .replace("{scope_intro}", _SCOPE_INTRO_EN[single_country])
+            .replace("{country_rule}", _COUNTRY_RULE_EN[single_country])
+            .replace("{ruler_scope}", _RULER_SCOPE_EN[single_country])
+        )
         if lang not in ("en", "en-us", "en_us", "english"):
             base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
     base = f"{base}\n\n{_DEMAND_CONFIDENCE_RULE_PT if is_pt else _DEMAND_CONFIDENCE_RULE_EN}"
+    if external_champion:
+        base = f"{base}\n\n{_CHAMPION_RULE_PT if is_pt else _CHAMPION_RULE_EN}"
     prompt_text = (user_prompt or "").strip()
     if prompt_text:
         block = (_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", prompt_text)
@@ -433,11 +501,19 @@ class ExplanationClient:
         countries = packet.get("countries") or []
         if not countries:
             return None
+        # "single-country" framing follows the REQUESTED markets (an off-request
+        # champion added for benchmark doesn't turn a 1-country request into a
+        # ranking). The champion rule is injected only when that champion is
+        # off-request (is_champion and not requested).
+        requested = [c for c in countries if c.get("requested", True)]
+        single = len(requested) <= 1
+        external_champion = any(c.get("is_champion") and not c.get("requested", True) for c in countries)
         try:
             system = _system_prompt(
                 settings.ollama_llm_narrative_language,
-                single_country=len(countries) == 1,
+                single_country=single,
                 user_prompt=user_prompt,
+                external_champion=external_champion,
             )
             user = json.dumps(
                 {
