@@ -25,6 +25,8 @@ class Country(Base):
     # searches in. compute_trend_score reads the interest_by_country row for
     # this country's term in this language (keyword localization, 2026-07-10).
     search_language: Mapped[str | None] = mapped_column(nullable=True)
+    # Continent grouping for the frontend picker (alphabetical within continent).
+    continent: Mapped[str | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     __table_args__ = (

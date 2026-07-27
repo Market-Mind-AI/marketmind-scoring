@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes.admin import router as admin_router
 from app.api.routes.analyze import router as analyze_router
 from app.api.routes.catalog import router as catalog_router
+from app.api.routes.countries import router as countries_router
 from app.api.routes.coverage import router as coverage_router
 from app.api.routes.health import router as health_router
 from app.api.routes.indicators import router as indicators_router
@@ -56,6 +57,7 @@ app.add_middleware(
 app.include_router(health_router, tags=["Health"])
 app.include_router(coverage_router, tags=["Coverage"])
 app.include_router(catalog_router, tags=["Catalog"])
+app.include_router(countries_router, tags=["Countries"])
 app.include_router(indicators_router, tags=["Indicators"])
 app.include_router(mos_router, tags=["MOS"])
 app.include_router(analyze_router, tags=["Analyze"])

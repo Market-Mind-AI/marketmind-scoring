@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
 from app.db.models.indicator_value import IndicatorValue
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, PeriodType
+from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
@@ -224,54 +224,39 @@ class AnalysisService:
             location = country.iso2 if country is not None else None
             language = (country.search_language if country is not None else None) or "en"
             if search_terms and location is not None:
-                # Force re-collection of any demand gap whose computed indicators
-                # are still missing/unavailable for this country (see
-                # _DEMAND_COLLECTION_OUTPUTS): a prior run may have "covered" the
-                # raw collection while leaving the indicator empty, and skipping
-                # it would strand that country forever.
-                current = await self._indicator_repo.get_values_for(
-                    entity_key=entity_key,
-                    country=country_iso3,
-                    period_type=PeriodType.MONTH.value,
-                    period_key=current_month_period_key(),
-                )
-                gaps.append(
-                    CoverageGap(
-                        source=DataSource.PYTRENDS,
-                        entity_key=entity_key,
-                        country=country_iso3,
-                        indicator_code="search_volume",
-                        period_key=current_month_period_key(),
-                        collection_params={"location": location, "language": language, "keywords": search_terms},
-                        force=self._demand_gap_needs_recollect(current, "search_volume"),
+                # Term-incremental demand ("só baixa se um termo novo aparece"):
+                # collect ONLY the search terms that don't yet have volume data —
+                # already-cached terms are never re-downloaded. Nothing missing =>
+                # no search_volume collection at all.
+                missing_sv = await pytrends_indicators.missing_volume_terms(search_terms, location)
+                if missing_sv:
+                    gaps.append(
+                        CoverageGap(
+                            source=DataSource.PYTRENDS,
+                            entity_key=entity_key,
+                            country=country_iso3,
+                            indicator_code="search_volume",
+                            period_key=current_month_period_key(),
+                            collection_params={"location": location, "language": language, "keywords": missing_sv},
+                            force=True,
+                        )
                     )
-                )
-                # Force a related-keyword re-collection not only when the intent
-                # indicator is missing/unavailable, but also when the collector
-                # has NO related rows for the CURRENT seed label+location. The
-                # intent lookup matches keyword_related on the exact joined seed
-                # label; when a new identify-image overwrites localized_markets
-                # with different terms, the old rows no longer match and the
-                # stale "covered" flag (+ a prior run's still-available value)
-                # would otherwise strand search_intent_score and abort the run.
-                kfk_force = self._demand_gap_needs_recollect(
-                    current, "keywords_for_keywords"
-                ) or not await pytrends_indicators.related_rows_exist(search_terms[:20], location)
-                gaps.append(
-                    CoverageGap(
-                        source=DataSource.PYTRENDS,
-                        entity_key=entity_key,
-                        country=country_iso3,
-                        indicator_code="keywords_for_keywords",
-                        period_key=current_month_period_key(),
-                        collection_params={
-                            "location": location,
-                            "language": language,
-                            "seed_keywords": search_terms[:20],
-                        },
-                        force=kfk_force,
+                # Related keywords (intent) are a function of the seed SET, not of
+                # individual terms, so re-collect only when the current seed's
+                # related rows are absent — i.e. a genuinely new term entered the
+                # top-20 seeds. A stable/merged seed set => cache hit => no download.
+                seed_terms = search_terms[:20]
+                if seed_terms and not await pytrends_indicators.related_rows_exist(seed_terms, location):
+                    gaps.append(
+                        CoverageGap(
+                            source=DataSource.PYTRENDS,
+                            entity_key=entity_key,
+                            country=country_iso3,
+                            indicator_code="keywords_for_keywords",
+                            period_key=current_month_period_key(),
+                            collection_params={"location": location, "language": language, "seed_keywords": seed_terms},
+                        )
                     )
-                )
 
         current_year = datetime.now(UTC).year
         start_year, end_year = current_year - _ANNUAL_LOOKBACK_YEARS, current_year

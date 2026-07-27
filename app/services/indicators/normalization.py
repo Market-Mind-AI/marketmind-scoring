@@ -91,12 +91,35 @@ _CONTEXT_ONLY_INDICATORS = frozenset(
 # extreme SATURATES at the worst score (0) instead of stretching the ruler for
 # everyone; the yardstick stays stable and comparable across analyses. Their
 # ranges are set by migration 020.
+#
+# The remaining macro indicators (2026-07-24) are blinded the same way: their
+# fixed ranges are already economically sane (round seeds from migrations
+# 005/010/012, not corrupted), so no reseed is needed — but without this a
+# future extreme (e.g. Singapore's ~350% trade openness, an oil exporter's net
+# exports, a post-crisis GDP swing) would widen the ceiling and retroactively
+# crush every normal country. Now such extremes SATURATE at 0/100 instead.
 _NO_SELF_WIDEN: frozenset[IndicatorCode] = frozenset(
     {
         IndicatorCode.TREND_SCORE,
         IndicatorCode.WORLDBANK_INFLATION_SCORE,
         IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
         IndicatorCode.DEMAND_STABILITY_SCORE,
+        IndicatorCode.GDP_GROWTH_SCORE,
+        IndicatorCode.NET_EXPORTS_SCORE,
+        IndicatorCode.INVESTMENT_SCORE,
+        IndicatorCode.CONSUMER_SPENDING_SCORE,
+        IndicatorCode.TRADE_OPENNESS_SCORE,
+        IndicatorCode.GDP_PER_CAPITA_SCORE,
+        # Final batch (2026-07-27): every remaining fixed-bound indicator is
+        # frozen too, so NO ruler self-widens anymore. Self-widening at different
+        # times had left scores on different rulers (mobile_connectivity came out
+        # non-monotonic across countries — a stale-ruler discrepancy). With all
+        # rulers fixed + a one-off recompute, every country sits on one yardstick.
+        IndicatorCode.GROWTH_SCORE,
+        IndicatorCode.MOBILE_CONNECTIVITY_SCORE,
+        IndicatorCode.NET_MIGRATION_RATE_SCORE,
+        IndicatorCode.POPULATION_GROWTH_SCORE,
+        IndicatorCode.POPULATION_SCALE_SCORE,
     }
 )
 

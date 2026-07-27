@@ -121,13 +121,19 @@ async def _fetch_approved_raw(
     the drop-zero/dedup pass (so callers can merge it with expansion rows first)."""
     if not search_terms:
         return []
+    # Case-INSENSITIVE match: DataForSEO stores keywords lowercased (e.g.
+    # "ninja air fryer"), while curated terms are mixed-case ("Ninja air fryer").
+    # An exact match silently dropped every brand/variant term from the volume
+    # sum (undercount) — lower() on both sides makes the curated terms actually
+    # count. DISTINCT ON the normalized keyword also collapses case duplicates.
+    lowered = [t.strip().lower() for t in search_terms]
     result = await connection.execute(
         text(
-            "SELECT DISTINCT ON (keyword) keyword, search_volume, monthly_searches "
-            "FROM keyword_search_volume WHERE location = :location AND keyword = ANY(:terms) "
-            "ORDER BY keyword, created_at DESC"
+            "SELECT DISTINCT ON (lower(keyword)) keyword, search_volume, monthly_searches "
+            "FROM keyword_search_volume WHERE location = :location AND lower(keyword) = ANY(:lowered) "
+            "ORDER BY lower(keyword), created_at DESC"
         ),
-        {"location": location, "terms": search_terms},
+        {"location": location, "lowered": lowered},
     )
     return [(row[0], 0.0 if row[1] is None else float(row[1]), _monthly_volumes(row[2])) for row in result.all()]
 
@@ -181,6 +187,31 @@ async def related_rows_exist(seed_terms: list[str], location: str) -> bool:
             {"location": location, "seed_label": seed_label},
         )
         return result.first() is not None
+
+
+async def missing_volume_terms(terms: list[str], location: str) -> list[str]:
+    """The subset of `terms` with NO keyword_search_volume row yet for this
+    location — i.e. exactly what a collection still needs. Enables
+    term-incremental demand: only genuinely new terms are downloaded, already
+    cached ones are skipped ("só baixa se um termo novo aparece"). Matches on the
+    exact keyword string, the same key compute_trend_score reads by."""
+    if not terms:
+        return []
+    # Case-insensitive, matching how the trend lookup reads (DataForSEO stores
+    # keywords lowercased) — otherwise mixed-case curated terms would look
+    # "missing" forever and re-download every run.
+    lowered = [t.strip().lower() for t in terms]
+    engine = get_external_engine(DataSource.PYTRENDS)
+    async with engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                "SELECT DISTINCT lower(keyword) FROM keyword_search_volume "
+                "WHERE location = :location AND lower(keyword) = ANY(:lowered)"
+            ),
+            {"location": location, "lowered": lowered},
+        )
+        have = {row[0] for row in result.all()}
+    return [t for t, lt in zip(terms, lowered, strict=True) if lt not in have]
 
 
 def _select_expansion(

@@ -13,6 +13,7 @@ score (Cap. 4 §4.0, memory marketmind_mos_engine).
 """
 
 import json
+import re
 import uuid
 from typing import Any
 
@@ -39,6 +40,77 @@ _PACKET_INDICATORS: list[IndicatorCode] = [
     IndicatorCode.REGIONAL_DEMAND_SCORE,
     IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE,
 ]
+
+# --- demand-confidence guard (automated stand-in for human term curation) ---
+# The one failure the Google-volume net can't catch is a MISSING native search
+# term (e.g. Japan without ノンフライヤー): a real term simply isn't proposed, so
+# volume is undercounted with no signal. Its tell-tale is a demand penetration
+# (searches per 100k inhabitants) that is a gross LOW outlier vs the peer
+# markets. We read the penetration the indicator engine already wrote into the
+# Demand Volume signal's context and flag such countries as low-confidence.
+_PENETRATION_RE = re.compile(r"penetration\s+([\d.]+)\s+searches per 100k", re.IGNORECASE)
+_DEMAND_OUTLIER_RATIO = 0.2  # < 20% of the peer median penetration = suspicious
+_DEMAND_OUTLIER_MIN_PEERS = 3  # need enough peers for a meaningful median
+# A low penetration is only SUSPICIOUS (likely a missing native term) in a
+# developed, connected market — a rich country with near-zero demand is wrong.
+# In a low-income market, low per-capita demand is expected, not an artifact, so
+# don't false-flag it. gdp_per_capita_score >= 15 ≈ GDP/cap above ~$18.8k on the
+# [1000, 120000] ruler (see migration 021).
+_DEVELOPED_GDP_MIN = 15.0
+
+
+def _signal_score(country: dict[str, Any], code: str) -> float | None:
+    for signal in country.get("signals") or []:
+        if signal.get("code") == code:
+            return signal.get("score")
+    return None
+
+
+def _penetration_of(country: dict[str, Any]) -> float | None:
+    context = None
+    for signal in country.get("signals") or []:
+        if signal.get("code") == IndicatorCode.TREND_SCORE.value and signal.get("context"):
+            context = str(signal["context"])
+            break
+    if not context:
+        return None
+    match = _PENETRATION_RE.search(context)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _flag_demand_outliers(countries: list[dict[str, Any]]) -> None:
+    """Set `demand_confidence` ('ok'|'low') on each country. 'low' means the
+    demand volume is likely UNDERCOUNTED (a missing native search term) — flagged
+    when a DEVELOPED market's penetration is a gross low outlier vs the peer
+    median. Mutates in place. Purely a warning; never changes any score."""
+    for country in countries:
+        country["demand_confidence"] = "ok"
+    pens = {c["country"]: _penetration_of(c) for c in countries}
+    valid = sorted(p for p in pens.values() if p is not None and p > 0)
+    if len(valid) < _DEMAND_OUTLIER_MIN_PEERS:
+        return
+    mid = len(valid) // 2
+    median = valid[mid] if len(valid) % 2 else (valid[mid - 1] + valid[mid]) / 2
+    if median <= 0:
+        return
+    for country in countries:
+        pen = pens.get(country["country"])
+        if pen is None or pen >= median * _DEMAND_OUTLIER_RATIO:
+            continue
+        gdp = _signal_score(country, IndicatorCode.GDP_PER_CAPITA_SCORE.value)
+        if gdp is not None and gdp < _DEVELOPED_GDP_MIN:
+            continue  # low-income market → low demand is expected, not an artifact
+        country["demand_confidence"] = "low"
+        country["demand_confidence_note"] = (
+            f"Penetração de {pen:.0f} buscas/100k é um outlier baixo frente à mediana dos mercados "
+            f"({median:.0f}/100k) num mercado desenvolvido — possível subcontagem por termo de busca "
+            "nativo faltante aqui."
+        )
 
 _SYSTEM_PROMPT_PT = """Você é um analista de entrada em mercados (market-entry) que ajuda um negócio \
 a decidir EM QUAIS PAÍSES vender um produto, a partir de um "pacote de evidências" já calculado \
@@ -203,6 +275,18 @@ say so plainly (e.g. "this analysis's data does not cover X"). Stay fully cohere
 User text: "{user_prompt}\""""
 
 
+_DEMAND_CONFIDENCE_RULE_PT = (
+    "CONFIANÇA DA DEMANDA: se algum país trouxer `demand_confidence` = \"low\" (com `demand_confidence_note`), "
+    "AVISE explicitamente, dentro da prosa daquele país, que o volume de demanda dele pode estar SUBESTIMADO "
+    "(provável termo de busca nativo faltante) e trate o MOS dele com essa ressalva — não o apresente como definitivo."
+)
+_DEMAND_CONFIDENCE_RULE_EN = (
+    "DEMAND CONFIDENCE: if a country carries `demand_confidence` = \"low\" (with `demand_confidence_note`), "
+    "explicitly WARN, within that country's prose, that its demand volume may be UNDERSTATED (likely a missing "
+    "native search term) and treat its MOS with that caveat — do not present it as definitive."
+)
+
+
 def _system_prompt(language: str, *, single_country: bool, user_prompt: str | None = None) -> str:
     lang = (language or "").strip().lower()
     is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
@@ -214,6 +298,7 @@ def _system_prompt(language: str, *, single_country: bool, user_prompt: str | No
         base = _SYSTEM_PROMPT_EN.replace("{structure}", structure)
         if lang not in ("en", "en-us", "en_us", "english"):
             base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
+    base = f"{base}\n\n{_DEMAND_CONFIDENCE_RULE_PT if is_pt else _DEMAND_CONFIDENCE_RULE_EN}"
     prompt_text = (user_prompt or "").strip()
     if prompt_text:
         block = (_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", prompt_text)
@@ -325,6 +410,7 @@ class ExplanationClient:
             if row is not None:
                 weights[dim.value] = round(float(row.weight), 3)
         countries = [await self._country_evidence(entity_key, r, period_key, catalog, weights) for r in scored]
+        _flag_demand_outliers(countries)  # mark likely-undercounted markets (missing-native-term guard)
         return {
             "period_key": period_key,
             "demand_ruler": demand_ruler,

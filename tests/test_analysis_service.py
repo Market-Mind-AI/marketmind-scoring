@@ -47,7 +47,9 @@ def _mos_result(country: str) -> MosResultResponse:
     )
 
 
-def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMock]]:
+def _patched_service(
+    *, all_covered: bool, missing_terms: list[str] | None = None, related_exists: bool = True
+) -> tuple[AsyncMock, dict[str, AsyncMock]]:
     """Patches every collaborator AnalysisService constructs internally and
     returns (session, mocks) so tests can assert on call args."""
     mocks: dict[str, AsyncMock] = {}
@@ -108,10 +110,18 @@ def _patched_service(*, all_covered: bool) -> tuple[AsyncMock, dict[str, AsyncMo
     # re-collection (so the all_covered path still skips collection).
     related_patcher = patch(
         "app.services.analysis_service.pytrends_indicators.related_rows_exist",
-        AsyncMock(return_value=True),
+        AsyncMock(return_value=related_exists),
     )
     related_patcher.start()
     mocks["_patcher_related"] = related_patcher
+    # Term-incremental demand: only terms missing volume data drive a
+    # search_volume collection (default: none missing → no collection).
+    missing_patcher = patch(
+        "app.services.analysis_service.pytrends_indicators.missing_volume_terms",
+        AsyncMock(return_value=list(missing_terms or [])),
+    )
+    missing_patcher.start()
+    mocks["_patcher_missing"] = missing_patcher
     country_repo.get_by_iso3 = AsyncMock(
         return_value=SimpleNamespace(search_language="en", pytrends_geo=None, iso2="US")
     )
@@ -210,12 +220,12 @@ async def test_run_dispatches_collection_only_for_missing_gaps() -> None:
     assert len(dispatched_gaps) > 0
 
 
-async def test_demand_gaps_built_from_localized_markets() -> None:
-    # Demand (2026-07-15): each country's approved terms in localized_markets[ISO3]
-    # produce exactly two Google Ads gaps — search_volume (level/growth/stability)
-    # and keywords_for_keywords (intent) — with the country's ISO2 location and
-    # search_language. No worldwide arbitration, no per-country-series guard.
-    session, mocks = _patched_service(all_covered=False)
+async def test_demand_gaps_built_incrementally_from_new_terms() -> None:
+    # Term-incremental demand: search_volume collects ONLY the terms missing
+    # volume data (here "airfryer"), and keywords_for_keywords is collected
+    # because the seed's related rows are absent (related_exists=False). ISO2
+    # location + search_language, as before.
+    session, mocks = _patched_service(all_covered=False, missing_terms=["airfryer"], related_exists=False)
     try:
         service = AnalysisService(session)
         await service.run(_REQUEST_ID)
@@ -225,41 +235,24 @@ async def test_demand_gaps_built_from_localized_markets() -> None:
                 value.stop()
 
     dispatched = [gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]]
-    # Scope to the REQUESTED country (USA); the reference market (BRA) is a
-    # separate search_volume gap and must not be confused with it.
     usa_pytrends = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS and g.country == "USA"}
     assert set(usa_pytrends) == {"search_volume", "keywords_for_keywords"}
 
     sv = usa_pytrends["search_volume"]
     assert sv.entity_key == _ENTITY_KEY
-    assert sv.collection_params == {"location": "US", "language": "en", "keywords": ["air fryer", "airfryer"]}
+    # only the missing term is downloaded, not the whole set
+    assert sv.collection_params == {"location": "US", "language": "en", "keywords": ["airfryer"]}
 
     kfk = usa_pytrends["keywords_for_keywords"]
     assert kfk.collection_params == {"location": "US", "language": "en", "seed_keywords": ["air fryer", "airfryer"]}
 
-    # The reference market (BRA) is also collected — its own search_volume gap.
-    ref = next(
-        g
-        for g in dispatched
-        if g.source == DataSource.PYTRENDS and g.country == "BRA" and g.indicator_code == "search_volume"
-    )
-    assert ref.collection_params["keywords"] == ["air fryer br"]
 
-
-async def test_forces_recollect_of_unavailable_demand_indicator_even_if_covered() -> None:
-    # The fix (2026-07-22): coverage-fresh is NOT enough — if a computed demand
-    # indicator is unavailable, the feeding collection must re-run so the country
-    # isn't stranded. Here search_volume's indicators are available but intent is
-    # unavailable, so ONLY keywords_for_keywords is force-recollected.
-    session, mocks = _patched_service(all_covered=True)
-    mocks["indicator_repo"].get_values_for = AsyncMock(
-        return_value={
-            "trend_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
-            "growth_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
-            "demand_stability_score": SimpleNamespace(normalized_score=Decimal("50"), availability_status="available"),
-            "search_intent_score": SimpleNamespace(normalized_score=None, availability_status="unavailable"),
-        }
-    )
+async def test_no_demand_collection_when_terms_already_cached() -> None:
+    # The core resilience/efficiency rule ("só baixa se um termo novo aparece"):
+    # when every term already has volume data (nothing missing) and the seed's
+    # related rows exist, NO pytrends demand collection is dispatched for the
+    # requested country — even though the analysis still runs.
+    session, mocks = _patched_service(all_covered=True, missing_terms=[], related_exists=True)
     try:
         service = AnalysisService(session)
         await service.run(_REQUEST_ID)
@@ -269,12 +262,10 @@ async def test_forces_recollect_of_unavailable_demand_indicator_even_if_covered(
                 value.stop()
 
     dispatched = [gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]]
-    by_code = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS}
+    by_code = {g.indicator_code: g for g in dispatched if g.source == DataSource.PYTRENDS and g.country == "USA"}
     # Only the intent collection is re-run (its indicator was unavailable); the
-    # already-available search_volume is left alone.
-    assert "keywords_for_keywords" in by_code
-    assert by_code["keywords_for_keywords"].force is True
-    assert "search_volume" not in by_code
+    # nothing new → no search_volume and no keywords_for_keywords collection.
+    assert by_code == {}
 
 
 async def test_run_aborts_when_data_incomplete_never_partial_mos() -> None:

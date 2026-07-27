@@ -65,11 +65,12 @@ async def test_resolve_persists_localized_markets_on_new_entity(db_session: Asyn
     assert entity.localized_markets == localized_markets
 
 
-async def test_resolve_refreshes_curated_fields_on_reanalysis(db_session: AsyncSession) -> None:
-    # Re-analysis of an existing product (exact alias hit) UPDATES its curated
-    # fields with whatever the caller brings (2026-07-22) — so identify-image /
-    # analyze pass-through keeps localized_markets + reference_candidates current
-    # instead of freezing them at creation. Fields NOT provided are left intact.
+async def test_resolve_merges_curated_terms_on_reanalysis(db_session: AsyncSession) -> None:
+    # Re-analysis of an existing product (exact alias hit) MERGES its curated
+    # terms — never overwrites (2026-07-27): keywords accumulate in the base, and
+    # a re-identify only ADDS genuinely new terms (keeping the demand cache
+    # stable). A new country is added; an existing country's terms are unioned
+    # (existing first + new appended).
     service = CatalogService(db_session, embedding_client=_mock_embedding_client())
     text = f"Presunto {uuid.uuid4()}"
     at_creation = {
@@ -82,13 +83,20 @@ async def test_resolve_refreshes_curated_fields_on_reanalysis(db_session: AsyncS
         }
     }
     refreshed = {
-        "ESP": {
+        "PRT": {  # same country, a NEW term → unioned
+            "primary_name": "presunto pata negra",
+            "formal_name": None,
+            "search_terms": ["presunto ibérico"],
+            "excluded_terms": [],
+            "confidence": 0.6,
+        },
+        "ESP": {  # new country → added
             "primary_name": "jamón pata negra",
             "formal_name": None,
             "search_terms": ["jamón pata negra"],
             "excluded_terms": [],
             "confidence": 0.6,
-        }
+        },
     }
     candidates = [{"country": "ESP", "primary_name": "jamón", "search_terms": ["jamon"], "confidence": 0.9}]
 
@@ -101,7 +109,11 @@ async def test_resolve_refreshes_curated_fields_on_reanalysis(db_session: AsyncS
 
     entity = await ProductRepository(db_session).get_by_entity_key(again.entity_key)
     assert entity is not None
-    assert entity.localized_markets == refreshed  # updated by the re-analysis
+    lm = entity.localized_markets
+    assert set(lm) == {"PRT", "ESP"}  # existing country kept, new country added
+    # PRT terms unioned (existing first, new appended) — nothing lost
+    assert lm["PRT"]["search_terms"] == ["presunto pata negra", "presunto ibérico"]
+    assert lm["ESP"]["search_terms"] == ["jamón pata negra"]
     assert entity.reference_candidates == candidates  # newly persisted on re-analysis
 
 
