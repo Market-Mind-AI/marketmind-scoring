@@ -80,18 +80,17 @@ class ProductIdentificationService:
             countries=countries,
         )
 
+        # Vision-only identify (fast): keep ONLY the terms the vision model
+        # already returned. The heavy per-country enrichment (localized_markets)
+        # and the reference-market candidates are DEFERRED to the /analyze
+        # background task (AnalysisService._ensure_product_enrichment) — they are
+        # the slow gpt-5 calls, and since the user no longer curates terms here
+        # (only confirms identity) there is no reason to block on them now.
         localized_markets: dict[str, dict[str, Any]] = {
             market.country: _market_to_dict(market)
             for market in identification.markets
             if _has_terms(_market_to_dict(market))
         }
-        localized_markets, reference_candidates = await self._enrich(
-            localized_markets,
-            countries=countries,
-            product_name=identification.product_name,
-            brand=identification.brand,
-            category=identification.category,
-        )
 
         resolve_text = (
             f"{identification.brand} {identification.product_name}".strip()
@@ -103,7 +102,7 @@ class ProductIdentificationService:
             source="image_identification",
             category=identification.category,
             localized_markets=localized_markets or None,
-            reference_candidates=reference_candidates or None,
+            reference_candidates=None,  # deferred to the /analyze background task
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
         )
@@ -116,7 +115,7 @@ class ProductIdentificationService:
             brand=identification.brand,
             category=identification.category,
             localized_markets=localized_markets or None,
-            reference_candidates=reference_candidates or None,
+            reference_candidates=None,  # deferred to the /analyze background task
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
             estimated_price=identification.estimated_price,

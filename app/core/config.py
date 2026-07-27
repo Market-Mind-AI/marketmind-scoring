@@ -77,8 +77,12 @@ class Settings(BaseSettings):
     # Default to gpt-5 on every site (2026-07-24): validated to fix the
     # term-quality gap (e.g. Japan's ノンフライヤー) that the local models missed.
     # Still swappable per-site via .env; production runs on a top model.
+    # Vision runs on gpt-4o (fast, multimodal): identifying "what product is
+    # this" is simple perception — it doesn't need gpt-5's slow deep reasoning,
+    # and term QUALITY (the reason for gpt-5) is the enrichment site's job, not
+    # vision's. Keeps identify-image snappy.
     vision_llm_provider: str = "gpt"
-    vision_llm_model: str = "gpt-5"
+    vision_llm_model: str = "gpt-4o"
     enrichment_llm_provider: str = "gpt"
     enrichment_llm_model: str = "gpt-5"
     reference_market_llm_provider: str = "gpt"

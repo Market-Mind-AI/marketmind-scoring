@@ -27,7 +27,9 @@ from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.coverage import CoverageGap
 from app.schemas.mos import MosResultResponse
+from app.services.catalog_service import _merge_localized_markets
 from app.services.coverage_service import CoverageService
+from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.explanation_client import ExplanationClient
 from app.services.indicator_engine import IndicatorEngine
 from app.services.indicators import pytrends as pytrends_indicators
@@ -35,6 +37,8 @@ from app.services.indicators.oecd import RAW_INDICATOR_CODES as OECD_RAW_CODES
 from app.services.indicators.undata import RAW_INDICATOR_CODES as UNDATA_RAW_CODES
 from app.services.indicators.worldbank import RAW_INDICATOR_CODES as WORLDBANK_RAW_CODES
 from app.services.mos_engine import MosEngine
+from app.services.product_identification_service import _fallback_market, _has_terms, _market_to_dict
+from app.services.reference_market_client import ReferenceMarketClient, ReferenceMarketError
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key, last_n_month_period_keys
 from app.utils.text import as_term_list
@@ -87,6 +91,8 @@ class AnalysisService:
         self._mos_engine = MosEngine(session)
         self._weight_calibration = WeightCalibrationService(session)
         self._explanation_client = ExplanationClient(session)
+        self._enrichment_client = EnrichmentClient()
+        self._reference_market_client = ReferenceMarketClient()
 
     async def run(self, request_id: uuid.UUID) -> None:
         analysis_request = await self._analysis_repo.get(request_id)
@@ -100,6 +106,19 @@ class AnalysisService:
 
             entity_key = analysis_request.entity_key
             countries: list[str] = list(analysis_request.countries)
+
+            # Enrichment deferred from identify-image (kept fast). Generate the
+            # per-country search vocabulary + reference candidates HERE, in the
+            # background — but ONLY for what's missing: a country without terms
+            # triggers enrichment for it, empty reference_candidates trigger the
+            # candidates call. If the base already has everything, NO LLM call is
+            # made (reuse → faster + cheaper). Must run before coverage, which
+            # reads the entity's terms.
+            if entity_key is not None:
+                entity_to_enrich = await self._product_repo.get_by_entity_key(entity_key)
+                if entity_to_enrich is not None:
+                    await self._ensure_product_enrichment(entity_to_enrich, countries)
+                    await self._session.commit()
 
             for country_iso3 in countries:
                 await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
@@ -200,6 +219,59 @@ class AnalysisService:
                 await self._analysis_repo.mark_failed(failed_request, error_message=str(exc))
                 await self._session.commit()
 
+    async def _search_language(self, iso3: str) -> str | None:
+        country = await self._country_repo.get_by_iso3(iso3)
+        return country.search_language if country is not None else None
+
+    async def _ensure_product_enrichment(self, entity: Any, countries: list[str]) -> None:
+        """Fill the entity's per-country search vocabulary + reference candidates,
+        calling the LLM ONLY for what's missing (a country without terms; empty
+        reference_candidates). If the base already covers everything, no LLM call
+        is made — reuse it (faster + cheaper). Merges (never overwrites)."""
+        product_name = entity.canonical_title or ""
+
+        missing = [c for c in countries if not _has_terms((entity.localized_markets or {}).get(c))]
+        if missing:
+            try:
+                fill = [(iso3, await self._search_language(iso3)) for iso3 in missing]
+                markets = await self._enrichment_client.localized_markets(
+                    product_name=product_name, brand=None, category=entity.category, countries=fill
+                )
+                incoming = {
+                    m.country: _market_to_dict(m)
+                    for m in markets
+                    if m.country in set(missing) and _has_terms(_market_to_dict(m))
+                }
+                if incoming:
+                    entity.localized_markets = _merge_localized_markets(entity.localized_markets, incoming)
+            except EnrichmentError as exc:
+                logger.warning(f"Background localized_markets enrichment failed, using deterministic fallback: {exc}")
+            # Deterministic fallback so coverage/compute never strand a country.
+            current_lm = dict(entity.localized_markets or {})
+            still_missing = [c for c in countries if not _has_terms(current_lm.get(c))]
+            if still_missing:
+                for iso3 in still_missing:
+                    current_lm[iso3] = _fallback_market(iso3, product_name, None)
+                entity.localized_markets = current_lm
+
+        if not entity.reference_candidates:
+            try:
+                supported = [c.iso3 for c in await self._country_repo.list_all()]
+                supported_set = set(supported)
+                candidates: list[dict[str, Any]] = []
+                seen: set[str] = set()
+                for cand in await self._reference_market_client.candidates(
+                    product_name=product_name, brand=None, category=entity.category, supported_countries=supported
+                ):
+                    entry = _market_to_dict(cand)
+                    if cand.country in supported_set and cand.country not in seen and _has_terms(entry):
+                        candidates.append({"country": cand.country, **entry})
+                        seen.add(cand.country)
+                if candidates:
+                    entity.reference_candidates = candidates
+            except ReferenceMarketError as exc:
+                logger.warning(f"Background reference-market candidates unavailable: {exc}")
+
     async def _ensure_coverage(self, *, country_iso3: str, entity_key: uuid.UUID | None) -> None:
         """Checks (read-only) the last 6 monthly period_keys for every gap
         this country/product needs, and only dispatches collection
@@ -255,6 +327,11 @@ class AnalysisService:
                             indicator_code="keywords_for_keywords",
                             period_key=current_month_period_key(),
                             collection_params={"location": location, "language": language, "seed_keywords": seed_terms},
+                            # force: we only reach here when the CURRENT seed has no
+                            # related rows, so it MUST collect regardless of a stale
+                            # "covered" coverage_index row from a prior seed set —
+                            # otherwise search_intent_score is stranded → abort.
+                            force=True,
                         )
                     )
 

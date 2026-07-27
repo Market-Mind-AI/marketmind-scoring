@@ -70,6 +70,13 @@ def _patched_service(
     indicator_engine = _install("indicator_engine", "app.services.analysis_service.IndicatorEngine")
     mos_engine = _install("mos_engine", "app.services.analysis_service.MosEngine")
     weight_calibration = _install("weight_calibration", "app.services.analysis_service.WeightCalibrationService")
+    # Deferred enrichment clients (constructed in __init__). The default test
+    # entity already has USA terms + candidates, so these are never CALLED
+    # (missing=[]), but patch them so no real provider is constructed/hit.
+    enrichment_client = _install("enrichment_client", "app.services.analysis_service.EnrichmentClient")
+    enrichment_client.localized_markets = AsyncMock(return_value=[])
+    reference_market_client = _install("reference_market_client", "app.services.analysis_service.ReferenceMarketClient")
+    reference_market_client.candidates = AsyncMock(return_value=[])
     explanation_client = _install("explanation_client", "app.services.analysis_service.ExplanationClient")
     # build_evidence assembles the deterministic packet (persisted as breakdown);
     # narrate turns it into the best-effort narrative string.
