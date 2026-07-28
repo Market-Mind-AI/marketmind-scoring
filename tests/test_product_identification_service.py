@@ -2,7 +2,10 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.schemas.catalog import CatalogResolveResponse
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.catalog import CatalogResolveResponse, IdentifyImageRequest
 from app.services.product_identification_service import ProductIdentificationService
 from app.services.vision_client import MarketTerms, ProductIdentification
 
@@ -111,6 +114,45 @@ async def test_identify_is_vision_only_defers_enrichment(mock_session: AsyncMock
     assert result.localized_markets is not None
     assert set(result.localized_markets) == {"USA"}  # only vision's market; BRA deferred
     assert result.localized_markets["USA"].search_terms == ["air fryer", "airfryer"]
+
+
+async def test_identify_text_only_no_image(mock_session: AsyncMock) -> None:
+    # The image is optional: identify from the text description alone. The vision
+    # client is called with image_base64=None and the provenance is text-sourced.
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification()
+    enrichment, reference = _clients()
+    catalog_cls, _country_cls, patchers = _patch_collaborators()
+    try:
+        service = ProductIdentificationService(
+            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
+        )
+        result = await service.identify(
+            image_base64=None,
+            image_media_type=None,
+            hint_text="a Philips air fryer for the kitchen",
+            countries=["USA"],
+        )
+    finally:
+        for p in patchers:
+            p.stop()
+
+    assert vision.identify_product.call_args.kwargs["image_base64"] is None
+    assert catalog_cls.return_value.resolve.call_args.kwargs["source"] == "text_identification"
+    assert result.entity_key is not None
+
+
+def test_identify_request_requires_image_or_text() -> None:
+    # Neither image nor text → rejected.
+    with pytest.raises(ValidationError):
+        IdentifyImageRequest(countries=["BRA"])
+    # Text only → OK (no image needed).
+    IdentifyImageRequest(hint_text="a Philips air fryer", countries=["BRA"])
+    # Image without a media type → rejected.
+    with pytest.raises(ValidationError):
+        IdentifyImageRequest(image_base64="ZmFrZQ==", countries=["BRA"])
+    # Image + media type → OK.
+    IdentifyImageRequest(image_base64="ZmFrZQ==", image_media_type="image/jpeg", countries=["BRA"])
 
 
 async def test_identify_returns_no_markets_when_vision_finds_none(mock_session: AsyncMock) -> None:

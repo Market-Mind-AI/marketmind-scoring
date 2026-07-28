@@ -71,7 +71,12 @@ class ProductIdentificationService:
         self._country_repo = CountryRepository(session)
 
     async def identify(
-        self, *, image_base64: str, image_media_type: ImageMediaType, hint_text: str | None, countries: list[str]
+        self,
+        *,
+        image_base64: str | None,
+        image_media_type: ImageMediaType | None,
+        hint_text: str | None,
+        countries: list[str],
     ) -> IdentifyImageResponse:
         identification = await self._vision_client.identify_product(
             image_base64=image_base64,
@@ -99,7 +104,7 @@ class ProductIdentificationService:
         )
         resolved = await self._catalog_service.resolve(
             resolve_text,
-            source="image_identification",
+            source="image_identification" if image_base64 else "text_identification",
             category=identification.category,
             localized_markets=localized_markets or None,
             reference_candidates=None,  # deferred to the /analyze background task

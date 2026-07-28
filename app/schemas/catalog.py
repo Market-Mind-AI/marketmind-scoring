@@ -1,7 +1,7 @@
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CatalogResolveRequest(BaseModel):
@@ -66,12 +66,24 @@ class ReferenceMarket(LocalizedMarket):
 
 
 class IdentifyImageRequest(BaseModel):
-    image_base64: str = Field(..., min_length=1)
-    image_media_type: ImageMediaType
-    hint_text: str | None = Field(None, description="Optional user-provided prompt/description alongside the photo")
+    # Image is now OPTIONAL: the product can be identified from the photo OR from
+    # the text prompt (hint_text). At least one must be present (validated below).
+    image_base64: str | None = Field(None, min_length=1)
+    image_media_type: ImageMediaType | None = None
+    hint_text: str | None = Field(None, description="User-provided prompt/description of the product")
     countries: list[str] = Field(
         ..., min_length=1, description="ISO3 country codes to identify per-market search vocabulary for"
     )
+
+    @model_validator(mode="after")
+    def _require_image_or_text(self) -> "IdentifyImageRequest":
+        has_image = bool(self.image_base64)
+        has_text = bool(self.hint_text and self.hint_text.strip())
+        if not has_image and not has_text:
+            raise ValueError("Provide a product image or a text description (at least one is required)")
+        if has_image and self.image_media_type is None:
+            raise ValueError("image_media_type is required when an image is provided")
+        return self
 
 
 class IdentifyImageResponse(BaseModel):

@@ -22,6 +22,13 @@ class VisionError(MarketMindCoreError):
     """The vision provider call failed or returned something we can't use."""
 
 
+class ProductNotIdentifiedError(MarketMindCoreError):
+    """The input (image and/or text) did not identify a concrete product — the
+    model reported product_found=false rather than fabricating one. Surfaced to
+    the caller as a 422 so the frontend can ask for a photo or a real description
+    instead of proceeding with a hallucinated product."""
+
+
 class MarketTerms(BaseModel):
     """The real search vocabulary for the product in ONE country's market.
     Demand is measured from ABSOLUTE Google Ads search volume (not Google
@@ -64,11 +71,21 @@ class ProductIdentification(BaseModel):
     never scored, only carried as context (see product_identification_service.py
     and memory marketmind_mos_engine)."""
 
+    product_found: bool = Field(
+        default=True,
+        description=(
+            "TRUE only when the input actually identifies a specific product. Set it FALSE — and leave "
+            "product_name empty — when there is NO identifiable product: no image was given AND the text does "
+            "not name or describe a concrete product (e.g. it is empty, or just 'quero'/'hello'/'test'/a "
+            "question with no product). NEVER invent or guess a product to fill this in — an absent product must "
+            "be reported as product_found=false, not fabricated."
+        ),
+    )
     product_name: str = Field(
         description=(
             "Short, generic, commonly-searched canonical product name in plain ASCII (e.g. 'Iberian ham', "
             "'air fryer'). No brand, certification, breed/percentage, size, or parenthetical translations. "
-            "Strip accents/diacritics (e.g. 'Jamon Iberico', not 'Jamón Ibérico')."
+            "Strip accents/diacritics (e.g. 'Jamon Iberico', not 'Jamón Ibérico'). Empty when product_found=false."
         )
     )
     brand: str | None
@@ -104,14 +121,24 @@ class VisionClient:
     async def identify_product(
         self,
         *,
-        image_base64: str,
-        image_media_type: ImageMediaType,
+        image_base64: str | None,
+        image_media_type: ImageMediaType | None,
         hint_text: str | None,
         countries: list[str],
     ) -> ProductIdentification:
+        # The image is optional: identify from the photo when present, otherwise
+        # purely from the user's text description (hint_text). At least one must
+        # be provided (enforced by the request schema + the guard below).
+        if not image_base64 and not (hint_text and hint_text.strip()):
+            raise VisionError("identify_product requires an image or a text description")
         country_list = ", ".join(countries) if countries else "(none provided)"
+        subject = "this product" if image_base64 else "the product described below"
         instructions = (
-            "Identify this product for a cross-country market-demand analysis. "
+            f"Identify {subject} for a cross-country market-demand analysis. "
+            "CRITICAL: only identify a product that is ACTUALLY present in the input. If no image was given and "
+            "the text does not name or describe a concrete product (e.g. it is empty or just 'quero', 'hello', "
+            "'test', or a question with no product), set `product_found`=false, leave `product_name` empty, and "
+            "return no markets — do NOT invent, guess, or default to any product. "
             "`product_name`: short, generic, commonly-searched canonical name, plain ASCII, no brand/size/"
             "certification (e.g. 'Iberian ham', 'air fryer'; 'Jamon Iberico', not 'Jamón Ibérico'). "
             "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'). "
@@ -130,15 +157,31 @@ class VisionClient:
             "'air fryer', search_terms ['air fryer','fritadeira air fryer','fritadeira de ar quente',"
             "'fritadeira sem óleo'], excluded_terms ['fritadeira de óleo']."
         )
-        prompt = f"{instructions}\n\nAdditional context from the user: {hint_text}" if hint_text else instructions
+        # With no image the text IS the product source, so label it accordingly.
+        if hint_text and hint_text.strip():
+            label = "Additional context from the user" if image_base64 else "Product description from the user"
+            prompt = f"{instructions}\n\n{label}: {hint_text}"
+        else:
+            prompt = instructions
+        image = (
+            ImageInput(base64_data=image_base64, media_type=image_media_type)
+            if image_base64 and image_media_type
+            else None
+        )
         try:
             result = await self._provider.complete(
                 user=prompt,
-                image=ImageInput(base64_data=image_base64, media_type=image_media_type),
+                image=image,
                 response_model=ProductIdentification,
             )
         except LLMError as exc:
             raise VisionError(f"Vision LLM call failed: {exc}") from exc
         if not isinstance(result, ProductIdentification):  # defensive; the schema is enforced by the provider
             raise VisionError("Vision LLM returned an unexpected result type")
+        # Refuse hallucinated products: the model must report product_found=false
+        # (not fabricate) when the input names no concrete product.
+        if not result.product_found or not (result.product_name and result.product_name.strip()):
+            raise ProductNotIdentifiedError(
+                "Could not identify a product — add a photo or describe the product in the prompt."
+            )
         return result

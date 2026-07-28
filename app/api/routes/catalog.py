@@ -15,7 +15,7 @@ from app.schemas.catalog import (
 )
 from app.services.catalog_service import CatalogService
 from app.services.product_identification_service import ProductIdentificationService
-from app.services.vision_client import VisionError
+from app.services.vision_client import ProductNotIdentifiedError, VisionError
 
 router = APIRouter()
 
@@ -80,6 +80,10 @@ async def identify_image(
             hint_text=request.hint_text,
             countries=request.countries,
         )
+    except ProductNotIdentifiedError as exc:
+        # No concrete product in the image/text — ask the user to supply one
+        # (422, not 502: it's a client-input problem, not a provider failure).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except VisionError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
