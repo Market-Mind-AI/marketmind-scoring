@@ -300,6 +300,21 @@ _DEMAND_CONFIDENCE_RULE_EN = (
     "native search term) and treat its MOS with that caveat — do not present it as definitive."
 )
 
+_DEMAND_TERMS_RULE_PT = (
+    "PALAVRAS BUSCADAS (obrigatório): para CADA país, o `context` do sinal de Demand Volume traz o detalhamento "
+    "\"Per-term monthly search volume — termo volume; termo volume; ...\" e o total. Na prosa daquele país, "
+    "LISTE as palavras que foram buscadas com o volume individual de cada uma e o TOTAL de buscas mensais — "
+    "fielmente aos números do pacote, sem inventar. Se houver muitos termos, apresente os de maior volume um a um "
+    "e agrupe a cauda de menor volume (ex.: \"e outros N termos somando X\"), mas SEMPRE informe o total."
+)
+_DEMAND_TERMS_RULE_EN = (
+    "SEARCHED TERMS (required): for EACH country the Demand Volume signal's `context` carries the breakdown "
+    "\"Per-term monthly search volume — term volume; term volume; ...\" and the total. In that country's prose, "
+    "LIST the words that were searched with each one's individual volume and the TOTAL monthly searches — "
+    "faithful to the packet's numbers, never invented. If there are many terms, present the highest-volume ones "
+    "individually and group the low-volume tail (e.g. \"and N other terms totalling X\"), but ALWAYS state the total."
+)
+
 
 # Scope-dependent phrasing woven into the base prompt. With a SINGLE country the
 # opener, the "include every country ordered by MOS / the ranking is final" rule,
@@ -365,6 +380,7 @@ def _system_prompt(
         if lang not in ("en", "en-us", "en_us", "english"):
             base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
     base = f"{base}\n\n{_DEMAND_CONFIDENCE_RULE_PT if is_pt else _DEMAND_CONFIDENCE_RULE_EN}"
+    base = f"{base}\n\n{_DEMAND_TERMS_RULE_PT if is_pt else _DEMAND_TERMS_RULE_EN}"
     if external_champion:
         base = f"{base}\n\n{_CHAMPION_RULE_PT if is_pt else _CHAMPION_RULE_EN}"
     prompt_text = (user_prompt or "").strip()

@@ -247,7 +247,7 @@ def _select_expansion(
 
 def _dedup_volume_rows(
     raw: Iterable[tuple[str, float, list[tuple[int, int, float]]]],
-) -> list[tuple[float, list[tuple[int, int, float]]]]:
+) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
     """Drop ~zero-volume rows and collapse Google's duplicate reports of the SAME
     query so its volume is counted once. Two passes:
 
@@ -262,9 +262,14 @@ def _dedup_volume_rows(
        ('airfryer'/'airfryert'). Never merges different volumes or genuinely
        different words ('best air fryer'), so real distinct demand is preserved.
 
-    Input rows are (keyword, volume, monthly_series); output is (volume, series)."""
+    Input rows are (keyword, volume, monthly_series); output keeps the keyword:
+    (keyword, volume, series) — the keyword is needed for the per-term demand
+    breakdown surfaced in the evidence packet / narrative."""
+    # Keep the ORIGINAL keyword for display (the per-term breakdown must read as
+    # real words, e.g. "fritadeira eletrica", not the space-stripped norm), while
+    # using the normalized form only for dedup keys / near-variant matching.
     seen: set[tuple[str, float]] = set()
-    deduped: list[tuple[str, float, list[tuple[int, int, float]]]] = []
+    deduped: list[tuple[str, str, float, list[tuple[int, int, float]]]] = []
     for keyword, volume, monthly in raw:
         if volume < _VOLUME_FLOOR:
             continue
@@ -273,22 +278,25 @@ def _dedup_volume_rows(
         if key in seen:
             continue
         seen.add(key)
-        deduped.append((norm, volume, monthly))
+        deduped.append((keyword, norm, volume, monthly))
 
-    kept: list[tuple[str, float, list[tuple[int, int, float]]]] = []
-    for norm, volume, monthly in deduped:
-        if any(volume == kv and SequenceMatcher(None, norm, kn).ratio() >= _NEAR_VARIANT_RATIO for kn, kv, _ in kept):
+    kept: list[tuple[str, str, float, list[tuple[int, int, float]]]] = []
+    for keyword, norm, volume, monthly in deduped:
+        if any(
+            volume == kv and SequenceMatcher(None, norm, kn).ratio() >= _NEAR_VARIANT_RATIO
+            for _k, kn, kv, _m in kept
+        ):
             continue
-        kept.append((norm, volume, monthly))
-    return [(volume, monthly) for _norm, volume, monthly in kept]
+        kept.append((keyword, norm, volume, monthly))
+    return [(keyword, volume, monthly) for keyword, _norm, volume, monthly in kept]
 
 
-def _summed_monthly_series(rows: list[tuple[float, list[tuple[int, int, float]]]]) -> list[float]:
+def _summed_monthly_series(rows: list[tuple[str, float, list[tuple[int, int, float]]]]) -> list[float]:
     """Element-wise sum of the deduped terms' monthly_searches, aligned by
     (year, month) and returned oldest-first — the product's total monthly
     demand series in this country."""
     totals: dict[tuple[int, int], float] = {}
-    for _volume, monthly in rows:
+    for _keyword, _volume, monthly in rows:
         for year, month, vol in monthly:
             totals[(year, month)] = totals.get((year, month), 0.0) + vol
     return [totals[k] for k in sorted(totals)]
@@ -331,10 +339,16 @@ async def compute_trend_score(
             notes=f"keyword_search_volume: no rows for location='{location}' and the approved terms (Cap. 4 §4.2.1)",
         )
 
-    total_volume = sum(volume for volume, _monthly in rows)
+    total_volume = sum(volume for _keyword, volume, _monthly in rows)
     expansion_note = f" (+{len(expansion)} folded from related keywords)" if expansion else ""
+    # Per-term breakdown (the searched words + their monthly volumes) so the final
+    # narrative can list, per country, exactly which words were searched, how much
+    # each, and the total. Ordered highest-volume first, all summed terms shown.
+    per_term = sorted(((kw, vol) for kw, vol, _monthly in rows), key=lambda kv: kv[1], reverse=True)
+    breakdown = "; ".join(f"{kw} {vol:,.0f}" for kw, vol in per_term)
     notes = (
-        f"{total_volume:.0f} total monthly searches over {len(rows)} distinct term(s){expansion_note} (Cap. 4 §4.2.1)"
+        f"{total_volume:,.0f} total monthly searches over {len(rows)} distinct term(s){expansion_note}. "
+        f"Per-term monthly search volume — {breakdown} (Cap. 4 §4.2.1)"
     )
     return RawIndicatorResult(
         raw_value=total_volume,
