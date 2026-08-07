@@ -14,13 +14,26 @@ from collections.abc import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from app.core.config import settings
+from app.db.ssl_config import asyncpg_ssl_connect_args
 from app.domain.enums import DataSource
 
+# On Azure all five databases live on the same Flexible Server, so one TLS
+# setting covers the Core's own connection and these four read-only ones.
+_SSL_CONNECT_ARGS = asyncpg_ssl_connect_args(settings.database_ssl_mode)
+
 _ENGINES: dict[DataSource, AsyncEngine] = {
-    DataSource.PYTRENDS: create_async_engine(settings.pytrends_database_url, echo=False, pool_pre_ping=True),
-    DataSource.WORLDBANK: create_async_engine(settings.worldbank_database_url, echo=False, pool_pre_ping=True),
-    DataSource.OECD: create_async_engine(settings.oecd_database_url, echo=False, pool_pre_ping=True),
-    DataSource.UNDATA: create_async_engine(settings.undata_database_url, echo=False, pool_pre_ping=True),
+    DataSource.PYTRENDS: create_async_engine(
+        settings.pytrends_database_url, echo=False, pool_pre_ping=True, connect_args=_SSL_CONNECT_ARGS
+    ),
+    DataSource.WORLDBANK: create_async_engine(
+        settings.worldbank_database_url, echo=False, pool_pre_ping=True, connect_args=_SSL_CONNECT_ARGS
+    ),
+    DataSource.OECD: create_async_engine(
+        settings.oecd_database_url, echo=False, pool_pre_ping=True, connect_args=_SSL_CONNECT_ARGS
+    ),
+    DataSource.UNDATA: create_async_engine(
+        settings.undata_database_url, echo=False, pool_pre_ping=True, connect_args=_SSL_CONNECT_ARGS
+    ),
 }
 
 

@@ -1,4 +1,8 @@
+from urllib.parse import quote
+
 from pydantic_settings import BaseSettings
+
+from app.db.ssl_config import sslmode_query_suffix
 
 
 class Settings(BaseSettings):
@@ -21,6 +25,13 @@ class Settings(BaseSettings):
     database_name: str = "marketmind_core"
     database_user: str = "marketmind"
     database_password: str = "marketmind_password"
+
+    # TLS for every Postgres connection this service opens — its own database
+    # and the 4 read-only ones below, which on Azure all live on the same
+    # Flexible Server. "disable" keeps local docker-compose working unchanged;
+    # Azure needs at least "require" because the server refuses plaintext
+    # (`require_secure_transport = ON`). See app/db/ssl_config.py.
+    database_ssl_mode: str = "disable"
 
     # Read-only connections to the 4 collection microservices.
     # These are separate Postgres instances (each service owns its own database).
@@ -168,15 +179,19 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return (
-            f"postgresql+asyncpg://{self.database_user}:{self.database_password}"
+            f"postgresql+asyncpg://{self.database_user}:{quote(self.database_password, safe='')}"
             f"@{self.database_host}:{self.database_port}/{self.database_name}"
         )
 
     @property
     def database_url_sync(self) -> str:
+        # Alembic runs through psycopg2, which reads `sslmode` straight off the
+        # DSN. The async engines cannot — they get an SSLContext instead, built
+        # from the same setting in app/db/ssl_config.py.
         return (
-            f"postgresql://{self.database_user}:{self.database_password}"
+            f"postgresql://{self.database_user}:{quote(self.database_password, safe='')}"
             f"@{self.database_host}:{self.database_port}/{self.database_name}"
+            f"{sslmode_query_suffix(self.database_ssl_mode)}"
         )
 
     @property
@@ -191,28 +206,28 @@ class Settings(BaseSettings):
     @property
     def pytrends_database_url(self) -> str:
         return (
-            f"postgresql+asyncpg://{self.pytrends_db_user}:{self.pytrends_db_password}"
+            f"postgresql+asyncpg://{self.pytrends_db_user}:{quote(self.pytrends_db_password, safe='')}"
             f"@{self.pytrends_db_host}:{self.pytrends_db_port}/{self.pytrends_db_name}"
         )
 
     @property
     def worldbank_database_url(self) -> str:
         return (
-            f"postgresql+asyncpg://{self.worldbank_db_user}:{self.worldbank_db_password}"
+            f"postgresql+asyncpg://{self.worldbank_db_user}:{quote(self.worldbank_db_password, safe='')}"
             f"@{self.worldbank_db_host}:{self.worldbank_db_port}/{self.worldbank_db_name}"
         )
 
     @property
     def oecd_database_url(self) -> str:
         return (
-            f"postgresql+asyncpg://{self.oecd_db_user}:{self.oecd_db_password}"
+            f"postgresql+asyncpg://{self.oecd_db_user}:{quote(self.oecd_db_password, safe='')}"
             f"@{self.oecd_db_host}:{self.oecd_db_port}/{self.oecd_db_name}"
         )
 
     @property
     def undata_database_url(self) -> str:
         return (
-            f"postgresql+asyncpg://{self.undata_db_user}:{self.undata_db_password}"
+            f"postgresql+asyncpg://{self.undata_db_user}:{quote(self.undata_db_password, safe='')}"
             f"@{self.undata_db_host}:{self.undata_db_port}/{self.undata_db_name}"
         )
 
