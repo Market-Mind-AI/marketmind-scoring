@@ -15,7 +15,7 @@ deles, mas **não** sob o domínio `beprofit.ai` — usa o domínio padrão da A
 | Banco | Azure PostgreSQL Flexible Server B1ms/B2s, 1 servidor / 5 databases | `vector` + `pg_trgm` disponíveis; backup gerenciado; zero mudança no código do Core |
 | Escopo da 1ª rodada | Core + AI web + 4 coletores (6 serviços) | Fluxo completo do MOS. `marketmind-ollma-llm` fica de fora (precisaria de node pool com mais RAM) |
 | Domínio | `marketmind-dev.<região>.cloudapp.azure.com` | Ingress controller e Public IP próprios, isolados do `beprofit.ai` |
-| Cluster | `aks-beprofit-dev`, namespace `marketmind` | Reusa o cluster dev existente, isolado por namespace + AppProject |
+| Cluster | `bf-aks-dev` (rg-bf-system-dev), namespace `marketmind` | Reusa o cluster dev existente, isolado por namespace + AppProject. O nome real é `bf-aks-dev`, não o `aks-beprofit-dev` que o `cluster-topology.md` propõe |
 
 ## O padrão BeProfit que estamos copiando
 
@@ -118,8 +118,9 @@ solvers:
 `*.cloudapp.azure.com` está na Public Suffix List, então cada label conta como
 domínio registrado próprio pro rate limit da Let's Encrypt.
 
-⚠️ **Único passo do plano não verificado previamente** — confirmar a emissão do
-certificado na primeira tentativa.
+✅ **Verificado em 2026-08-07.** O certificado foi emitido em ~30 segundos na
+primeira tentativa, sem intervenção. Era a única suposição do plano que não dava
+pra testar antes de existir o Public IP.
 
 ### external-dns
 
@@ -148,12 +149,28 @@ todos podem usar 8000).
 
 ### ⚠️ Anotações do Ingress do Core
 
-**Correção (2026-08-07):** a versão anterior deste doc dizia que `POST /analyze`
-responde por SSE. Isso vinha do plano original, não do código. Verificado em
-`app/api/routes/analyze.py` e em `marketmind-ai/web/src/lib/api.ts`: o Core
-**não tem nenhum endpoint SSE** — `POST /analyze` devolve 202 com um `request_id`
-e o frontend faz polling em `GET /analyze/{request_id}`. Não há stream pra
-bufferizar, então `proxy-buffering: off` não é necessário.
+**Correção (2026-08-07), e correção da correção.** Este doc chegou a dizer que
+`POST /analyze` responde por SSE; depois eu "corrigi" pra dizer que o Core não
+tem SSE nenhum. A segunda afirmação estava errada, e vale registrar como: o grep
+que usei tinha o padrão `sse`, que casa com "passar"/"esse" nos comentários em
+português, e o `| head` cortou os resultados antes de chegar em `analyze.py`.
+Conclusão confiante a partir de busca truncada.
+
+O que é verdade, verificado no código e no ambiente no ar:
+
+- `POST /analyze` devolve **202** com um `request_id`. Não é streaming.
+- `GET /analyze/{request_id}/stream` **é SSE** (`StreamingResponse`,
+  `media_type="text/event-stream"`), e o frontend consome com `EventSource`
+  (`marketmind-ai/web/src/lib/api.ts`).
+- O endpoint manda `: ping` a cada 1,5s entre mudanças de status e se encerra
+  sozinho aos 15 min. Também define `X-Accel-Buffering: no`, que o nginx
+  consome e respeita.
+
+Consequência prática: **o SSE funciona sem `proxy-buffering: off`**, porque a
+aplicação já resolve pelo header. Testado no ingress em produção — `HTTP/2 200`,
+`content-type: text/event-stream`, evento entregue. A anotação foi adicionada
+mesmo assim, pra o comportamento não depender silenciosamente de um header da
+aplicação continuar existindo.
 
 O que o Ingress do Core realmente precisa é outra coisa:
 
@@ -164,10 +181,14 @@ O que o Ingress do Core realmente precisa é outra coisa:
 nginx.ingress.kubernetes.io/proxy-body-size: "10m"
 
 # identify-image é síncrono e faz uma chamada de visão + uma de enriquecimento
-# antes de responder. Esse teto é pra esses round-trips de LLM, não pra análise
-# (que retorna 202 na hora).
+# antes de responder. Cobre também o /stream: proxy-read-timeout limita o
+# intervalo ENTRE leituras, não a duração total, e o heartbeat é de 1,5s.
 nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
 nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+
+# Redundante com o X-Accel-Buffering: no que a aplicação já manda, mas evita
+# que o streaming dependa só disso.
+nginx.ingress.kubernetes.io/proxy-buffering: "off"
 
 # O Core monta os routers na raiz (/analyze, /catalog, /health), então o prefixo
 # /api precisa ser removido antes de chegar nele.
