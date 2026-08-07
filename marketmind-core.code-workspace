@@ -20,6 +20,9 @@
 		},
 		{
 			"path": "../marketmind-ai"
+		},
+		{
+			"path": "../../BeProfit/infra-manifests"
 		}
 	],
 	"settings": {}

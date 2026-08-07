@@ -25,3 +25,4 @@ env/
 *.swo
 
 poetry.lock
+marketmind-core.code-workspace
