@@ -90,6 +90,7 @@ async def analyze(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> AnalyzeAcceptedResponse:
+    from app.core.config import settings
     catalog_service = CatalogService(session)
     resolve_text = f"{request.brand} {request.product_name}".strip() if request.brand else request.product_name
     resolved = await catalog_service.resolve(
@@ -114,7 +115,10 @@ async def analyze(
     await session.commit()
 
     analysis_service = AnalysisService(session)
-    background_tasks.add_task(analysis_service.run, analysis_request.id)
+    if settings.use_new_orchestrator:
+        background_tasks.add_task(analysis_service.run_via_orchestrator, analysis_request.id)
+    else:
+        background_tasks.add_task(analysis_service.run, analysis_request.id)
 
     return AnalyzeAcceptedResponse(request_id=analysis_request.id, status=analysis_request.status)
 

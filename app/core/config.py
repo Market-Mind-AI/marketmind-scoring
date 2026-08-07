@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     ollama_llm_timeout_seconds: float = 300.0
     ollama_llm_narrative_language: str = "pt"
 
+    # marketmind-orchestrator API base URL and feature flag
+    use_new_orchestrator: bool = False
+    orchestrator_api_base_url: str = "http://host.docker.internal:8081"
+
+
     # How long the Core waits for an ingestion run to finish before giving up
     # on a single collection call (the run itself keeps going server-side;
     # this only bounds how long the Core polls synchronously).

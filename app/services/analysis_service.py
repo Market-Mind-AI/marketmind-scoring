@@ -253,6 +253,59 @@ class AnalysisService:
                 await self._analysis_repo.mark_failed(failed_request, error_message=str(exc))
                 await self._session.commit()
 
+    async def run_via_orchestrator(self, request_id: uuid.UUID) -> None:
+        """Fase 5 (New Architecture) — proxies the analysis execution to the LangGraph orchestrator.
+        Connects via SSE, maps node completion events to DB status, and writes the final report."""
+        import json
+        import httpx
+        from app.core.config import settings
+        
+        analysis_request = await self._analysis_repo.get(request_id)
+        if analysis_request is None:
+            logger.warning(f"AnalysisRequest {request_id} not found")
+            return
+            
+        try:
+            await self._analysis_repo.mark_running(analysis_request)
+            await self._session.commit()
+            
+            payload = {
+                "analysis_id": str(request_id),
+                "product_description": analysis_request.user_prompt or (analysis_request.canonical_title or ""),
+                "product_image_url": "",
+                "attributes": {},
+                "enrichment_results": [],
+                "mos_score": {},
+                "report": {},
+                "errors": []
+            }
+            
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", f"{settings.orchestrator_api_base_url}/run-analysis", json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = json.loads(line[6:])
+                            logger.info(f"Orchestrator event received: {list(data.keys())}")
+                            
+                            if "report" in data and "narrative" in data["report"]:
+                                await self._analysis_repo.mark_done(
+                                    analysis_request,
+                                    result=[],
+                                    explanation=data["report"]["narrative"],
+                                    breakdown={"status": "done via orchestrator"}
+                                )
+                                await self._session.commit()
+                                break
+        except Exception as exc:
+            logger.exception(f"AnalysisRequest {request_id} failed via orchestrator")
+            await self._session.rollback()
+            failed_request = await self._analysis_repo.get(request_id)
+            if failed_request is not None:
+                await self._analysis_repo.mark_failed(failed_request, error_message=str(exc))
+                await self._session.commit()
+
+
     async def _search_language(self, iso3: str) -> str | None:
         country = await self._country_repo.get_by_iso3(iso3)
         return country.search_language if country is not None else None
