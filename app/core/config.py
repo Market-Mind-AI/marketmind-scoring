@@ -137,6 +137,21 @@ class Settings(BaseSettings):
     # caller doesn't specify one explicitly (see coverage_service).
     default_coverage_ttl_days: int = 30
 
+    # Freshness window for the country-level macro indicators (WorldBank, OECD,
+    # UNData) — GDP, population, internet penetration, inflation, and so on.
+    #
+    # 90 days rather than the 30 above, because these move on an annual
+    # publication cycle and the MOS reads the latest known value regardless of
+    # when it was fetched. Data up to three months old changes no conclusion
+    # here, and re-downloading it is the single most expensive thing an analysis
+    # can do: one measured run spent 3343 of its 3666 seconds re-collecting
+    # World Bank figures that had not changed.
+    #
+    # Staleness stays per indicator, not per country: whatever is still inside
+    # the window is left alone and only the individual indicators past it are
+    # re-collected.
+    country_indicator_ttl_days: int = 90
+
     # Fase 2 — product catalog resolution pipeline (app/services/catalog_service.py).
     # Embedding step uses OpenAI for now (explicit user decision, 2026-07-02):
     # Anthropic has no first-party embeddings endpoint (their own docs point
