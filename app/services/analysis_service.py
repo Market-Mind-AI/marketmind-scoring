@@ -50,13 +50,40 @@ from app.utils.text import as_term_list
 
 # The reference-market shortlist is a ranked list from the LLM (biggest markets
 # first), and every candidate beyond the requested countries costs a full
-# collection + MOS computation of its own. Six candidates quadrupled the work of
-# a two-country analysis. Three keeps the ruler meaningful — it only needs the
-# biggest real search volume among plausible big markets — at a quarter of the
-# cost. Applied at BOTH candidate loops, and it has to stay that way: the demand
-# ceiling reads data that only the scoring loop collects, so measuring a
-# candidate the scoring loop skipped would read a series that was never fetched.
+# collection plus a MOS computation of its own. Eight candidates on one product
+# turned a four-country analysis into nine MOS computations.
+#
+# Three consumers read this list — the coverage pass that collects the
+# candidates' demand, the demand ceiling that measures it, and the scoring pass
+# that computes their MOS. They MUST see the same candidates. When they did not,
+# the failure was quiet and specific: capping only the first two meant scoring
+# reached candidates whose demand had never been collected, and each of those
+# produced a mos_results row reading "Missing mandatory indicator(s):
+# trend_score, growth_score, ..." — a real row, correctly marked unavailable,
+# for work that should never have been attempted.
+#
+# Hence _top_reference_candidates rather than three separate slices: the bound is
+# expressed once and cannot drift.
 _MAX_REFERENCE_CANDIDATES = 3
+
+
+def _top_reference_candidates(entity: Any) -> list[dict[str, Any]]:
+    """The ranked candidate shortlist, bounded.
+
+    Truncates the RAW ranked list, before any requested-country filtering. That
+    ordering matters for the demand ceiling: its whole point is to be
+    query-independent, so a country scores the same analysed alone or alongside
+    twenty others. Filtering by the request first and truncating after would make
+    the ceiling depend on what was asked for, and the scores would stop being
+    comparable between queries.
+
+    The trade-off it accepts: when the top-ranked candidates are also the
+    requested countries, few or no off-request champions remain. That is the
+    cheap, honest outcome — not a missing feature.
+    """
+    return list(entity.reference_candidates or [])[:_MAX_REFERENCE_CANDIDATES]
+
+
 # How much history to ASK each annual/quarterly source for (WorldBank/OECD/
 # UNData) — generous on purpose so formulas needing several years (GDP Growth,
 # Real Estate Growth, ...) have enough data. Unrelated to coverage freshness,
@@ -531,7 +558,7 @@ class AnalysisService:
         are skipped here — already collected under their own localized terms
         (pulled once)."""
         gaps: list[CoverageGap] = []
-        for cand in (entity.reference_candidates or [])[:_MAX_REFERENCE_CANDIDATES]:
+        for cand in _top_reference_candidates(entity):
             iso3 = cand.get("country")
             terms = as_term_list(cand.get("search_terms"))
             if not (iso3 and terms) or iso3 in requested:
@@ -594,7 +621,7 @@ class AnalysisService:
         - fixed — None (no candidate had volume), so the engine uses the 2M bound.
         Volumes are read from already-collected data via compute_trend_score."""
         measured: list[dict[str, Any]] = []
-        for cand in (entity.reference_candidates or [])[:_MAX_REFERENCE_CANDIDATES]:
+        for cand in _top_reference_candidates(entity):
             iso3 = cand.get("country")
             if not iso3:
                 continue
@@ -639,7 +666,7 @@ class AnalysisService:
         requested_set = set(requested)
         attempted: list[str] = []
         seen: set[str] = set()
-        for cand in entity.reference_candidates or []:
+        for cand in _top_reference_candidates(entity):
             iso3 = cand.get("country")
             terms = as_term_list(cand.get("search_terms"))
             if not (iso3 and terms) or iso3 in requested_set or iso3 in seen:
