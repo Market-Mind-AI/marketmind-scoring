@@ -289,21 +289,53 @@ class AnalysisService:
             if entity is not None and entity_key is not None and mos_results:
                 champion_row: MosResult | None = None
 
+                # The best requested market in THIS analysis. The cached
+                # champion has to beat it to still be one.
+                best_requested = max(
+                    (r for r in mos_results if r.mos is not None),
+                    key=lambda r: float(r.mos),
+                    default=None,
+                )
+
                 if champion_is_cached:
                     # Cached, including the case where it is cached as "no
                     # candidate could be scored" (period set, country NULL) —
                     # that must not be retried on every analysis either.
-                    champion_country = entity.champion_country
-                    if champion_country is not None and champion_country not in requested_set:
-                        champion_row = await self._mos_repo.get_mos_result(
-                            entity_key, champion_country, PeriodType.MONTH.value, period_key
-                        )
-                        if champion_row is None:
-                            # The product says it has a champion but its MOS row
-                            # is gone. Recompute rather than report a country
-                            # with no numbers behind it.
-                            champion_is_cached = False
-                            champion_country = None
+                    cached_country = entity.champion_country
+                    cached_mos = entity.champion_mos
+
+                    # Re-run the comparison, which caching had quietly dropped.
+                    # The uncached path computes max(requested + candidates); the
+                    # cached path used to take the stored country as champion
+                    # unconditionally, and that produced a visibly false claim:
+                    # a champion stored at 66.37 (it had beaten the USA's 66.31
+                    # by six hundredths) stayed crowned "top market for this
+                    # product" in a later analysis where the USA scored 69.
+                    #
+                    # The crown means "beats everything you asked about". If a
+                    # requested market beats it, there is nothing to surface —
+                    # the caller already has the product's best market in their
+                    # own list.
+                    beats_requested = cached_country is not None and cached_mos is not None and (
+                        best_requested is None or float(cached_mos) > float(best_requested.mos)
+                    )
+
+                    if beats_requested:
+                        champion_country = cached_country
+                        if cached_country not in requested_set:
+                            champion_row = await self._mos_repo.get_mos_result(
+                                entity_key, cached_country, PeriodType.MONTH.value, period_key
+                            )
+                            if champion_row is None:
+                                # The product says it has a champion but its MOS
+                                # row is gone. Recompute rather than report a
+                                # country with no numbers behind it.
+                                champion_is_cached = False
+                                champion_country = None
+                    else:
+                        # The stored champion lost. Crown the best requested
+                        # market instead, and append nothing.
+                        champion_country = best_requested.country if best_requested is not None else None
 
                 if not champion_is_cached:
                     candidate_results = await self._score_reference_candidates(
