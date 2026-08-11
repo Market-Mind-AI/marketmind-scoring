@@ -53,35 +53,71 @@ from app.utils.text import as_term_list
 # collection plus a MOS computation of its own. Eight candidates on one product
 # turned a four-country analysis into nine MOS computations.
 #
-# Three consumers read this list — the coverage pass that collects the
-# candidates' demand, the demand ceiling that measures it, and the scoring pass
-# that computes their MOS. They MUST see the same candidates. When they did not,
-# the failure was quiet and specific: capping only the first two meant scoring
-# reached candidates whose demand had never been collected, and each of those
+# Three consumers read this list, and they do NOT all want the same set:
+#
+#   _resolve_demand_ceiling      the raw ranked top-N, requested countries
+#                                included, because the ruler must not depend on
+#                                what was asked for.
+#   _ensure_candidates_coverage  the top-N the caller did not request — what
+#   _score_reference_candidates  actually gets collected and scored.
+#
+# Those last two must agree exactly. When they did not — one capped, one not —
+# scoring reached candidates whose demand had never been collected, and each
 # produced a mos_results row reading "Missing mandatory indicator(s):
-# trend_score, growth_score, ..." — a real row, correctly marked unavailable,
+# trend_score, growth_score, ...". Correct rows, correctly marked unavailable,
 # for work that should never have been attempted.
 #
-# Hence _top_reference_candidates rather than three separate slices: the bound is
-# expressed once and cannot drift.
+# Hence two named helpers instead of slices written out at each call site. Three
+# hand-written slices are what allowed them to disagree, and the comment that
+# used to sit here claiming the bound was "applied at BOTH candidate loops" was
+# itself wrong about how many loops there were.
 _MAX_REFERENCE_CANDIDATES = 3
 
 
 def _top_reference_candidates(entity: Any) -> list[dict[str, Any]]:
-    """The ranked candidate shortlist, bounded.
+    """The bounded shortlist for the DEMAND CEILING.
 
-    Truncates the RAW ranked list, before any requested-country filtering. That
-    ordering matters for the demand ceiling: its whole point is to be
-    query-independent, so a country scores the same analysed alone or alongside
-    twenty others. Filtering by the request first and truncating after would make
-    the ceiling depend on what was asked for, and the scores would stop being
-    comparable between queries.
+    Truncates the RAW ranked list, before any requested-country filtering, and
+    that ordering is the point. The ceiling has to be query-independent — a
+    country must score the same analysed alone or alongside twenty others, which
+    is what makes MOS values comparable between analyses at all. Filtering by the
+    request first would make the ruler depend on what was asked for.
 
-    The trade-off it accepts: when the top-ranked candidates are also the
-    requested countries, few or no off-request champions remain. That is the
-    cheap, honest outcome — not a missing feature.
+    Use _champion_candidates for anything that should skip requested countries.
     """
     return list(entity.reference_candidates or [])[:_MAX_REFERENCE_CANDIDATES]
+
+
+def _champion_candidates(entity: Any, requested: list[str]) -> list[dict[str, Any]]:
+    """The bounded shortlist for the OFF-REQUEST CHAMPION, and for collecting it.
+
+    Same bound, different set: the highest-ranked candidates the caller did NOT
+    request. Filtering before truncating is correct here and wrong for the
+    ceiling, because nothing downstream of this feeds back into the ruler — the
+    ceiling is resolved first, from its own list.
+
+    Sharing one list with the ceiling is what left the champion feature
+    effectively dead: for an air fryer the ranked candidates are USA, IND, BRA,
+    and a caller asking about USA and BRA got a single usable candidate out of
+    three. The common case — asking about a product's actual big markets — is
+    exactly the case where the raw top-N is all requested.
+
+    Also what the coverage pass collects for, and that is sufficient rather than a
+    third set: the non-requested members of the raw top-N are by construction the
+    earliest non-requested candidates, so they are already in here.
+    """
+    requested_set = {c.upper() for c in requested}
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for cand in entity.reference_candidates or []:
+        iso3 = (cand.get("country") or "").upper()
+        if not iso3 or iso3 in requested_set or iso3 in seen:
+            continue
+        seen.add(iso3)
+        out.append(cand)
+        if len(out) == _MAX_REFERENCE_CANDIDATES:
+            break
+    return out
 
 
 # How much history to ASK each annual/quarterly source for (WorldBank/OECD/
@@ -558,7 +594,7 @@ class AnalysisService:
         are skipped here — already collected under their own localized terms
         (pulled once)."""
         gaps: list[CoverageGap] = []
-        for cand in _top_reference_candidates(entity):
+        for cand in _champion_candidates(entity, requested):
             iso3 = cand.get("country")
             terms = as_term_list(cand.get("search_terms"))
             if not (iso3 and terms) or iso3 in requested:
@@ -666,7 +702,7 @@ class AnalysisService:
         requested_set = set(requested)
         attempted: list[str] = []
         seen: set[str] = set()
-        for cand in _top_reference_candidates(entity):
+        for cand in _champion_candidates(entity, requested):
             iso3 = cand.get("country")
             terms = as_term_list(cand.get("search_terms"))
             if not (iso3 and terms) or iso3 in requested_set or iso3 in seen:
