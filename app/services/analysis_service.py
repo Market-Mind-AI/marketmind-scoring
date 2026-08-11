@@ -342,8 +342,8 @@ class AnalysisService:
             # one GET. The narrative turns that packet into prose via the local
             # Ollama service, and now also answers the buyer's own free-text prompt
             # (strictly from the packet). Neither ever blocks or fails the analysis.
-            explanation: str | None = None
             breakdown: dict[str, Any] | None = None
+            explanation_packet: dict[str, Any] | None = None
             if entity_key is not None and mos_results:
                 breakdown = await self._explanation_client.build_evidence(
                     entity_key=entity_key,
@@ -359,15 +359,50 @@ class AnalysisService:
                         c["is_champion"] = champion_country is not None and c.get("country") == champion_country
                     breakdown["champion_country"] = champion_country
                     breakdown["requested_countries"] = list(countries)
-                    explanation = await self._explanation_client.narrate(
-                        packet=breakdown,
+                    # Narrated after the answer is persisted, not here.
+                    explanation_packet = breakdown
+            # The answer lands here, without waiting for the narrative.
+            #
+            # The evidence packet above is deterministic and fast; the narrative
+            # is a single LLM call and it dominated everything. Measured on the
+            # deployed environment: an analysis that collected NOTHING — every
+            # macro indicator cached, every demand series cached, the champion
+            # reused — still took 192s, and timing the narration alone on the
+            # same packet gave 249s. There was no data left to optimise; there
+            # was a synchronous LLM call between a finished MOS and the caller.
+            #
+            # So the request completes with its scores and breakdown, and the
+            # text is attached a moment later. Note the consequence for the
+            # frontend: GET /analyze/{id} returns done with explanation=null for
+            # a short window, and the SSE stream closes on the terminal status,
+            # so the narrative arrives on a subsequent read rather than being
+            # pushed. explanation has always been nullable and best-effort, so
+            # this widens an existing case rather than inventing one.
+            await self._analysis_repo.mark_done(
+                analysis_request, result=serialized, explanation=None, breakdown=breakdown
+            )
+            await self._session.commit()
+
+            if explanation_packet is not None:
+                # The whole block, not just the narrate() call. The analysis is
+                # already committed as done at this point, so ANY failure past
+                # here — the LLM, the write, the commit — must be swallowed. An
+                # earlier version wrapped only narrate(), and a failure in the
+                # write escaped to the outer handler and marked an
+                # already-successful analysis as failed. Caught by a test.
+                try:
+                    narrative = await self._explanation_client.narrate(
+                        packet=explanation_packet,
                         product_name=analysis_request.canonical_title or "",
                         user_prompt=analysis_request.user_prompt,
                     )
-            await self._analysis_repo.mark_done(
-                analysis_request, result=serialized, explanation=explanation, breakdown=breakdown
-            )
-            await self._session.commit()
+                    await self._analysis_repo.set_explanation(analysis_request, narrative)
+                    await self._session.commit()
+                except Exception:  # noqa: BLE001 — the answer is already delivered; nothing here may undo it
+                    logger.exception(
+                        f"AnalysisRequest {request_id} is done, but attaching its narrative failed"
+                    )
+                    await self._session.rollback()
         except Exception as exc:  # noqa: BLE001 — background task boundary, must never crash the process
             logger.exception(f"AnalysisRequest {request_id} failed")
             await self._session.rollback()

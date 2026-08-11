@@ -47,6 +47,22 @@ class AnalysisRepository:
         analysis_request.status = "running"
         await self._session.flush()
 
+    async def set_explanation(self, analysis_request: AnalysisRequest, explanation: str | None) -> None:
+        """Attach the narrative to an already-completed analysis.
+
+        Separate from mark_done because the narrative is not what the caller is
+        waiting for. Generating it took 249s of a 192s analysis measured against
+        gpt-5 — longer than everything else combined, and by then every score was
+        already computed. So the request reaches "done" with its numbers and the
+        text arrives here, shortly after.
+
+        Deliberately does not touch status or finished_at: the analysis was
+        finished when the scores were. A null explanation stays null, which is
+        the same contract as before — the narrative has always been best-effort.
+        """
+        analysis_request.explanation = explanation
+        await self._session.flush()
+
     async def mark_done(
         self,
         analysis_request: AnalysisRequest,

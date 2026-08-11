@@ -110,6 +110,7 @@ def _patched_service(
         )
     )
     product_repo.set_champion = AsyncMock()
+    analysis_repo.set_explanation = AsyncMock()
     mos_repo.get_mos_result = AsyncMock(return_value=None)
 
     # Demand Volume ruler: volumes read via compute_trend_score. Patched so the
@@ -215,7 +216,12 @@ async def test_run_happy_path_marks_done_with_result() -> None:
     # generated from it and persisted with the result.
     mocks["explanation_client"].build_evidence.assert_awaited_once()
     mocks["explanation_client"].narrate.assert_awaited_once()
-    assert mocks["analysis_repo"].mark_done.call_args.kwargs["explanation"] == "MOS narrative (mock)"
+    # The narrative is attached AFTER the answer, so mark_done carries none of it.
+    # It arrives via set_explanation, which is what keeps a 249s LLM call from
+    # sitting between a finished MOS and the caller.
+    assert mocks["analysis_repo"].mark_done.call_args.kwargs["explanation"] is None
+    mocks["analysis_repo"].set_explanation.assert_awaited_once()
+    assert mocks["analysis_repo"].set_explanation.await_args.args[1] == "MOS narrative (mock)"
     assert mocks["analysis_repo"].mark_done.call_args.kwargs["breakdown"] == {
         "countries": [{"country": "USA", "requested": True, "is_champion": True}],
         "champion_country": "USA",
