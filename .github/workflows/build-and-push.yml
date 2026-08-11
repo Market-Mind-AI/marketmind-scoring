@@ -90,8 +90,17 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Validate infra checkout token
+        # Read through env rather than interpolating ${{ secrets.* }} straight
+        # into the script. Interpolation splices the value into the shell source
+        # before bash parses it, so anything in the token that is shell-special
+        # changes the meaning of the script instead of being tested by it. The
+        # length is safe to print — GitHub masks the value itself — and is what
+        # distinguishes "secret not reaching this repo" from "secret malformed".
+        env:
+          INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
         run: |
-          if [[ -z "${{ secrets.INFRA_REPO_TOKEN }}" ]]; then
+          echo "INFRA_REPO_TOKEN length: ${#INFRA_REPO_TOKEN}"
+          if [[ -z "$INFRA_REPO_TOKEN" ]]; then
             echo "Missing required secret: INFRA_REPO_TOKEN."
             echo "Create it as an organisation secret in Market-Mind-AI: a"
             echo "fine-grained PAT with Contents: write on"
