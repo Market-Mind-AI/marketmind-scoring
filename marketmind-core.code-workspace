@@ -23,6 +23,9 @@
 		},
 		{
 			"path": "../../BeProfit/infra-manifests"
+		},
+		{
+			"path": "../marketmind-orchestrator"
 		}
 	],
 	"settings": {}
