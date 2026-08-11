@@ -42,6 +42,17 @@ app = FastAPI(
     ),
     version="0.1.0",
     lifespan=lifespan,
+    # Set when a proxy serves this API under a prefix and strips it before
+    # forwarding. On Azure the ingress publishes the Core at /api and rewrites
+    # it away, so without this FastAPI believes it is at the root and builds the
+    # Swagger page pointing at /openapi.json — an absolute path that leaves the
+    # /api route entirely, lands on the frontend's ingress, and 404s. The API
+    # itself works either way; it is only the generated docs URLs that are wrong,
+    # which is why it looks like a broken Swagger rather than a routing problem.
+    #
+    # Empty by default so the local docker-compose setup, where nothing strips a
+    # prefix, is unaffected.
+    root_path=settings.root_path,
 )
 
 # The browser frontend (marketmind-ai) calls this API directly, so its origin

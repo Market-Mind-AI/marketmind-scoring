@@ -194,6 +194,11 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Path prefix a reverse proxy serves this API under and strips before
+    # forwarding — "/api" on Azure, empty locally. Only affects the URLs FastAPI
+    # generates (Swagger, ReDoc, the OpenAPI document); routing is unchanged.
+    root_path: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @property
