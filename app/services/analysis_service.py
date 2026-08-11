@@ -337,6 +337,24 @@ class AnalysisService:
                         # market instead, and append nothing.
                         champion_country = best_requested.country if best_requested is not None else None
 
+                        # And promote it, rather than only displaying it. The
+                        # stored value means "this product's best known market",
+                        # so leaving a beaten champion in place would keep it
+                        # wrong for every later analysis: a request for ESP and
+                        # PRT alone would load BRA at 66.37 and crown it, while
+                        # the USA at 69.03 was already known to be better.
+                        #
+                        # Cheap — the numbers are already in hand, and no
+                        # candidate collection is involved.
+                        if best_requested is not None:
+                            await self._product_repo.set_champion(
+                                entity,
+                                country=best_requested.country,
+                                mos=best_requested.mos,
+                                period_key=period_key,
+                            )
+                            await self._session.commit()
+
                 if not champion_is_cached:
                     candidate_results = await self._score_reference_candidates(
                         entity=entity, requested=countries, period_key=period_key, demand_ceiling=demand_ceiling

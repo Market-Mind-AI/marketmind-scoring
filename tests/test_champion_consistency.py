@@ -15,7 +15,6 @@ needing the whole run() pipeline.
 """
 
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 
@@ -102,6 +101,32 @@ def test_cached_champion_wins_when_no_requested_market_scored() -> None:
         requested=[("USA", None), ("ESP", None)],
     )
     assert champion == "BRA"
+
+
+def test_a_beaten_champion_is_promoted_not_merely_displaced() -> None:
+    """Structural guard on the write, which is separate from the comparison.
+
+    Getting the comparison right only fixes the CURRENT report. If the beaten
+    champion stays stored, every later analysis reloads it: a request for ESP and
+    PRT alone would crown BRA at 66.37 while the USA at 69.03 was already known
+    to be better. So the losing branch has to persist the winner too.
+    """
+    import inspect
+    import re
+
+    from app.services import analysis_service
+
+    src = inspect.getsource(analysis_service.AnalysisService.run)
+    # Isolate the branch where the cached champion lost.
+    idx = src.index("The stored champion lost")
+    branch = src[idx : idx + 1200]
+    assert "set_champion" in branch, (
+        "a beaten cached champion is displaced in the report but left stored, so it will be reloaded and "
+        "crowned again on the next analysis"
+    )
+    assert re.search(r"country=best_requested\.country", branch), (
+        "the promotion does not store the market that actually won"
+    )
 
 
 def test_service_compares_the_cached_champion_against_requested_scores() -> None:
