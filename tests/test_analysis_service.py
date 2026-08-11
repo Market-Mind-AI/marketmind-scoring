@@ -66,6 +66,7 @@ def _patched_service(
     product_repo = _install("product_repo", "app.services.analysis_service.ProductRepository")
     country_repo = _install("country_repo", "app.services.analysis_service.CountryRepository")
     indicator_repo = _install("indicator_repo", "app.services.analysis_service.IndicatorRepository")
+    mos_repo = _install("mos_repo", "app.services.analysis_service.MosRepository")
     coverage_service = _install("coverage_service", "app.services.analysis_service.CoverageService")
     indicator_engine = _install("indicator_engine", "app.services.analysis_service.IndicatorEngine")
     mos_engine = _install("mos_engine", "app.services.analysis_service.MosEngine")
@@ -98,8 +99,18 @@ def _patched_service(
             entity_key=_ENTITY_KEY,
             localized_markets={"USA": {"primary_name": "air fryer", "search_terms": ["air fryer", "airfryer"]}},
             reference_candidates=[{"country": "BRA", "primary_name": "fritadeira", "search_terms": ["air fryer br"]}],
+            # No cached champion: champion_period_key is None, so these tests
+            # exercise the compute-and-persist path. A product whose
+            # champion_period_key equals the period under test takes the cached
+            # branch instead and does no candidate collection at all.
+            champion_country=None,
+            champion_mos=None,
+            champion_period_key=None,
+            champion_computed_at=None,
         )
     )
+    product_repo.set_champion = AsyncMock()
+    mos_repo.get_mos_result = AsyncMock(return_value=None)
 
     # Demand Volume ruler: volumes read via compute_trend_score. Patched so the
     # BRA candidate (terms ["air fryer br"]) is bigger (2000) than requested USA
@@ -263,6 +274,52 @@ async def test_off_request_champion_is_surfaced_and_crowned() -> None:
     assert breakdown["requested_countries"] == ["USA"]
     bra = next(c for c in breakdown["countries"] if c["country"] == "BRA")
     assert bra["is_champion"] is True and bra["requested"] is False
+
+
+async def test_cached_champion_skips_all_candidate_work() -> None:
+    """A champion already computed for this period costs nothing to reuse.
+
+    This is the property that makes a repeat analysis fast. Before it existed,
+    three consecutive analyses of the same product and countries took 594s, 203s
+    and 396s on the deployed environment — the requested countries collected
+    nothing on the repeats, and every second went to re-collecting candidate
+    demand from PyTrends to rediscover the same champion.
+
+    So the assertion is about work NOT done: no candidate coverage, no candidate
+    scoring, and no rewrite of the stored champion.
+    """
+    session, mocks = _patched_service(all_covered=True)
+    entity = mocks["product_repo"].get_by_entity_key.return_value
+    entity.champion_country = "BRA"
+    entity.champion_mos = Decimal("85.0")
+    entity.champion_period_key = "2026-07"  # the period under test
+
+    cached_row = _mos_result("BRA")
+    cached_row.mos = Decimal("85.0")
+    mocks["mos_repo"].get_mos_result = AsyncMock(return_value=cached_row)
+
+    mocks["explanation_client"].build_evidence = AsyncMock(
+        return_value={"countries": [{"country": "USA"}, {"country": "BRA"}]}
+    )
+    try:
+        with patch("app.services.analysis_service.current_month_period_key", return_value="2026-07"):
+            service = AnalysisService(session)
+            await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    # compute_mos is called once, for the requested countries only — never again
+    # for candidates.
+    called_country_sets = [c.kwargs["countries"] for c in mocks["mos_engine"].compute_mos.await_args_list]
+    assert called_country_sets == [["USA"]], f"candidate scoring ran: {called_country_sets}"
+    # The stored champion is left alone; nothing was recomputed to overwrite it.
+    mocks["product_repo"].set_champion.assert_not_awaited()
+    # And it still reaches the answer, read from its persisted MOS row.
+    by_country = {r["country"]: r for r in mocks["analysis_repo"].mark_done.call_args.kwargs["result"]}
+    assert by_country["BRA"]["is_champion"] is True
+    assert by_country["BRA"]["requested"] is False
 
 
 async def test_run_dispatches_collection_only_for_missing_gaps() -> None:

@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import ForeignKey, Index
+from sqlalchemy import ForeignKey, Index, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -52,6 +53,24 @@ class ProductCatalog(Base):
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(settings.openai_embedding_dimensions), nullable=True)
+
+    # The product's standout reference market, cached here because it is a
+    # property of the product and not of any one request: MOS uses fixed 100/0
+    # TOPSIS anchors, so a candidate scores the same whoever asked and whatever
+    # was asked alongside it.
+    #
+    # Recomputing it per analysis meant re-collecting candidate demand from
+    # PyTrends, the slowest thing in the system, for a result that does not
+    # change. champion_period_key is what makes it stale — demand is collected
+    # per month, so a champion is valid for the period it was computed in.
+    #
+    # champion_period_key NULL means "never computed"; a non-NULL period with a
+    # NULL champion_country means "computed for that period and no candidate
+    # could be scored", which must not be retried on every analysis.
+    champion_country: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    champion_mos: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    champion_period_key: Mapped[str | None] = mapped_column(nullable=True)
+    champion_computed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     merged_into: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("product_catalog.entity_key"), nullable=True
     )

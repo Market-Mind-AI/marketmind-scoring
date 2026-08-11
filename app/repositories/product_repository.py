@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from dataclasses import dataclass
 from typing import Any
 
@@ -135,6 +136,28 @@ class ProductRepository:
 
     async def set_embedding(self, entity: ProductCatalog, embedding: list[float]) -> None:
         entity.embedding = embedding
+        await self._session.flush()
+
+    async def set_champion(
+        self,
+        entity: ProductCatalog,
+        *,
+        country: str | None,
+        mos: Decimal | None,
+        period_key: str,
+    ) -> None:
+        """Record the product's standout reference market for a period.
+
+        Called with country=None when no candidate could be scored, and that is
+        deliberately still a write: period_key is what marks the work as done, so
+        "nothing scorable this month" is remembered rather than re-attempted on
+        every analysis. Distinguishing it from "never computed" is the whole
+        reason champion_period_key exists separately from champion_country.
+        """
+        entity.champion_country = country
+        entity.champion_mos = mos
+        entity.champion_period_key = period_key
+        entity.champion_computed_at = utc_now()
         await self._session.flush()
 
     async def set_google_mid(self, entity: ProductCatalog, *, google_mid: str, google_type: str | None) -> None:

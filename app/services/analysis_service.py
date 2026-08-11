@@ -25,10 +25,11 @@ from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
 from app.db.models.indicator_value import IndicatorValue
 from app.db.models.mos_result import MosResult
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode
+from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, PeriodType
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
+from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.coverage import CoverageGap
 from app.schemas.mos import MosResultResponse
@@ -162,6 +163,7 @@ class AnalysisService:
         self._product_repo = ProductRepository(session)
         self._country_repo = CountryRepository(session)
         self._indicator_repo = IndicatorRepository(session)
+        self._mos_repo = MosRepository(session)
         self._coverage_service = CoverageService(session)
         self._indicator_engine = IndicatorEngine(session)
         self._mos_engine = MosEngine(session)
@@ -213,8 +215,22 @@ class AnalysisService:
             entity = await self._product_repo.get_by_entity_key(entity_key) if entity_key is not None else None
             demand_ceiling: float | None = None
             demand_ruler: dict[str, Any] | None = None
+            # A champion computed for this period is reusable as-is, and that is
+            # what makes a repeat analysis fast: candidate demand is the slowest
+            # collection in the system, and re-running it produces the same
+            # answer. Measured before this: three consecutive analyses of the
+            # same product took 594s, 203s and 396s, with the four requested
+            # countries collecting nothing on the repeats — all of it candidate
+            # work, redone.
+            champion_is_cached = entity is not None and entity.champion_period_key == period_key
+
             if entity is not None:
-                await self._ensure_candidates_coverage(entity, countries, period_key=period_key)
+                if not champion_is_cached:
+                    await self._ensure_candidates_coverage(entity, countries, period_key=period_key)
+                # The ceiling only READS candidate demand, it never collects. So
+                # skipping the collection above leaves it reading exactly the
+                # data the run that computed the champion left behind — the
+                # ruler is therefore stable across repeats rather than drifting.
                 demand_ceiling, demand_ruler = await self._resolve_demand_ceiling(entity, countries, period_key)
 
             for country_iso3 in countries:
@@ -271,15 +287,47 @@ class AnalysisService:
             champion_country: str | None = None
             requested_set = set(countries)
             if entity is not None and entity_key is not None and mos_results:
-                candidate_results = await self._score_reference_candidates(
-                    entity=entity, requested=countries, period_key=period_key, demand_ceiling=demand_ceiling
-                )
-                scored_all = [r for r in [*mos_results, *candidate_results] if r.mos is not None]
-                if scored_all:
-                    champion = max(scored_all, key=lambda r: float(r.mos))
-                    champion_country = champion.country
-                    if champion.country not in requested_set:
-                        mos_results = [*mos_results, champion]  # off-request → surface for benchmark
+                champion_row: MosResult | None = None
+
+                if champion_is_cached:
+                    # Cached, including the case where it is cached as "no
+                    # candidate could be scored" (period set, country NULL) —
+                    # that must not be retried on every analysis either.
+                    champion_country = entity.champion_country
+                    if champion_country is not None and champion_country not in requested_set:
+                        champion_row = await self._mos_repo.get_mos_result(
+                            entity_key, champion_country, PeriodType.MONTH.value, period_key
+                        )
+                        if champion_row is None:
+                            # The product says it has a champion but its MOS row
+                            # is gone. Recompute rather than report a country
+                            # with no numbers behind it.
+                            champion_is_cached = False
+                            champion_country = None
+
+                if not champion_is_cached:
+                    candidate_results = await self._score_reference_candidates(
+                        entity=entity, requested=countries, period_key=period_key, demand_ceiling=demand_ceiling
+                    )
+                    scored_all = [r for r in [*mos_results, *candidate_results] if r.mos is not None]
+                    if scored_all:
+                        champion = max(scored_all, key=lambda r: float(r.mos))
+                        champion_country = champion.country
+                        if champion.country not in requested_set:
+                            champion_row = champion
+                    # Persisted whether or not a champion was found: the period
+                    # is what marks the work as done, so "nothing scorable this
+                    # month" is recorded rather than re-attempted.
+                    await self._product_repo.set_champion(
+                        entity,
+                        country=champion_country,
+                        mos=champion.mos if champion_country is not None else None,
+                        period_key=period_key,
+                    )
+                    await self._session.commit()
+
+                if champion_row is not None:
+                    mos_results = [*mos_results, champion_row]  # off-request → surface for benchmark
 
             serialized = []
             for r in mos_results:
