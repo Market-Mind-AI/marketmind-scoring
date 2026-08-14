@@ -36,9 +36,17 @@ class ClaudeProvider(LLMProvider):
                 }
             )
         content.append({"type": "text", "text": user})
+        # 16000, not the 8192 this carried until 2026-08-13: on Claude Opus 5
+        # thinking is ON when the request omits the `thinking` field, and
+        # max_tokens caps thinking PLUS the answer. 8192 was sized around the
+        # answer alone, so the identify-image `markets` payload — the largest
+        # structured output here — could be cut off mid-JSON once thinking
+        # started consuming the same budget. 16000 keeps a non-streaming call
+        # comfortably inside the SDK's HTTP timeout; going higher would mean
+        # switching this path to streaming.
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": 8192,
+            "max_tokens": 16000,
             "messages": [{"role": "user", "content": content}],
         }
         if system:

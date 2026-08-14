@@ -85,21 +85,22 @@ class Settings(BaseSettings):
     #     market sizes (e.g. it omitted Brazil for air fryer). Real search volume
     #     still elects the winner among the candidates; the LLM only proposes.
     #   - explanation: the final MOS-narrative call (text).
-    # Default to gpt-5 on every site (2026-07-24): validated to fix the
-    # term-quality gap (e.g. Japan's ノンフライヤー) that the local models missed.
-    # Still swappable per-site via .env; production runs on a top model.
-    # Vision runs on gpt-4o (fast, multimodal): identifying "what product is
-    # this" is simple perception — it doesn't need gpt-5's slow deep reasoning,
-    # and term QUALITY (the reason for gpt-5) is the enrichment site's job, not
-    # vision's. Keeps identify-image snappy.
-    vision_llm_provider: str = "gpt"
-    vision_llm_model: str = "gpt-4o"
-    enrichment_llm_provider: str = "gpt"
-    enrichment_llm_model: str = "gpt-5"
-    reference_market_llm_provider: str = "gpt"
-    reference_market_llm_model: str = "gpt-5"
-    explanation_llm_provider: str = "gpt"
-    explanation_llm_model: str = "gpt-5"
+    # Default to claude-opus-5 on every site (2026-08-13, user decision): this
+    # project ships published with no OpenAI dependency, so "gpt" stays a
+    # supported provider code in the resolver but is no longer a default
+    # anywhere. Vision included — Anthropic's vision endpoint is first-party.
+    # A single model across all four sites also keeps the term-quality bar
+    # (Japan's ノンフライヤー, the reason gpt-5 was picked in 2026-07-24) met by
+    # the same model that identifies the product. Still swappable per-site
+    # via .env.
+    vision_llm_provider: str = "claude"
+    vision_llm_model: str = "claude-opus-5"
+    enrichment_llm_provider: str = "claude"
+    enrichment_llm_model: str = "claude-opus-5"
+    reference_market_llm_provider: str = "claude"
+    reference_market_llm_model: str = "claude-opus-5"
+    explanation_llm_provider: str = "claude"
+    explanation_llm_model: str = "claude-opus-5"
 
     # marketmind-ollma-llm gateway (port 8005) — the transport used when a site's
     # provider is "ollama"; routes to a LOCAL Ollama model. Best-effort for the
@@ -165,15 +166,17 @@ class Settings(BaseSettings):
     # product_identification_service.py). Anthropic tem endpoint de visão
     # nativo (ao contrário de embeddings) — usa o SDK oficial, não um stopgap.
     anthropic_api_key: str = ""
-    # Haiku 4.5 (not Opus): identify-image is a simple, high-volume
-    # classification task (product name/brand/category/age from one photo),
-    # not deep reasoning — cost was the deciding factor (2026-07-08, user
-    # request) over Opus's extra capability, which this task doesn't need.
-    # identify-image now returns a rich per-country `markets` payload (real
-    # search terms for every requested country). Haiku 4.5 degenerated on that
-    # large structured output (repeated-token loop -> invalid JSON), so the
-    # default is a more capable model. Overridable via ANTHROPIC_VISION_MODEL.
-    anthropic_vision_model: str = "claude-opus-4-8"
+    # There is no anthropic_vision_model here: the vision model is chosen by
+    # vision_llm_model above, like every other call site. A separate setting
+    # existed until 2026-08-13 and was read by nothing — it predates the
+    # resolver and only made the two look like they disagreed.
+    #
+    # Kept from that era, because it still governs the model choice: the
+    # identify-image call returns a rich per-country `markets` payload (real
+    # search terms for every requested country), and Haiku 4.5 degenerated on
+    # that large structured output (repeated-token loop -> invalid JSON). Do
+    # not point vision_llm_model at a small model without re-testing that
+    # payload.
 
     # Trigram (pg_trgm) similarity threshold to accept a fuzzy alias match
     # without falling through to the more expensive embedding step.
