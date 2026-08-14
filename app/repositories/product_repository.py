@@ -134,6 +134,59 @@ class ProductRepository:
         await self._session.flush()
         return alias
 
+    async def list_match_candidates(self, *, category: str | None = None) -> list[ProductCatalog]:
+        """Entidades que o LLM vai considerar quando alias e trigram falham.
+
+        Prioriza a mesma `category` quando o chamador a conhece (identify-image
+        a traz): produto novo quase sempre colide com produto do mesmo tipo, e
+        entidades de outra categoria só gastariam tokens. Completa com as
+        demais até o teto, para que uma categoria errada vinda do LLM de visão
+        não esconda o candidato certo.
+        """
+        limite = settings.catalog_match_candidate_limit
+        base = select(ProductCatalog).where(ProductCatalog.merged_into.is_(None))
+
+        selecionadas: list[ProductCatalog] = []
+        vistos: set[uuid.UUID] = set()
+
+        if category:
+            result = await self._session.execute(
+                base.where(ProductCatalog.category == category)
+                .order_by(ProductCatalog.created_at.desc())
+                .limit(limite)
+            )
+            for produto in result.scalars():
+                selecionadas.append(produto)
+                vistos.add(produto.entity_key)
+
+        if len(selecionadas) < limite:
+            result = await self._session.execute(
+                base.order_by(ProductCatalog.created_at.desc()).limit(limite * 2)
+            )
+            for produto in result.scalars():
+                if produto.entity_key in vistos:
+                    continue
+                selecionadas.append(produto)
+                if len(selecionadas) >= limite:
+                    break
+
+        return selecionadas
+
+    async def existing_alias_owners(self, normalized: set[str]) -> dict[str, uuid.UUID]:
+        """Quais destes aliases normalizados já existem, e de quem são.
+
+        Consulta em lote porque o indexador de termos localizados chega com
+        dezenas de termos de uma vez (um produto com 23 mercados traz ~115) e
+        um SELECT por termo seria o passo mais caro de uma resolução.
+        """
+        if not normalized:
+            return {}
+        stmt = select(ProductAlias.alias_normalized, ProductAlias.entity_key).where(
+            ProductAlias.alias_normalized.in_(normalized)
+        )
+        result = await self._session.execute(stmt)
+        return {alias: key for alias, key in result.all()}
+
     async def set_embedding(self, entity: ProductCatalog, embedding: list[float]) -> None:
         entity.embedding = embedding
         await self._session.flush()

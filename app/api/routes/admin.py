@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.schemas.admin import (
-    BackfillEmbeddingsResponse,
     EnrichmentReportResponse,
     MergeReportResponse,
     ReconciliationReportResponse,
@@ -71,23 +70,6 @@ async def enrich_mid(limit: int = 20, session: AsyncSession = Depends(get_sessio
 async def merge_catalog(session: AsyncSession = Depends(get_session)) -> MergeReportResponse:
     report = await MergeService(session).merge_duplicates()
     return MergeReportResponse(merged_pairs=report.merged_pairs)
-
-
-@router.post(
-    "/catalog/backfill-embeddings",
-    response_model=BackfillEmbeddingsResponse,
-    summary="Backfill missing catalog embeddings",
-    description=(
-        "Computes embeddings for up to `limit` entities created while the "
-        "embedding provider was unavailable or unconfigured. Safe to call "
-        "repeatedly — see app/services/catalog_service.py."
-    ),
-)
-async def backfill_embeddings(
-    limit: int = 50, session: AsyncSession = Depends(get_session)
-) -> BackfillEmbeddingsResponse:
-    updated = await CatalogService(session).backfill_missing_embeddings(limit=limit)
-    return BackfillEmbeddingsResponse(updated=updated)
 
 
 @router.post(

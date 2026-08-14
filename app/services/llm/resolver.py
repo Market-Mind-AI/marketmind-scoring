@@ -40,3 +40,12 @@ def resolve_reference_market_llm() -> LLMProvider:
 def resolve_explanation_llm() -> LLMProvider:
     """The final MOS-narrative call (text)."""
     return resolve_llm(provider=settings.explanation_llm_provider, model=settings.explanation_llm_model)
+
+
+def resolve_catalog_match_llm() -> LLMProvider:
+    """Decide se o texto consultado é o mesmo produto de alguma entidade do
+    catálogo, quando alias exato e trigram falham (ver catalog_matcher.py).
+    Substituiu o passo de embedding: os casos que sobram são sinônimo de
+    domínio e idiomas sem parentesco de escrita, que distância vetorial não
+    resolve."""
+    return resolve_llm(provider=settings.catalog_match_llm_provider, model=settings.catalog_match_llm_model)

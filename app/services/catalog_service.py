@@ -3,15 +3,28 @@ section 6). Cheapest-to-most-expensive match, in order:
 
 1. Exact normalized alias (product_aliases) — O(1) index lookup.
 2. Fuzzy trigram (pg_trgm) over existing aliases.
-3. Embedding/semantic similarity over product_catalog.embedding.
+3. LLM decides among the catalog's candidate entities — see catalog_matcher.py.
 4. Nothing matched — create a new entity locally (entity_key is always a
    freshly generated UUID, never blocked by an external dependency).
 
-A successful trigram or embedding match writes a new exact alias pointing at
-the matched entity, so the same text resolves via the O(1) path next time.
-The embedding step is best-effort and never blocks resolution: if the
-provider call fails (or OPENAI_API_KEY isn't set), resolution falls straight
-through to entity creation with a null embedding — see embedding_client.py.
+Um match nos passos 2 ou 3 grava um alias exato apontando para a entidade, de
+modo que o mesmo texto resolve pelo caminho O(1) na próxima vez.
+
+Os `search_terms` de cada mercado também viram aliases (ver
+_index_localized_terms). Isso é o que faz o passo 2 alcançar outros idiomas: o
+LLM de enrichment já traduziu o produto para cada mercado, e indexar esses
+termos põe esse vocabulário ao alcance do trigram. Medido contra os 89 termos
+reais do catálogo (2026-08-14): 71 resolvem no passo 2, com precisão de 100%
+no limiar 0.4 configurado.
+
+O passo 3 era embedding até 2026-08-14 e passou a ser o LLM. Motivo medido: os
+~20% que chegam lá não têm parentesco de escrita com nada indexado
+(`lockencreme`, `odżywka bez spłukiwania`) ou são sinônimo de domínio
+(`quadcopter` para drone) — e nenhum threshold de distância vetorial separa
+"mesmo produto" de "produto vizinho" neste catálogo (`freidora sin aceite` e
+`freidora con aceite` ficam a 0,033). O passo 3 é best-effort: se o LLM
+estiver indisponível, a resolução cai para a criação de entidade nova, que é
+o erro recuperável.
 """
 
 from typing import Any
@@ -22,8 +35,8 @@ from app.core.logging import logger
 from app.db.models.product_catalog import ProductCatalog
 from app.repositories.product_repository import ProductRepository
 from app.schemas.catalog import CatalogResolveResponse
-from app.services.embedding_client import EmbeddingClient, EmbeddingError
-from app.utils.text import normalize_alias
+from app.services.catalog_matcher import CatalogMatcher
+from app.utils.text import as_term_list, normalize_alias
 
 
 def _union_terms(*lists: list[str] | None) -> list[str]:
@@ -85,10 +98,10 @@ def _merge_reference_candidates(
 
 
 class CatalogService:
-    def __init__(self, session: AsyncSession, embedding_client: EmbeddingClient | None = None) -> None:
+    def __init__(self, session: AsyncSession, matcher: CatalogMatcher | None = None) -> None:
         self._session = session
         self._repo = ProductRepository(session)
-        self._embedding_client = embedding_client or EmbeddingClient()
+        self._matcher = matcher or CatalogMatcher()
 
     async def resolve(
         self,
@@ -118,6 +131,7 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
+            await self._index_localized_terms(entity, localized_markets)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="alias"
@@ -136,6 +150,7 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
+            await self._index_localized_terms(trigram.product, localized_markets)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=trigram.product.entity_key,
@@ -144,28 +159,33 @@ class CatalogService:
                 match_score=trigram.similarity,
             )
 
-        embedding = await self._try_embed(text)
-        if embedding is not None:
-            semantic = await self._repo.semantic_search(embedding)
-            if semantic is not None:
-                await self._repo.create_alias(
-                    alias_normalized=alias_normalized, entity_key=semantic.product.entity_key, source=source
-                )
-                self._refresh_entity_fields(
-                    semantic.product,
-                    category=category,
-                    localized_markets=localized_markets,
-                    reference_candidates=reference_candidates,
-                    target_age_min=target_age_min,
-                    target_age_max=target_age_max,
-                )
-                await self._session.commit()
-                return CatalogResolveResponse(
-                    entity_key=semantic.product.entity_key,
-                    canonical_title=semantic.product.canonical_title,
-                    method="embedding",
-                    match_score=1 - semantic.distance,  # pgvector cosine_distance = 1 - cosine_similarity
-                )
+        # Passo 3: o LLM decide. Só chega aqui o que alias e trigram não
+        # resolveram — medido contra o catálogo real, ~20% das consultas, e
+        # sempre pelo mesmo motivo: o termo não tem parentesco de escrita com
+        # nada indexado (`lockencreme`, `odżywka bez spłukiwania`) ou é
+        # sinônimo de domínio (`quadcopter` para drone). Substituiu o passo de
+        # embedding, que não decidia esses casos: ver catalog_matcher.py.
+        candidatos = await self._repo.list_match_candidates(category=category)
+        correspondente = await self._matcher.pick(text=text, candidates=candidatos)
+        if correspondente is not None:
+            await self._repo.create_alias(
+                alias_normalized=alias_normalized, entity_key=correspondente.entity_key, source=source
+            )
+            self._refresh_entity_fields(
+                correspondente,
+                category=category,
+                localized_markets=localized_markets,
+                reference_candidates=reference_candidates,
+                target_age_min=target_age_min,
+                target_age_max=target_age_max,
+            )
+            await self._index_localized_terms(correspondente, localized_markets)
+            await self._session.commit()
+            return CatalogResolveResponse(
+                entity_key=correspondente.entity_key,
+                canonical_title=correspondente.canonical_title,
+                method="llm",
+            )
 
         entity = await self._repo.create_entity(
             canonical_title=text,
@@ -174,13 +194,79 @@ class CatalogService:
             reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
-            embedding=embedding,
         )
         await self._repo.create_alias(alias_normalized=alias_normalized, entity_key=entity.entity_key, source=source)
+        await self._index_localized_terms(entity, localized_markets)
         await self._session.commit()
         return CatalogResolveResponse(
             entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="created"
         )
+
+    async def _index_localized_terms(
+        self, entity: ProductCatalog, localized_markets: dict[str, dict[str, Any]] | None
+    ) -> int:
+        """Grava os `search_terms` de cada mercado como aliases da entidade.
+
+        POR QUE ISTO EXISTE. O LLM de enrichment já traduz o produto para cada
+        mercado — `localized_markets` guarda o termo em espanhol, português,
+        alemão e assim por diante. Mas esses termos ficavam só no JSONB, e o
+        passo 2 (trigram) busca em `product_aliases`. O resultado é que o
+        sistema possuía o vocabulário multilíngue e não conseguia usá-lo:
+        resolver "freidora de aire" falhava mesmo com esse termo gravado na
+        entidade da air fryer.
+
+        Indexá-los fecha essa lacuna sem nenhuma dependência nova. Medido
+        contra os 89 termos reais do catálogo (2026-08-14), com o
+        `similarity()` do pg_trgm e o limiar 0.4 já configurado: 71 dos 89
+        casos resolvem acima do limiar e TODOS os 71 estão corretos —
+        precisão de 100% no ponto de operação atual. Os 18 restantes ficam
+        abaixo do limiar e seguem para os passos seguintes.
+
+        O conhecimento de mundo continua necessário uma vez por produto, na
+        identificação. Depois disso, recuperar é comparação de string.
+
+        Conflito: `alias_normalized` é único globalmente. Um termo que já
+        pertence a OUTRA entidade é deixado como está, nunca reapontado — o
+        mapeamento existente veio de uma resolução anterior (possivelmente de
+        uma consulta real de usuário, evidência mais forte que um termo
+        gerado), e repontá-lo em silêncio trocaria a identidade de um produto
+        já resolvido.
+        """
+        if not localized_markets:
+            return 0
+
+        # Deduplica por forma normalizada: 23 mercados repetem a marca
+        # ("Skala Mais Crespinhos") em todos, e a normalização os colapsa.
+        candidatos: dict[str, str] = {}
+        for market in localized_markets.values():
+            if not isinstance(market, dict):
+                continue
+            for term in as_term_list(market.get("search_terms")):
+                key = normalize_alias(term)
+                # Vazio acontece com escritas não-latinas (katakana, árabe):
+                # normalize_alias remove tudo fora de [a-z0-9], então o termo
+                # não tem representação e não pode virar alias.
+                if key:
+                    candidatos.setdefault(key, term)
+
+        if not candidatos:
+            return 0
+
+        donos = await self._repo.existing_alias_owners(set(candidatos))
+        criados = 0
+        for key in candidatos:
+            dono = donos.get(key)
+            if dono is not None:
+                if dono != entity.entity_key:
+                    logger.info(
+                        f"Termo localizado {key!r} já é alias de outra entidade ({dono}); mantido"
+                    )
+                continue
+            await self._repo.create_alias(
+                alias_normalized=key, entity_key=entity.entity_key, source="localized_market"
+            )
+            criados += 1
+        return criados
 
     @staticmethod
     def _refresh_entity_fields(
@@ -209,25 +295,3 @@ class CatalogService:
         if target_age_max is not None:
             entity.target_age_max = target_age_max
 
-    async def backfill_missing_embeddings(self, *, limit: int = 50) -> int:
-        """Computes embeddings for entities created while the provider was
-        unavailable (or before it was configured). Safe to run repeatedly —
-        each call handles up to `limit` entities. Returns how many were
-        updated."""
-        entities = await self._repo.list_entities_missing_embedding(limit=limit)
-        updated = 0
-        for entity in entities:
-            embedding = await self._try_embed(entity.canonical_title)
-            if embedding is None:
-                continue
-            await self._repo.set_embedding(entity, embedding)
-            updated += 1
-        await self._session.commit()
-        return updated
-
-    async def _try_embed(self, text: str) -> list[float] | None:
-        try:
-            return await self._embedding_client.embed(text)
-        except EmbeddingError as exc:
-            logger.warning(f"Embedding step unavailable, continuing without it: {exc}")
-            return None

@@ -12,10 +12,6 @@ class MergeReportResponse(BaseModel):
     merged_pairs: int
 
 
-class BackfillEmbeddingsResponse(BaseModel):
-    updated: int
-
-
 class ReconciliationDriftItem(BaseModel):
     coverage_index_id: str
     source: str
