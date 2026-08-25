@@ -286,3 +286,21 @@ async def test_categoria_ausente_nao_desqualifica(db_session: AsyncSession) -> N
     sem_categoria = await service.resolve(f"air fryers {sufixo}", source="test")
     assert sem_categoria.entity_key == criado.entity_key
     assert sem_categoria.method == "trigram"
+
+
+async def test_backfill_reporta_quantos_termos_podou(db_session: AsyncSession) -> None:
+    """A poda é a parte DESTRUTIVA do backfill. Ficar fora do schema da rota a
+    tornava invisível para quem opera — o Pydantic descartava o campo em
+    silêncio e a resposta dizia só o que tinha sido acrescentado."""
+    sufixo = uuid.uuid4().hex[:8]
+    repo = ProductRepository(db_session)
+    entidade = await repo.create_entity(canonical_title=f"air fryer {sufixo}", localized_markets=_mercados(sufixo))
+    await repo.create_alias(
+        alias_normalized=f"marca truncada {sufixo}", entity_key=entidade.entity_key, source="localized_market"
+    )
+    await db_session.commit()
+
+    relatorio = await CatalogService(db_session, matcher=_sem_match()).backfill_terms()
+
+    assert relatorio["obsoletos"] >= 1
+    assert set(relatorio) == {"entidades", "aliases", "excluidos", "obsoletos"}

@@ -12,6 +12,11 @@ class BackfillTermsResponse(BaseModel):
     entidades: int
     aliases: int
     excluidos: int
+    # Termos derivados apagados por não corresponderem mais à curadoria atual
+    # (ver CatalogService._podar_termos_derivados). Ficou de fora do schema
+    # quando a poda entrou, e o Pydantic o descartava em silêncio — deixando
+    # invisível justamente a parte destrutiva da operação.
+    obsoletos: int = 0
 
 
 class MergeReportResponse(BaseModel):
