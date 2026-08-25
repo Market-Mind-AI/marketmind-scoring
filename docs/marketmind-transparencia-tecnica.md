@@ -97,7 +97,7 @@ margen 0 — la regla simple, sin ningún número que calibrar.
 
 **Estas cifras son reproducibles**, no de una sesión perdida: `python scripts/benchmark_catalog_resolution.py`
 las recalcula contra el catálogo vivo, en sólo-lectura, usando el `similarity()` real del pg_trgm. Los 102
-términos excluidos son los 103 curados menos uno descartado por contradicción (§1.7). "Consulta inédita" elimina,
+términos excluidos son los 103 curados menos uno descartado por contradicción (§1.8). "Consulta inédita" elimina,
 por consulta, el término idéntico de los dos lados — sin eso la medición sólo pregunta si el índice encuentra lo
 que él mismo contiene, que es exactamente la falla de método de la calibración original.
 
@@ -203,7 +203,44 @@ servicio que se niega a guardar alias sin forma normalizada (un texto de sólo p
 normalizando a vacío, y ese caso ahora pasa sin alias); y una `CHECK` en las dos tablas (migration 028) que vuelve
 el estado imposible en vez de improbable.
 
-### 1.7 Limitaciones conocidas
+### 1.7 La marca no decide identidad
+
+La unidad de identidad del catálogo es el **producto genérico**: `air fryer` es una entidad, y Philips, Ninja y
+Cosori son marcas suyas. El prompt de visión se lo dice al modelo con todas las letras — *"Put the brand only in
+`brand`"* — y aun así el código volvía a pegar las dos cosas antes de resolver:
+
+```python
+resolve_text = f"{brand} {product_name}"   # hasta el 25/08/2026
+```
+
+La marca es un token que **todos** los productos de esa marca comparten: no distingue nada dentro de la marca y
+acerca artificialmente cosas que sólo tienen la marca en común. Medido contra el catálogo real:
+
+```
+'air purifier'          vs 'air fryer'         0.278   (por debajo del umbral)
+'philips air purifier'  vs 'philips airfryer'  0.520   ← pasaba
+```
+
+Verificado de punta a punta por el endpoint que usa el frontend: describir *"un purificador de aire Philips para
+habitación, con filtro HEPA"* devolvía `method: trigram` → **air fryer**, y el daño era completo — 15 alias de
+purificador apuntando a la air fryer, los `search_terms` de BRA contaminados con `purificador de ar Philips` y
+`filtro HEPA Philips` (que habrían sumado su volumen de búsqueda al Demand Volume del producto equivocado), y la
+categoría de la entidad sobrescrita de `Kitchen Appliances` a `Home Appliances`.
+
+En 11 de 12 casos medidos la marca no cambiaba el resultado; en el 12º lo cambiaba a peor. Tampoco hacía falta para
+encontrar la entidad: `Philips Airfryer` y `Ninja air fryer` ya son alias indexados, venidos de los `search_terms`
+curados.
+
+**La marca no se pierde: se acumula.** `product_catalog.brands` (migration 029) guarda cada marca vista para el
+producto — se añade, nunca sustituye, igual que `localized_markets` — y cada marca nueva genera además un alias
+`marca + nombre`, para que la siguiente consulta con marca resuelva en el paso 1. **Nunca** un alias con la marca
+sola: un alias `philips` haría que cualquier producto Philips resolviera a esa entidad, por igualdad exacta, en el
+paso más barato — que es exactamente el destrozo que la migration 028 y la poda del backfill limpiaron.
+
+Es JSONB y no tabla propia, al contrario que `product_excluded_terms`: aquélla tiene que ser **consultable** por
+`similarity()` con índice GIN porque participa del veto; la marca se lee junto con la entidad y nunca se busca sola.
+
+### 1.8 Limitaciones conocidas
 
 - **El veto sólo cubre la colisión que alguien curó.** Repetida la medición eliminando también el término excluido
   idéntico (para simular una colisión que nadie anotó), las fusiones caen de 43,1% a 16,7% — una reducción del 61%,

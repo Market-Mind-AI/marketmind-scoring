@@ -97,14 +97,13 @@ class ProductIdentificationService:
             if _has_terms(_market_to_dict(market))
         }
 
-        resolve_text = (
-            f"{identification.brand} {identification.product_name}".strip()
-            if identification.brand
-            else identification.product_name
-        )
+        # A identidade é o nome GENÉRICO. A marca vai separada e é acumulada na
+        # entidade — concatenar as duas aqui decidia identidade com um token
+        # compartilhado por toda a marca (ver catalog_service.resolve).
         resolved = await self._catalog_service.resolve(
-            resolve_text,
+            identification.product_name,
             source="image_identification" if image_base64 else "text_identification",
+            brand=identification.brand,
             category=identification.category,
             localized_markets=localized_markets or None,
             reference_candidates=None,  # deferred to the /analyze background task

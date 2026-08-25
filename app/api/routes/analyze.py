@@ -92,10 +92,12 @@ async def analyze(
 ) -> AnalyzeAcceptedResponse:
     from app.core.config import settings
     catalog_service = CatalogService(session)
-    resolve_text = f"{request.brand} {request.product_name}".strip() if request.brand else request.product_name
+    # Identidade pelo nome genérico; a marca é acumulada na entidade, não
+    # concatenada ao texto (ver catalog_service.resolve).
     resolved = await catalog_service.resolve(
-        resolve_text,
+        request.product_name,
         source="analyze",
+        brand=request.brand,
         category=request.category,
         localized_markets=request.localized_markets,
         reference_candidates=request.reference_candidates,

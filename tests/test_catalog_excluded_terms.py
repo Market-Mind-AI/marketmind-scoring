@@ -193,3 +193,55 @@ async def test_backfill_indexa_os_dois_lados(db_session: AsyncSession) -> None:
     assert f"fritadeira de oleo {sufixo}" in guardados
     donos = await repo.existing_alias_owners({f"freidora sin aceite {sufixo}"})
     assert donos.get(f"freidora sin aceite {sufixo}") == entidade.entity_key
+
+
+async def test_marca_nao_decide_identidade_mas_e_acumulada(db_session: AsyncSession) -> None:
+    """A identidade é o produto GENÉRICO. Até 2026-08-25 os chamadores
+    concatenavam `marca + nome` antes de resolver, e a marca — um token que
+    todos os produtos daquela marca compartilham — decidia identidade: um
+    purificador de ar Philips casou com o alias `philips airfryer` a 0.520 e
+    virou air fryer, levando junto os termos de busca e a categoria.
+    """
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    nome = f"air fryer {sufixo}"
+    criado = await service.resolve(nome, source="test", brand="Philips", localized_markets=_mercados(sufixo))
+
+    entidade = await ProductRepository(db_session).get_by_entity_key(criado.entity_key)
+    assert entidade.brands == ["Philips"]
+    assert entidade.canonical_title == nome, "o título é o nome genérico, sem a marca"
+
+    # Marca nova para o MESMO produto: acrescenta, não substitui.
+    de_novo = await service.resolve(nome, source="test", brand="Ninja")
+    assert de_novo.entity_key == criado.entity_key
+    entidade = await ProductRepository(db_session).get_by_entity_key(criado.entity_key)
+    assert entidade.brands == ["Philips", "Ninja"]
+
+
+async def test_marca_vira_alias_composto_nunca_sozinha(db_session: AsyncSession) -> None:
+    """`marca + nome` vira alias, para a próxima consulta resolver no passo 1.
+    A marca SOZINHA nunca: um alias `philips` faria qualquer produto Philips
+    resolver para esta entidade, por igualdade exata, no passo mais barato."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    nome = f"air fryer {sufixo}"
+    criado = await service.resolve(nome, source="test", brand=f"Philips{sufixo}")
+
+    repo = ProductRepository(db_session)
+    donos = await repo.existing_alias_owners({f"philips{sufixo} air fryer {sufixo}", f"philips{sufixo}"})
+    assert donos.get(f"philips{sufixo} air fryer {sufixo}") == criado.entity_key
+    assert f"philips{sufixo}" not in donos, "marca sozinha nunca pode virar alias"
+
+
+async def test_produto_diferente_da_mesma_marca_nao_funde(db_session: AsyncSession) -> None:
+    """O caso medido ao vivo: purificador de ar Philips não pode virar a air
+    fryer Philips só porque as duas strings compartilham a marca."""
+    # Sufixos DIFERENTES de propósito: com o mesmo sufixo nos dois, o próprio
+    # sufixo vira o token compartilhado e infla a similaridade, mascarando o que
+    # se quer medir — que é o efeito da marca, e só dele.
+    service = CatalogService(db_session, matcher=_sem_match())
+    fryer = await service.resolve(f"air fryer {uuid.uuid4().hex[:8]}", source="test", brand="Philips")
+    purificador = await service.resolve(f"air purifier {uuid.uuid4().hex[:8]}", source="test", brand="Philips")
+
+    assert purificador.entity_key != fryer.entity_key
+    assert purificador.method == "created"

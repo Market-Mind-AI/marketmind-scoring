@@ -122,12 +122,20 @@ class CatalogService:
         text: str,
         *,
         source: str,
+        brand: str | None = None,
         category: str | None = None,
         localized_markets: dict[str, dict[str, Any]] | None = None,
         reference_candidates: list[dict[str, Any]] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
     ) -> CatalogResolveResponse:
+        # `text` é o NOME GENÉRICO do produto, sem marca. Até 2026-08-25 os
+        # dois chamadores concatenavam `marca + nome` aqui, e isso decidia
+        # identidade com um token que todos os produtos daquela marca
+        # compartilham: `air purifier` x `air fryer` mede 0.278, longe do
+        # limiar, mas `philips air purifier` x o alias `philips airfryer` mede
+        # 0.520 — e o purificador virava air fryer, levando junto os termos de
+        # busca e a categoria. A marca não some: ver `_registrar_marca`.
         alias_normalized = normalize_alias(text)
 
         # Sem forma normalizada não há o que casar por string: alias exato e
@@ -150,6 +158,7 @@ class CatalogService:
                 target_age_max=target_age_max,
             )
             await self._index_terms(entity, localized_markets)
+            await self._registrar_marca(entity, brand=brand, nome_generico=text)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="alias"
@@ -179,6 +188,7 @@ class CatalogService:
                 target_age_max=target_age_max,
             )
             await self._index_terms(trigram.match.product, localized_markets)
+            await self._registrar_marca(trigram.match.product, brand=brand, nome_generico=text)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=trigram.match.product.entity_key,
@@ -206,6 +216,7 @@ class CatalogService:
                 target_age_max=target_age_max,
             )
             await self._index_terms(correspondente, localized_markets)
+            await self._registrar_marca(correspondente, brand=brand, nome_generico=text)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=correspondente.entity_key,
@@ -223,6 +234,7 @@ class CatalogService:
         )
         await self._gravar_alias(alias_normalized, entity.entity_key, source)
         await self._index_terms(entity, localized_markets)
+        await self._registrar_marca(entity, brand=brand, nome_generico=text)
         await self._session.commit()
         return CatalogResolveResponse(
             entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="created"
@@ -251,6 +263,33 @@ class CatalogService:
             logger.info(f"Podados {apagados} termos derivados obsoletos de {entity.canonical_title!r}")
         return apagados
 
+    async def _registrar_marca(self, entity: ProductCatalog, *, brand: str | None, nome_generico: str) -> None:
+        """Acumula a marca na entidade e indexa `marca + nome` como alias.
+
+        A marca não decide identidade (ver `resolve`), mas não pode se perder:
+        é ela que dá o vocabulário de busca de maior volume (`Philips Airfryer`,
+        `Ninja AF101`) e é informação que o usuário vê. Cada marca nova vista
+        para um produto é ACRESCENTADA, nunca substitui as anteriores — o mesmo
+        princípio de `localized_markets`.
+
+        O alias é sempre `marca + nome`, NUNCA a marca sozinha. Um alias
+        `philips` faria qualquer produto Philips resolver para esta entidade,
+        por igualdade exata, no passo mais barato — foi exatamente o estrago
+        que o normalizador antigo produziu e que a poda do backfill limpou.
+        """
+        if not brand or not brand.strip():
+            return
+
+        limpa = brand.strip()
+        atuais = list(entity.brands or [])
+        if not any(m.strip().lower() == limpa.lower() for m in atuais):
+            entity.brands = [*atuais, limpa]
+            logger.info(f"Marca nova no catálogo: {limpa!r} para {entity.canonical_title!r}")
+
+        alias = normalize_alias(f"{limpa} {nome_generico}")
+        if alias and alias != normalize_alias(nome_generico):
+            await self._repo.create_aliases_bulk(aliases={alias: entity.entity_key}, source="brand")
+
     async def _gravar_alias(self, alias_normalized: str, entity_key: uuid.UUID, source: str) -> None:
         """Grava o alias da consulta, a menos que ela não tenha forma normalizada.
 
@@ -262,9 +301,7 @@ class CatalogService:
         if not alias_normalized:
             logger.info("Consulta sem forma normalizada (só pontuação/emoji); nenhum alias gravado")
             return
-        await self._repo.create_alias(
-            alias_normalized=alias_normalized, entity_key=entity_key, source=source
-        )
+        await self._repo.create_alias(alias_normalized=alias_normalized, entity_key=entity_key, source=source)
 
     async def backfill_terms(self, *, batch_size: int = 100) -> dict[str, int]:
         """Indexa o vocabulário curado de TODAS as entidades já existentes.
@@ -310,9 +347,7 @@ class CatalogService:
         logger.info(f"Backfill de termos do catálogo concluído: {relatorio}")
         return relatorio
 
-    async def _index_terms(
-        self, entity: ProductCatalog, localized_markets: dict[str, dict[str, Any]] | None
-    ) -> None:
+    async def _index_terms(self, entity: ProductCatalog, localized_markets: dict[str, dict[str, Any]] | None) -> None:
         """Indexa o vocabulário curado da entidade nos DOIS sinais.
 
         Positivos primeiro, negativos depois, e a ordem importa: um termo que a
@@ -463,4 +498,3 @@ class CatalogService:
             entity.target_age_min = target_age_min
         if target_age_max is not None:
             entity.target_age_max = target_age_max
-

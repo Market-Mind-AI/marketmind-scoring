@@ -5,8 +5,12 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class CatalogResolveRequest(BaseModel):
+    # `text` é o nome GENÉRICO do produto. A marca vem separada: ela é
+    # acumulada na entidade e vira um alias `marca + nome`, mas não participa
+    # da decisão de identidade (ver catalog_service.resolve).
     text: str = Field(..., min_length=1)
     source: str = Field(..., min_length=1)
+    brand: str | None = None
     category: str | None = None
     target_age_min: int | None = None
     target_age_max: int | None = None
@@ -34,6 +38,7 @@ class CatalogEntityResponse(BaseModel):
     google_mid: str | None
     google_type: str | None
     category: str | None
+    brands: list[str] = []
     merged_into: uuid.UUID | None
     aliases: list[ProductAliasItem]
 

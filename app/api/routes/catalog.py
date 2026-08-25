@@ -48,6 +48,7 @@ async def resolve(
     return await service.resolve(
         request.text,
         source=request.source,
+        brand=request.brand,
         category=request.category,
         target_age_min=request.target_age_min,
         target_age_max=request.target_age_max,
@@ -115,6 +116,7 @@ async def get_entity(entity_key: str, session: AsyncSession = Depends(get_sessio
         google_mid=entity.google_mid,
         google_type=entity.google_type,
         category=entity.category,
+        brands=list(entity.brands or []),
         merged_into=entity.merged_into,
         aliases=[
             ProductAliasItem(alias_normalized=a.alias_normalized, source=a.source, hit_count=a.hit_count)

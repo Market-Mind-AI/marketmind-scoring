@@ -49,6 +49,15 @@ class ProductCatalog(Base):
     # scored/ranked itself — context only, explained by the final LLM. See
     # marketmind_mos_engine.
     reference_candidates: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # Marcas já vistas para este produto, acumuladas (2026-08-25). A identidade
+    # do catálogo é o produto GENÉRICO — `air fryer` é a entidade, Philips e
+    # Ninja são marcas dela —, então a marca não entra na decisão de identidade
+    # (ver catalog_service.resolve e migration 029). Ela é acumulada aqui,
+    # nunca substituída, e cada marca nova também vira um alias `marca + nome`
+    # da entidade. NUNCA um alias com a marca sozinha: `philips` como alias
+    # resolveria qualquer produto Philips para este, que foi exatamente o
+    # estrago que a migration 028 e a poda do backfill limparam.
+    brands: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
 

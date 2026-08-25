@@ -61,10 +61,14 @@ def _patch_collaborators(entity_key: uuid.UUID | None = None):
     return catalog_cls, country_cls, [catalog, country]
 
 
-async def test_identify_combines_brand_and_product_name_for_resolve(mock_session: AsyncMock) -> None:
-    # identify is VISION-ONLY now (fast): it resolves with brand+product and keeps
-    # the vision terms, but DEFERS enrichment + reference candidates to the
-    # /analyze background — so neither client is called here.
+async def test_identify_resolves_by_generic_name_and_passes_brand_apart(mock_session: AsyncMock) -> None:
+    # Até 2026-08-25 este teste afirmava o contrário: que identify resolvia com
+    # "Philips air fryer". Concatenar decidia identidade com um token que todos
+    # os produtos da marca compartilham, e um purificador de ar Philips virou
+    # air fryer no catálogo real. A marca agora vai separada, para ser
+    # acumulada na entidade sem participar da decisão.
+    # identify segue VISION-ONLY (rápido): mantém os termos da visão e ADIA
+    # enrichment + reference candidates para o /analyze em background.
     entity_key = uuid.uuid4()
     vision = AsyncMock()
     vision.identify_product.return_value = _identification()
@@ -82,7 +86,8 @@ async def test_identify_combines_brand_and_product_name_for_resolve(mock_session
             p.stop()
 
     call_args = catalog_cls.return_value.resolve.call_args
-    assert call_args.args[0] == "Philips air fryer"
+    assert call_args.args[0] == "air fryer", "identidade é o nome genérico"
+    assert call_args.kwargs["brand"] == "Philips", "a marca vai separada, não concatenada"
     assert call_args.kwargs["localized_markets"]["USA"]["search_terms"] == ["air fryer", "airfryer"]  # from vision
     assert call_args.kwargs["reference_candidates"] is None  # deferred
     assert result.entity_key == entity_key
