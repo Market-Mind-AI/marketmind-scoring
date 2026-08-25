@@ -207,8 +207,16 @@ class IndicatorEngine:
                     f"{trend.notes}; population {pop:,.0f}; penetration {penetration:.1f} searches per 100k "
                     "inhabitants (share of people wanting it — high = genuine appetite, not just population size)",
                 )  # fmt: skip
-        growth = await pytrends_indicators.compute_growth_score(search_terms, location, period_key)
-        stability = await pytrends_indicators.compute_demand_stability_score(search_terms, location, period_key)
+        # Mesmos seeds/idioma do Demand Volume: os três sinais têm de ler o
+        # MESMO conjunto de termos, senão um produto cujos termos curados não
+        # têm volume no país perde growth/stability e derruba a análise inteira
+        # com o volume de demanda já calculado (ver _demand_rows).
+        growth = await pytrends_indicators.compute_growth_score(
+            search_terms, location, period_key, seed_terms=seed_terms, language=language
+        )
+        stability = await pytrends_indicators.compute_demand_stability_score(
+            search_terms, location, period_key, seed_terms=seed_terms, language=language
+        )
         intent = await pytrends_indicators.compute_search_intent_score(seed_terms, location, period_key, language)
 
         indicator_raws = [

@@ -283,8 +283,7 @@ def _dedup_volume_rows(
     kept: list[tuple[str, str, float, list[tuple[int, int, float]]]] = []
     for keyword, norm, volume, monthly in deduped:
         if any(
-            volume == kv and SequenceMatcher(None, norm, kn).ratio() >= _NEAR_VARIANT_RATIO
-            for _k, kn, kv, _m in kept
+            volume == kv and SequenceMatcher(None, norm, kn).ratio() >= _NEAR_VARIANT_RATIO for _k, kn, kv, _m in kept
         ):
             continue
         kept.append((keyword, norm, volume, monthly))
@@ -300,6 +299,48 @@ def _summed_monthly_series(rows: list[tuple[str, float, list[tuple[int, int, flo
         for year, month, vol in monthly:
             totals[(year, month)] = totals.get((year, month), 0.0) + vol
     return [totals[k] for k in sorted(totals)]
+
+
+async def _demand_rows(
+    connection: AsyncConnection,
+    search_terms: list[str],
+    location: str,
+    *,
+    seed_terms: list[str] | None = None,
+    language: str | None = None,
+) -> tuple[list[tuple[str, float, list[tuple[int, int, float]]]], int]:
+    """As linhas de demanda do produto neste país: termos aprovados MAIS a
+    expansão conservadora de keywords relacionadas, deduplicadas.
+
+    POR QUE OS TRÊS INDICADORES LEEM O MESMO CONJUNTO. Até 2026-08-25 só o
+    Demand Volume dobrava a expansão; Growth e Stability liam apenas os termos
+    aprovados. Como `_dedup_volume_rows` descarta termo de volume ~zero, um
+    produto cujos termos CURADOS não têm volume no país ficava com série mensal
+    vazia — e os dois indicadores voltavam UNAVAILABLE, derrubando a análise
+    inteira pelo portão de completude, enquanto o Demand Volume do MESMO país
+    tinha sido calculado sem problema com as keywords relacionadas.
+
+    Aconteceu em produção (análise e152761b, `3D printer filament`): BRA, PRT e
+    ESP perderam `growth_score` e `demand_stability_score`, e a análise falhou
+    com o volume de demanda dos três já calculado.
+
+    Não é imputação: é usar o dado que o sistema já coletou e no qual já confia
+    o suficiente para definir a demanda do produto. Excluí-lo de dois dos
+    quatro sinais da mesma dimensão era inconsistência, não salvaguarda.
+
+    Medido no armazém do PyTrends: a série mensal é binária — 12 meses (1.470
+    linhas) ou nenhum (190), e NENHUMA linha com série curta tem volume >= 10.
+    Ou seja, série vazia sempre significa "estes termos não têm volume aqui",
+    nunca "o dado veio truncado".
+    """
+    approved = await _fetch_approved_raw(connection, search_terms, location)
+    if not search_terms:
+        return _dedup_volume_rows(approved), 0
+    seed_label = ", ".join(seed_terms or search_terms[:20])
+    related = await _fetch_related_rows(connection, seed_label, location)
+    tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
+    expansao = _select_expansion(related, search_terms, tiers)
+    return _dedup_volume_rows(approved + expansao), len(expansao)
 
 
 async def compute_trend_score(
@@ -322,13 +363,9 @@ async def compute_trend_score(
     added by the indicator engine as decision context."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        approved_raw = await _fetch_approved_raw(connection, search_terms, location)
-        seed_label = ", ".join(seed_terms or search_terms[:20])
-        related = await _fetch_related_rows(connection, seed_label, location) if search_terms else []
-
-    tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
-    expansion = _select_expansion(related, search_terms, tiers)
-    rows = _dedup_volume_rows(approved_raw + expansion)
+        rows, expansion_count = await _demand_rows(
+            connection, search_terms, location, seed_terms=seed_terms, language=language
+        )
 
     if not rows:
         return RawIndicatorResult(
@@ -340,7 +377,7 @@ async def compute_trend_score(
         )
 
     total_volume = sum(volume for _keyword, volume, _monthly in rows)
-    expansion_note = f" (+{len(expansion)} folded from related keywords)" if expansion else ""
+    expansion_note = f" (+{expansion_count} folded from related keywords)" if expansion_count else ""
     # Per-term breakdown (the searched words + their monthly volumes) so the final
     # narrative can list, per country, exactly which words were searched, how much
     # each, and the total. Ordered highest-volume first, all summed terms shown.
@@ -359,12 +396,19 @@ async def compute_trend_score(
     )
 
 
-async def compute_growth_score(search_terms: list[str], location: str, period_key: str) -> RawIndicatorResult:
+async def compute_growth_score(
+    search_terms: list[str],
+    location: str,
+    period_key: str,
+    *,
+    seed_terms: list[str] | None = None,
+    language: str | None = None,
+) -> RawIndicatorResult:
     """Cap. 4 §4.2.2 — GrowthRaw = (final_avg - initial_avg)/max(initial_avg,1)*100
     over the SUMMED monthly_searches series (trailing 12 months), k = n//3."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        rows = await _fetch_volume_rows(connection, search_terms, location)
+        rows, _ = await _demand_rows(connection, search_terms, location, seed_terms=seed_terms, language=language)
     series = _summed_monthly_series(rows)
 
     n = len(series)
@@ -402,12 +446,19 @@ async def compute_growth_score(search_terms: list[str], location: str, period_ke
     )
 
 
-async def compute_demand_stability_score(search_terms: list[str], location: str, period_key: str) -> RawIndicatorResult:
+async def compute_demand_stability_score(
+    search_terms: list[str],
+    location: str,
+    period_key: str,
+    *,
+    seed_terms: list[str] | None = None,
+    language: str | None = None,
+) -> RawIndicatorResult:
     """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev/mean (population stddev) of the
     SUMMED monthly_searches series."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        rows = await _fetch_volume_rows(connection, search_terms, location)
+        rows, _ = await _demand_rows(connection, search_terms, location, seed_terms=seed_terms, language=language)
     series = _summed_monthly_series(rows)
 
     if len(series) < 2:
