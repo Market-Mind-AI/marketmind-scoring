@@ -13,7 +13,8 @@ crear un registro duplicado cada vez que cambie la redacción.
 **Cómo funciona — 4 pasos, del más barato al más caro, deteniéndose en el primero que decida:**
 
 1. **Alias exacto:** normaliza el texto (minúsculas, sin acento/puntuación) y busca un alias ya registrado
-   idéntico. Más barato, más preciso.
+   idéntico. Más barato, más preciso. La normalización **preserva escrituras no latinas** desde el 25/08/2026
+   (§1.6).
 2. **Trigram (`pg_trgm`) arbitrado por evidencia negativa:** similitud de subcadenas de 3 caracteres contra los
    alias existentes (threshold `CATALOG_TRIGRAM_SIMILARITY_THRESHOLD=0.4`), pero una entidad sólo es aceptada si el
    texto está **más cerca de lo que ella declara SER que de lo que declara NO SER** (§1.2). Empate o inversión
@@ -96,7 +97,7 @@ margen 0 — la regla simple, sin ningún número que calibrar.
 
 **Estas cifras son reproducibles**, no de una sesión perdida: `python scripts/benchmark_catalog_resolution.py`
 las recalcula contra el catálogo vivo, en sólo-lectura, usando el `similarity()` real del pg_trgm. Los 102
-términos excluidos son los 103 curados menos uno descartado por contradicción (§1.6). "Consulta inédita" elimina,
+términos excluidos son los 103 curados menos uno descartado por contradicción (§1.7). "Consulta inédita" elimina,
 por consulta, el término idéntico de los dos lados — sin eso la medición sólo pregunta si el índice encuentra lo
 que él mismo contiene, que es exactamente la falla de método de la calibración original.
 
@@ -172,7 +173,37 @@ para un producto de 27 mercados) a un `INSERT ... ON CONFLICT DO NOTHING` por la
 paginado por clave, con commit por lote, para no sostener locks sobre `product_aliases` — la tabla del camino
 caliente de cualquier resolución — durante toda la pasada.
 
-### 1.6 Limitaciones conocidas
+### 1.6 La normalización borraba las escrituras no latinas — y eso fusionaba productos
+
+`normalize_alias` eliminaba todo lo que estuviera fuera de `[a-z0-9]`, así que un texto íntegramente en japonés,
+chino, coreano, ruso o árabe normalizaba a la cadena **vacía** — y `resolve()` guardaba ese vacío como alias de la
+entidad creada. Reproducido:
+
+```
+ノンフライヤー   (air fryer, japonés)   -> created  entity=161b52ba
+空气炸锅        (air fryer, chino)     -> alias    entity=161b52ba
+Пылесос-робот  (aspiradora, ruso)     -> alias    entity=161b52ba   ← producto sin relación
+```
+
+Una aspiradora rusa se volvía una air fryer japonesa. Es la misma fusión silenciosa que el veto existe para
+impedir, entrando por la puerta que el veto no vigila: `alias` es el paso 1, el camino O(1), donde ni el trigram ni
+la evidencia negativa llegan a ejecutarse.
+
+El mismo defecto costaba alcance: **46 términos curados del catálogo, en 5 mercados (JPN, CHN, KOR, RUS, SAU), no
+tenían representación y nunca llegaban a ser alias** — el vocabulario existía en `localized_markets` y era
+inalcanzable.
+
+La regla pasó a ser `[\W_]`, la misma idea con conciencia de Unicode: sigue quitando puntuación, símbolos y emoji,
+y preserva letra y dígito de cualquier escritura. Para texto latino el resultado es idéntico, salvo dos casos que
+**antes perdían información**: `ß` y `ł` no tienen descomposición NFKD y se volvían espacio (`heißluftfritteuse` →
+`hei luftfritteuse`). Un `NFC` final recompone lo que el `NFKD` separó, que importa para el coreano.
+
+Tres capas, porque el estado corrupto es destructivo y silencioso: la causa corregida en el normalizador; el
+servicio que se niega a guardar alias sin forma normalizada (un texto de sólo puntuación o emoji sigue
+normalizando a vacío, y ese caso ahora pasa sin alias); y una `CHECK` en las dos tablas (migration 028) que vuelve
+el estado imposible en vez de improbable.
+
+### 1.7 Limitaciones conocidas
 
 - **El veto sólo cubre la colisión que alguien curó.** Repetida la medición eliminando también el término excluido
   idéntico (para simular una colisión que nadie anotó), las fusiones caen de 43,1% a 16,7% — una reducción del 61%,

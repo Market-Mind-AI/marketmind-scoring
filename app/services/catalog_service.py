@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import logger
 from app.db.models.product_catalog import ProductCatalog
-from app.repositories.product_repository import ProductRepository
+from app.repositories.product_repository import ProductRepository, TrigramOutcome
 from app.schemas.catalog import CatalogResolveResponse
 from app.services.catalog_matcher import CatalogMatcher
 from app.utils.text import as_term_list, normalize_alias
@@ -130,7 +130,11 @@ class CatalogService:
     ) -> CatalogResolveResponse:
         alias_normalized = normalize_alias(text)
 
-        existing = await self._repo.get_entity_by_alias_exact(alias_normalized)
+        # Sem forma normalizada não há o que casar por string: alias exato e
+        # trigram são pulados e a decisão vai direto para o LLM, que lê o texto
+        # original. Antes, `get_entity_by_alias_exact("")` casava com o alias
+        # vazio de uma entidade anterior e fundia produtos sem relação.
+        existing = await self._repo.get_entity_by_alias_exact(alias_normalized) if alias_normalized else None
         if existing is not None:
             existing_alias, entity = existing
             await self._repo.bump_alias_hit(existing_alias)
@@ -151,7 +155,11 @@ class CatalogService:
                 entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="alias"
             )
 
-        trigram = await self._repo.trigram_search(alias_normalized)
+        trigram = (
+            await self._repo.trigram_search(alias_normalized)
+            if alias_normalized
+            else TrigramOutcome(match=None, vetoed=[])
+        )
         if trigram.vetoed:
             # Semelhança de forma dizia "é o mesmo produto" e o catálogo diz o
             # contrário. Não decide por string aqui: manda para o passo 3 com a
@@ -161,9 +169,7 @@ class CatalogService:
                 f"{[p.canonical_title for p in trigram.vetoed]}; escalando para o LLM"
             )
         if trigram.match is not None:
-            await self._repo.create_alias(
-                alias_normalized=alias_normalized, entity_key=trigram.match.product.entity_key, source=source
-            )
+            await self._gravar_alias(alias_normalized, trigram.match.product.entity_key, source)
             self._refresh_entity_fields(
                 trigram.match.product,
                 category=category,
@@ -190,9 +196,7 @@ class CatalogService:
         candidatos = await self._repo.list_match_candidates(category=category, priority=trigram.vetoed)
         correspondente = await self._matcher.pick(text=text, candidates=candidatos)
         if correspondente is not None:
-            await self._repo.create_alias(
-                alias_normalized=alias_normalized, entity_key=correspondente.entity_key, source=source
-            )
+            await self._gravar_alias(alias_normalized, correspondente.entity_key, source)
             self._refresh_entity_fields(
                 correspondente,
                 category=category,
@@ -217,11 +221,26 @@ class CatalogService:
             target_age_min=target_age_min,
             target_age_max=target_age_max,
         )
-        await self._repo.create_alias(alias_normalized=alias_normalized, entity_key=entity.entity_key, source=source)
+        await self._gravar_alias(alias_normalized, entity.entity_key, source)
         await self._index_terms(entity, localized_markets)
         await self._session.commit()
         return CatalogResolveResponse(
             entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="created"
+        )
+
+    async def _gravar_alias(self, alias_normalized: str, entity_key: uuid.UUID, source: str) -> None:
+        """Grava o alias da consulta, a menos que ela não tenha forma normalizada.
+
+        Texto só de pontuação ou emoji normaliza para vazio. Gravar isso como
+        alias é a corrupção que motivou a migration 028: o alias vazio vira um
+        ímã, e toda consulta sem forma normalizada passa a casar com ele pelo
+        passo 1 — o caminho O(1), onde o veto do passo 2 nem roda.
+        """
+        if not alias_normalized:
+            logger.info("Consulta sem forma normalizada (só pontuação/emoji); nenhum alias gravado")
+            return
+        await self._repo.create_alias(
+            alias_normalized=alias_normalized, entity_key=entity_key, source=source
         )
 
     async def backfill_terms(self, *, batch_size: int = 100) -> dict[str, int]:

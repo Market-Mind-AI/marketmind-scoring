@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,6 +57,7 @@ class ProductExcludedTerm(Base):
     first_seen_at: Mapped[datetime] = mapped_column(nullable=False, default=utc_now)
 
     __table_args__ = (
+        CheckConstraint("btrim(term_normalized) <> ''", name="ck_product_excluded_terms_term_nao_vazio"),
         # Por entidade, não global: duas entidades podem legitimamente excluir
         # o mesmo termo (`forno elétrico` não é air fryer nem panela de pressão).
         UniqueConstraint("entity_key", "term_normalized", name="uq_product_excluded_terms_entity_term"),
