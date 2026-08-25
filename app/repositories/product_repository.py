@@ -1,15 +1,17 @@
 import uuid
-from decimal import Decimal
 from dataclasses import dataclass
-from typing import Any
+from decimal import Decimal
+from typing import Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
+from app.db.models.product_excluded_term import ProductExcludedTerm
 from app.utils.time import utc_now
 
 
@@ -20,14 +22,22 @@ class TrigramMatch:
 
 
 @dataclass
-class SemanticMatch:
-    product: ProductCatalog
-    distance: float
+class TrigramOutcome:
+    """As três saídas do passo 2, em vez das duas de antes.
+
+    `match` aceito, `vetoed` desqualificado por evidência negativa, e nenhum
+    dos dois quando simplesmente nada passou do limiar. Vetado NÃO vira
+    entidade nova direto: vai para o passo 3 (o LLM), que é quem sabe ler as
+    palavras. Ver ProductExcludedTerm para os números que motivaram isto.
+    """
+
+    match: TrigramMatch | None
+    vetoed: list[ProductCatalog]
 
 
 class ProductRepository:
     """Backs the resolution pipeline in app/services/catalog_service.py:
-    exact alias -> trigram fuzzy -> embedding semantic -> create new entity,
+    exact alias -> trigram fuzzy (com veto por excluded_terms) -> LLM -> nova entidade,
     plus the best-effort google_mid enrichment and merge jobs."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -61,39 +71,94 @@ class ProductRepository:
         alias.hit_count += 1
         await self._session.flush()
 
-    async def trigram_search(self, alias_normalized: str) -> TrigramMatch | None:
-        similarity = func.similarity(ProductAlias.alias_normalized, alias_normalized)
-        stmt = (
-            select(ProductCatalog, similarity.label("similarity"))
-            .join(ProductAlias, ProductAlias.entity_key == ProductCatalog.entity_key)
-            .where(similarity >= settings.catalog_trigram_similarity_threshold)
-            .where(ProductCatalog.merged_into.is_(None))
-            .order_by(similarity.desc())
-            .limit(1)
-        )
-        result = await self._session.execute(stmt)
-        row = result.first()
-        if row is None:
-            return None
-        product, sim = row
-        return TrigramMatch(product=product, similarity=float(sim))
+    async def trigram_search(self, alias_normalized: str) -> TrigramOutcome:
+        """Passo 2, com a evidência negativa no mesmo julgamento.
 
-    async def semantic_search(self, embedding: list[float]) -> SemanticMatch | None:
-        distance = ProductCatalog.embedding.cosine_distance(embedding)
+        Para cada entidade que tem algum alias acima do limiar, compara a
+        MELHOR semelhança positiva (search_terms indexados) com a MELHOR
+        semelhança negativa (excluded_terms). A entidade só é elegível se o
+        texto estiver mais perto do que ela diz que É do que do que ela diz
+        que NÃO É. Sem limiar novo: é uma comparação entre as duas evidências.
+
+        `fritadeira de óleo` bate 0.696 no alias `fritadeira sem óleo` e 1.000
+        no termo excluído `fritadeira de óleo` — vetado. `fritadeira sem óleo`
+        bate 1.000 no alias e 0.727 no excluído — aceito.
+
+        POR QUE O OPERADOR `%` E NÃO `similarity(...) >= limiar`. Só o `%` usa
+        os índices GIN trigram; a chamada direta a `similarity()` obriga o
+        Postgres a calculá-la para CADA linha das duas tabelas. Medido em
+        catálogo sintético de 2.000 produtos / 500.000 aliases / 16.000 termos
+        excluídos: 300 ms com `similarity()` (dois Seq Scans) contra 4,6 ms com
+        `%` — e a forma antiga cresce linearmente com o catálogo, porque é
+        O(aliases) por consulta.
+
+        O `%` compara contra `pg_trgm.similarity_threshold`, que é um GUC de
+        sessão. Ele é fixado por TRANSAÇÃO (`set_config(..., is_local => true)`)
+        e nunca por sessão: as conexões vêm de um pool, e um SET de sessão
+        vazaria o limiar deste passo para todo o resto da aplicação.
+
+        Filtrar o lado negativo pelo mesmo `%` é exato, não uma aproximação:
+        vetar exige `sim_negativa >= sim_positiva`, e uma candidata só existe
+        com `sim_positiva >= limiar`, logo nenhum termo excluído abaixo do
+        limiar poderia vetar coisa alguma.
+
+        A evidência negativa é comparada GLOBALMENTE, não só contra a entidade
+        candidata. A razão veio de um caso real: `freidora de aceite` é termo
+        excluído da air fryer, mas casava com a entidade "olive oil" a 0.400
+        (via `aceite de oliva`), exatamente no limiar — o veto por entidade não
+        via, porque quem excluía o termo não era a entidade que casou. Se o
+        catálogo já declarou que aquele texto designa outro produto, aceitar
+        uma semelhança mais fraca com uma terceira entidade é o erro caro.
+
+        Medido: o veto global zera esses casos (4 -> 0 no catálogo real) e
+        custa 1,3 ponto de escalonamento a mais (25,4% -> 26,7% das consultas
+        indo ao passo 3). Como o máximo global é sempre >= o máximo da própria
+        entidade, a regra global subsume a por-entidade e sobra uma comparação
+        só.
+        """
+        limiar = settings.catalog_trigram_similarity_threshold
+        # Vale só até o fim desta transação (is_local => true).
+        await self._session.execute(select(func.set_config("pg_trgm.similarity_threshold", str(limiar), True)))
+
+        pos_sim = func.similarity(ProductAlias.alias_normalized, alias_normalized)
+        positivos = (
+            select(ProductAlias.entity_key.label("entity_key"), func.max(pos_sim).label("sim"))
+            .where(ProductAlias.alias_normalized.bool_op("%")(alias_normalized))
+            .group_by(ProductAlias.entity_key)
+            .subquery()
+        )
+        # Um agregado só, não correlacionado: a melhor evidência negativa do
+        # catálogo inteiro para este texto. O `%` mantém a leitura no índice
+        # GIN, então isto não varre a tabela de termos excluídos.
+        sim_negativa = (
+            select(
+                func.coalesce(func.max(func.similarity(ProductExcludedTerm.term_normalized, alias_normalized)), 0.0)
+            )
+            .where(ProductExcludedTerm.term_normalized.bool_op("%")(alias_normalized))
+            .scalar_subquery()
+        )
+        # `merged_into` é filtrado no SELECT externo, e não dentro da agregação:
+        # assim a entidade é alcançada uma vez por candidata, em vez de varrer o
+        # catálogo inteiro para depois jogar quase tudo fora.
         stmt = (
-            select(ProductCatalog, distance.label("distance"))
-            .where(ProductCatalog.embedding.is_not(None))
+            select(ProductCatalog, positivos.c.sim, sim_negativa.label("sim_negativa"))
+            .join(positivos, positivos.c.entity_key == ProductCatalog.entity_key)
             .where(ProductCatalog.merged_into.is_(None))
-            .where(distance <= settings.catalog_embedding_distance_threshold)
-            .order_by(distance.asc())
-            .limit(1)
+            .order_by(positivos.c.sim.desc())
         )
         result = await self._session.execute(stmt)
-        row = result.first()
-        if row is None:
-            return None
-        product, dist = row
-        return SemanticMatch(product=product, distance=float(dist))
+
+        melhor: TrigramMatch | None = None
+        vetadas: list[ProductCatalog] = []
+        for product, sim, melhor_negativa in result.all():
+            if float(melhor_negativa) >= float(sim):
+                # Candidata desqualificada: vai para o passo 3 na lista de
+                # prioridade, porque é justamente ela que o LLM tem de julgar.
+                vetadas.append(product)
+                continue
+            if melhor is None:
+                melhor = TrigramMatch(product=product, similarity=float(sim))
+        return TrigramOutcome(match=melhor, vetoed=vetadas)
 
     async def create_entity(
         self,
@@ -104,7 +169,6 @@ class ProductRepository:
         reference_candidates: list[dict[str, Any]] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
-        embedding: list[float] | None = None,
     ) -> ProductCatalog:
         entity = ProductCatalog(
             entity_key=uuid.uuid4(),
@@ -114,7 +178,6 @@ class ProductRepository:
             reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
-            embedding=embedding,
             created_at=utc_now(),
         )
         self._session.add(entity)
@@ -134,7 +197,85 @@ class ProductRepository:
         await self._session.flush()
         return alias
 
-    async def list_match_candidates(self, *, category: str | None = None) -> list[ProductCatalog]:
+    async def create_aliases_bulk(self, *, aliases: dict[str, uuid.UUID], source: str) -> int:
+        """Um INSERT para todos os aliases, em vez de um por termo.
+
+        Um produto com 27 mercados chega aqui com ~286 termos normalizados; um
+        INSERT+flush por termo eram ~286 idas ao banco por resolução, e é o
+        caminho quente do backfill do catálogo inteiro.
+
+        `ON CONFLICT DO NOTHING` não é só velocidade: `alias_normalized` é
+        único global, então duas resoluções simultâneas do mesmo termo faziam a
+        segunda estourar IntegrityError. Aqui a segunda simplesmente não grava,
+        que é exatamente a regra de negócio (o primeiro dono prevalece).
+        """
+        if not aliases:
+            return 0
+        linhas = [
+            {
+                "id": uuid.uuid4(),
+                "alias_normalized": alias,
+                "entity_key": entity_key,
+                "source": source,
+                "hit_count": 1,
+                "first_seen_at": utc_now(),
+            }
+            for alias, entity_key in aliases.items()
+        ]
+        stmt = pg_insert(ProductAlias).values(linhas).on_conflict_do_nothing(index_elements=["alias_normalized"])
+        result = cast(CursorResult[Any], await self._session.execute(stmt))
+        return int(result.rowcount or 0)
+
+    async def create_excluded_terms_bulk(self, *, entity_key: uuid.UUID, termos: dict[str, str], source: str) -> int:
+        """Mesma razão do bulk de aliases. O conflito aqui é por
+        (entity_key, term_normalized): reindexar a mesma entidade não duplica,
+        e por isso o indexador não precisa mais ler antes de gravar."""
+        if not termos:
+            return 0
+        linhas = [
+            {
+                "id": uuid.uuid4(),
+                "entity_key": entity_key,
+                "term_normalized": normalizado,
+                "term": superficie,
+                "source": source,
+                "first_seen_at": utc_now(),
+            }
+            for normalizado, superficie in termos.items()
+        ]
+        stmt = pg_insert(ProductExcludedTerm).values(linhas).on_conflict_do_nothing(
+            constraint="uq_product_excluded_terms_entity_term"
+        )
+        result = cast(CursorResult[Any], await self._session.execute(stmt))
+        return int(result.rowcount or 0)
+
+    async def list_entities_with_markets(
+        self, *, after: uuid.UUID | None = None, limit: int = 100
+    ) -> list[ProductCatalog]:
+        """Uma página de entidades com vocabulário curado — o que o backfill
+        percorre. `_index_terms` só roda dentro do `resolve()`, então entidade
+        criada antes dessas features nunca teve seus termos indexados.
+
+        Paginação por chave (`entity_key > after`) e não por OFFSET: OFFSET faz
+        o Postgres varrer e descartar as páginas anteriores a cada chamada, o
+        que torna o backfill quadrático no tamanho do catálogo. A chave é a PK,
+        então cada página é um index scan a partir de onde a anterior parou.
+        """
+        stmt = (
+            select(ProductCatalog)
+            .where(ProductCatalog.merged_into.is_(None))
+            .where(ProductCatalog.localized_markets.is_not(None))
+            .order_by(ProductCatalog.entity_key)
+            .limit(limit)
+        )
+        if after is not None:
+            stmt = stmt.where(ProductCatalog.entity_key > after)
+        result = await self._session.execute(stmt)
+        return list(result.scalars())
+
+    async def list_match_candidates(
+        self, *, category: str | None = None, priority: list[ProductCatalog] | None = None
+    ) -> list[ProductCatalog]:
         """Entidades que o LLM vai considerar quando alias e trigram falham.
 
         Prioriza a mesma `category` quando o chamador a conhece (identify-image
@@ -142,12 +283,23 @@ class ProductRepository:
         entidades de outra categoria só gastariam tokens. Completa com as
         demais até o teto, para que uma categoria errada vinda do LLM de visão
         não esconda o candidato certo.
+
+        `priority` entra sempre, antes de tudo: são as entidades que o passo 2
+        vetou. Vetar significa "a semelhança dizia que sim e o catálogo diz que
+        não" — exatamente o caso que o LLM existe para arbitrar, então essa
+        entidade não pode ficar de fora da lista por causa do teto ou de uma
+        categoria divergente.
         """
         limite = settings.catalog_match_candidate_limit
         base = select(ProductCatalog).where(ProductCatalog.merged_into.is_(None))
 
         selecionadas: list[ProductCatalog] = []
         vistos: set[uuid.UUID] = set()
+
+        for produto in priority or []:
+            if produto.entity_key not in vistos:
+                selecionadas.append(produto)
+                vistos.add(produto.entity_key)
 
         if category:
             result = await self._session.execute(
@@ -156,6 +308,8 @@ class ProductRepository:
                 .limit(limite)
             )
             for produto in result.scalars():
+                if produto.entity_key in vistos:
+                    continue
                 selecionadas.append(produto)
                 vistos.add(produto.entity_key)
 
@@ -186,10 +340,6 @@ class ProductRepository:
         )
         result = await self._session.execute(stmt)
         return {alias: key for alias, key in result.all()}
-
-    async def set_embedding(self, entity: ProductCatalog, embedding: list[float]) -> None:
-        entity.embedding = embedding
-        await self._session.flush()
 
     async def set_champion(
         self,
@@ -222,16 +372,6 @@ class ProductRepository:
         stmt = (
             select(ProductCatalog)
             .where(ProductCatalog.google_mid.is_(None))
-            .where(ProductCatalog.merged_into.is_(None))
-            .limit(limit)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def list_entities_missing_embedding(self, *, limit: int = 50) -> list[ProductCatalog]:
-        stmt = (
-            select(ProductCatalog)
-            .where(ProductCatalog.embedding.is_(None))
             .where(ProductCatalog.merged_into.is_(None))
             .limit(limit)
         )

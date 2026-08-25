@@ -72,18 +72,31 @@ defensa).
 ## Prioridad 4 — Evolución post-MVP, no relacionada con la defensa
 
 - Webhooks en lugar de polling para el estado de recolección.
-- Base de datos vectorial dedicada para reutilización de insights entre consultas.
-- Migrar embedding del catálogo de OpenAI (solución provisional) a modelo local (`sentence-transformers`) —
-  elimina costo por llamada y dependencia de API externa, pero exige nueva migration (la dimensión del vector
-  cambia).
+- Base de datos vectorial dedicada para reutilización de insights entre consultas. (No confundir con el paso de
+  embedding del catálogo, que fue medido y retirado — ver abajo. Esto sería para otra cosa: reaprovechar análisis
+  ya hechos, no decidir identidad de producto.)
+- ~~Migrar embedding del catálogo a modelo local (`sentence-transformers`)~~ — **cancelado**. El paso de embedding
+  fue medido y retirado el 14/08/2026: contra los datos del propio catálogo, y con cinco modelos, ningún threshold
+  de distancia separa "mismo producto" de "producto vecino". No es un problema de proveedor. Ver
+  `marketmind-transparencia-tecnica.md` §1.3. La implementación local llegó a existir el 13/08 y se revirtió por
+  peso (torch llevó la imagen de 1,67GB a >20GB). Si un vector vuelve, es como *recall* del paso 3 y con runtime
+  ONNX.
 - Automatizar la cadencia mensual de recálculo de `normalization_reference` (hoy es bajo demanda vía endpoint
   admin, no un cron).
 - Extender la tabla `countries` más allá de los ~27 actuales para cobertura ISO 3166 completa.
 
 ## Pendientes que necesitan decisión del usuario, no son solo trabajo técnico
 
-- **Threshold de embedding del catálogo (hoy 0,5):** ajustado empíricamente con pocos ejemplos sintéticos — vale
-  la pena revisar con dato real de producción antes de considerarlo definitivo.
+- **Threshold de trigram del catálogo (hoy 0,4):** calibrado sólo contra términos positivos. Ahora existe un
+  conjunto negativo real (los `excluded_terms` del catálogo, 102 términos) — vale re-medirlo con los dos lados. El
+  threshold de embedding dejó de existir junto con el paso.
+- **Colisiones no curadas:** el veto de evidencia negativa (§1.2) elimina el 100% de las fusiones cuando la
+  colisión está curada, y el 61% cuando no lo está (`air fryer` vs. `deep fryer` mide 0.400, justo sobre el
+  threshold). El residuo depende del paso 3 — decidir si se acepta así o si el enriquecimiento debe curar
+  explícitamente los vecinos de categoría.
+- **Correr `POST /admin/catalog/backfill-terms` en producción:** el índice de términos localizados y el de términos
+  excluidos están vacíos para toda entidad creada antes de esas features. Los dos lados se llenan en la misma
+  pasada, nunca por separado.
 - **Tamaño de la población de referencia (~27 países):** aceptado como suficiente para el MVP, pero es una
   elección consciente de alcance, no una validación estadística formal.
 - **Sesgo estructural contra mercados emergentes** (la regla de exclusión penaliza países con cobertura de datos

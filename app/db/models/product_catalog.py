@@ -3,21 +3,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import ForeignKey, Index, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.config import settings
 from app.db.base import Base
 
 
 class ProductCatalog(Base):
     """Identidade de produto determinística. entity_key é sempre gerado localmente
     (uuid4), nunca bloqueado por dependência externa. google_mid é enriquecimento
-    best-effort/assíncrono, nunca requisito para a entidade existir. embedding
-    alimenta o passo 3 (semântico) do pipeline de resolução em catalog_service —
-    nulo até a entidade passar por esse passo (nunca bloqueia a criação)."""
+    best-effort/assíncrono, nunca requisito para a entidade existir.
+
+    A coluna `embedding` (vector(1536)) existiu aqui até a migration 027 e foi
+    removida com o passo de embedding — ver transparencia-tecnica §1.3."""
 
     __tablename__ = "product_catalog"
 
@@ -52,7 +51,6 @@ class ProductCatalog(Base):
     reference_candidates: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(settings.openai_embedding_dimensions), nullable=True)
 
     # The product's standout reference market, cached here because it is a
     # property of the product and not of any one request: MOS uses fixed 100/0

@@ -37,7 +37,7 @@ def get_product_identification_service(
     description=(
         "Resolves free-text product identification (already extracted by an "
         "upstream LLM step, out of scope here) to a stable entity_key: exact "
-        "alias -> fuzzy trigram -> embedding similarity -> create new entity. "
+        "alias exato -> trigram fuzzy (arbitrado pelos excluded_terms) -> LLM -> nova entidade. "
         "entity_key is always generated locally and never blocked by an "
         "external dependency."
     ),

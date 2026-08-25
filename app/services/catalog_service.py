@@ -2,7 +2,10 @@
 section 6). Cheapest-to-most-expensive match, in order:
 
 1. Exact normalized alias (product_aliases) — O(1) index lookup.
-2. Fuzzy trigram (pg_trgm) over existing aliases.
+2. Fuzzy trigram (pg_trgm) over existing aliases, ARBITRADO pela evidência
+   negativa: a entidade só é aceita se o texto estiver mais perto dos termos
+   que ela declara SER (search_terms) do que dos que declara NÃO ser
+   (excluded_terms). Empate ou inversão veta a entidade e escala para o 3.
 3. LLM decides among the catalog's candidate entities — see catalog_matcher.py.
 4. Nothing matched — create a new entity locally (entity_key is always a
    freshly generated UUID, never blocked by an external dependency).
@@ -17,6 +20,16 @@ termos põe esse vocabulário ao alcance do trigram. Medido contra os 89 termos
 reais do catálogo (2026-08-14): 71 resolvem no passo 2, com precisão de 100%
 no limiar 0.4 configurado.
 
+O VETO do passo 2 entrou em 2026-08-25, depois de medir o passo contra os
+`excluded_terms` do próprio catálogo — o conjunto negativo que existia desde a
+Fase 5 e nunca tinha sido usado nem como guarda nem como teste. Os 89 termos
+medidos em 14/08 eram todos positivos, então a "precisão de 100%" media só
+metade do problema. Com 9 entidades, 286 aliases e 102 termos excluídos reais:
+44 dos 102 (43,1%) resolviam para a entidade que os exclui — `fritadeira de
+óleo` -> air fryer a 0.696 — e gravavam alias exato permanente. Com o veto,
+0/102, sem perder nenhum positivo (284/284); numa consulta inédita o recall
+vai de 94,7% para 93,0%. Ver product_excluded_term.py.
+
 O passo 3 era embedding até 2026-08-14 e passou a ser o LLM. Motivo medido: os
 ~20% que chegam lá não têm parentesco de escrita com nada indexado
 (`lockencreme`, `odżywka bez spłukiwania`) ou são sinônimo de domínio
@@ -27,6 +40,7 @@ estiver indisponível, a resolução cai para a criação de entidade nova, que 
 o erro recuperável.
 """
 
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -131,32 +145,40 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            await self._index_localized_terms(entity, localized_markets)
+            await self._index_terms(entity, localized_markets)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="alias"
             )
 
         trigram = await self._repo.trigram_search(alias_normalized)
-        if trigram is not None:
+        if trigram.vetoed:
+            # Semelhança de forma dizia "é o mesmo produto" e o catálogo diz o
+            # contrário. Não decide por string aqui: manda para o passo 3 com a
+            # entidade vetada garantidamente na lista.
+            logger.info(
+                f"Passo 2 vetado para {text!r} por excluded_terms de "
+                f"{[p.canonical_title for p in trigram.vetoed]}; escalando para o LLM"
+            )
+        if trigram.match is not None:
             await self._repo.create_alias(
-                alias_normalized=alias_normalized, entity_key=trigram.product.entity_key, source=source
+                alias_normalized=alias_normalized, entity_key=trigram.match.product.entity_key, source=source
             )
             self._refresh_entity_fields(
-                trigram.product,
+                trigram.match.product,
                 category=category,
                 localized_markets=localized_markets,
                 reference_candidates=reference_candidates,
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            await self._index_localized_terms(trigram.product, localized_markets)
+            await self._index_terms(trigram.match.product, localized_markets)
             await self._session.commit()
             return CatalogResolveResponse(
-                entity_key=trigram.product.entity_key,
-                canonical_title=trigram.product.canonical_title,
+                entity_key=trigram.match.product.entity_key,
+                canonical_title=trigram.match.product.canonical_title,
                 method="trigram",
-                match_score=trigram.similarity,
+                match_score=trigram.match.similarity,
             )
 
         # Passo 3: o LLM decide. Só chega aqui o que alias e trigram não
@@ -165,7 +187,7 @@ class CatalogService:
         # nada indexado (`lockencreme`, `odżywka bez spłukiwania`) ou é
         # sinônimo de domínio (`quadcopter` para drone). Substituiu o passo de
         # embedding, que não decidia esses casos: ver catalog_matcher.py.
-        candidatos = await self._repo.list_match_candidates(category=category)
+        candidatos = await self._repo.list_match_candidates(category=category, priority=trigram.vetoed)
         correspondente = await self._matcher.pick(text=text, candidates=candidatos)
         if correspondente is not None:
             await self._repo.create_alias(
@@ -179,7 +201,7 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            await self._index_localized_terms(correspondente, localized_markets)
+            await self._index_terms(correspondente, localized_markets)
             await self._session.commit()
             return CatalogResolveResponse(
                 entity_key=correspondente.entity_key,
@@ -196,11 +218,63 @@ class CatalogService:
             target_age_max=target_age_max,
         )
         await self._repo.create_alias(alias_normalized=alias_normalized, entity_key=entity.entity_key, source=source)
-        await self._index_localized_terms(entity, localized_markets)
+        await self._index_terms(entity, localized_markets)
         await self._session.commit()
         return CatalogResolveResponse(
             entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="created"
         )
+
+    async def backfill_terms(self, *, batch_size: int = 100) -> dict[str, int]:
+        """Indexa o vocabulário curado de TODAS as entidades já existentes.
+
+        `_index_terms` só roda dentro do `resolve()`, então entidade criada
+        antes dessas features nunca teve seus termos indexados. Medido no banco
+        vivo em 2026-08-25: `product_aliases` tinha 9 linhas, uma por
+        `canonical_title`, e nenhum dos 286 termos localizados do catálogo. Ou
+        seja, tanto o alcance multilíngue do passo 2 quanto o risco de fusão
+        que ele traz estavam dormentes.
+
+        Os dois lados são preenchidos na mesma passada: rodar o backfill só dos
+        positivos ligaria as 44 fusões medidas sem a guarda que as impede.
+
+        Em lotes, com commit por lote e paginação por chave. Uma transação
+        única sobre o catálogo inteiro seguraria locks em `product_aliases`
+        durante todo o backfill — e é a tabela do caminho quente de QUALQUER
+        resolução, então uma análise concorrente ficaria esperando. Com lotes,
+        uma interrupção também não perde o que já foi gravado: reexecutar é
+        idempotente (`ON CONFLICT DO NOTHING`).
+        """
+        relatorio = {"entidades": 0, "aliases": 0, "excluidos": 0}
+        ultima: uuid.UUID | None = None
+        while True:
+            entidades = await self._repo.list_entities_with_markets(after=ultima, limit=batch_size)
+            if not entidades:
+                break
+            for entidade in entidades:
+                relatorio["aliases"] += await self._index_localized_terms(entidade, entidade.localized_markets)
+                relatorio["excluidos"] += await self._index_excluded_terms(entidade, entidade.localized_markets)
+                relatorio["entidades"] += 1
+            ultima = entidades[-1].entity_key
+            await self._session.commit()
+            logger.info(f"Backfill de termos: {relatorio['entidades']} entidades processadas")
+        logger.info(f"Backfill de termos do catálogo concluído: {relatorio}")
+        return relatorio
+
+    async def _index_terms(
+        self, entity: ProductCatalog, localized_markets: dict[str, dict[str, Any]] | None
+    ) -> None:
+        """Indexa o vocabulário curado da entidade nos DOIS sinais.
+
+        Positivos primeiro, negativos depois, e a ordem importa: um termo que a
+        mesma entidade lista como `search_term` num mercado e como
+        `excluded_term` noutro é uma contradição do dado (medida uma vez no
+        catálogo real: `fritadeira elétrica`, positiva no BRA e negativa em
+        PRT/ESP). Nesse empate o positivo vence — ele é evidência de que o
+        termo RECUPERA o produto — e a contradição vai para o log em vez de
+        virar um veto que derruba o próprio produto.
+        """
+        await self._index_localized_terms(entity, localized_markets)
+        await self._index_excluded_terms(entity, localized_markets)
 
     async def _index_localized_terms(
         self, entity: ProductCatalog, localized_markets: dict[str, dict[str, Any]] | None
@@ -253,20 +327,65 @@ class CatalogService:
             return 0
 
         donos = await self._repo.existing_alias_owners(set(candidatos))
-        criados = 0
+        novos: dict[str, uuid.UUID] = {}
         for key in candidatos:
             dono = donos.get(key)
             if dono is not None:
                 if dono != entity.entity_key:
-                    logger.info(
-                        f"Termo localizado {key!r} já é alias de outra entidade ({dono}); mantido"
-                    )
+                    logger.info(f"Termo localizado {key!r} já é alias de outra entidade ({dono}); mantido")
                 continue
-            await self._repo.create_alias(
-                alias_normalized=key, entity_key=entity.entity_key, source="localized_market"
-            )
-            criados += 1
-        return criados
+            novos[key] = entity.entity_key
+        return await self._repo.create_aliases_bulk(aliases=novos, source="localized_market")
+
+    async def _index_excluded_terms(
+        self, entity: ProductCatalog, localized_markets: dict[str, dict[str, Any]] | None
+    ) -> int:
+        """Grava os `excluded_terms` de cada mercado como evidência NEGATIVA.
+
+        Eles nunca viram alias — não resolvem nada, só desqualificam candidato
+        no passo 2 (ver ProductRepository.trigram_search). Sem isto, 44 dos 102
+        termos excluídos do catálogo real resolviam para a entidade que os
+        exclui: `fritadeira de óleo` casava com o alias `fritadeira sem óleo` a
+        0.696, bem acima do limiar 0.4, e virava alias permanente da air fryer.
+
+        Um termo excluído que já é alias DESTA entidade não é indexado: ver
+        `_index_terms`. Já um termo excluído que é alias de OUTRA entidade é
+        indexado normalmente — `panela de pressão elétrica` é excluída pela air
+        fryer e é o produto legítimo da entidade "Electric pressure cooker", e
+        as duas coisas são verdade ao mesmo tempo.
+        """
+        if not localized_markets:
+            return 0
+
+        candidatos: dict[str, str] = {}
+        for market in localized_markets.values():
+            if not isinstance(market, dict):
+                continue
+            for term in as_term_list(market.get("excluded_terms")):
+                key = normalize_alias(term)
+                # Vazio em escrita não-latina, como nos aliases: sem
+                # representação normalizada, não há o que comparar.
+                if key:
+                    candidatos.setdefault(key, term)
+
+        if not candidatos:
+            return 0
+
+        donos = await self._repo.existing_alias_owners(set(candidatos))
+        novos: dict[str, str] = {}
+        for key, surface in candidatos.items():
+            if donos.get(key) == entity.entity_key:
+                logger.warning(
+                    f"Termo {surface!r} é search_term e excluded_term da mesma entidade "
+                    f"({entity.canonical_title!r}); mantido como positivo e NÃO indexado como exclusão"
+                )
+                continue
+            novos[key] = surface
+        # Reindexar a mesma entidade é idempotente pelo ON CONFLICT, então não
+        # há mais um SELECT de "o que já está indexado" antes de cada gravação.
+        return await self._repo.create_excluded_terms_bulk(
+            entity_key=entity.entity_key, termos=novos, source="localized_market"
+        )
 
     @staticmethod
     def _refresh_entity_fields(

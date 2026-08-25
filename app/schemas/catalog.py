@@ -15,9 +15,9 @@ class CatalogResolveRequest(BaseModel):
 class CatalogResolveResponse(BaseModel):
     entity_key: uuid.UUID
     canonical_title: str
-    method: str  # "alias" | "trigram" | "embedding" | "created"
+    method: str  # "alias" | "trigram" | "llm" | "created"
     # Exact meaning depends on method: trigram = pg_trgm similarity (0-1);
-    # embedding = cosine similarity (1 - cosine_distance, 0-1); alias/created
+    # trigram = similaridade pg_trgm (0-1); alias/llm/created
     # have no match score (exact hit / nothing to compare against).
     match_score: float | None = None
 
@@ -89,7 +89,7 @@ class IdentifyImageRequest(BaseModel):
 class IdentifyImageResponse(BaseModel):
     entity_key: uuid.UUID
     canonical_title: str
-    method: str  # "alias" | "trigram" | "embedding" | "created"
+    method: str  # "alias" | "trigram" | "llm" | "created"
     # Same field names as AnalyzeRequest (app/schemas/analyze.py) on purpose —
     # the frontend passes these straight through, with whatever the user
     # corrected, into POST /analyze.

@@ -1,21 +1,8 @@
-import random
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.repositories.product_repository import ProductRepository
-
-
-def _one_hot() -> list[float]:
-    """A vector at a random dimension — NOT a fixed index. Reused runs
-    against a persistent test DB (not recreated between manual `pytest`
-    invocations, unlike CI) would otherwise collide with leftover rows from
-    earlier runs at the same fixed index and produce flaky assertion
-    failures on tie-broken ORDER BY ... LIMIT 1 queries."""
-    vec = [0.0] * settings.openai_embedding_dimensions
-    vec[random.randrange(settings.openai_embedding_dimensions)] = 1.0
-    return vec
 
 
 async def test_exact_alias_roundtrip(db_session: AsyncSession) -> None:
@@ -45,38 +32,18 @@ async def test_trigram_search_finds_close_match(db_session: AsyncSession) -> Non
     )
     await db_session.commit()
 
-    match = await repo.trigram_search(f"robot vacum cleaner {unique}")  # typo: "vacum"
-    assert match is not None
-    assert match.product.entity_key == entity.entity_key
-    assert 0 < match.similarity <= 1
+    resultado = await repo.trigram_search(f"robot vacum cleaner {unique}")  # typo: "vacum"
+    assert resultado.match is not None
+    assert resultado.match.product.entity_key == entity.entity_key
+    assert 0 < resultado.match.similarity <= 1
+    assert resultado.vetoed == []
 
 
 async def test_trigram_search_no_match_below_threshold(db_session: AsyncSession) -> None:
     repo = ProductRepository(db_session)
-    match = await repo.trigram_search(f"totally-unrelated-query-{uuid.uuid4()}")
-    assert match is None
-
-
-async def test_semantic_search_finds_close_embedding(db_session: AsyncSession) -> None:
-    repo = ProductRepository(db_session)
-    close_vector = _one_hot()
-    close_entity = await repo.create_entity(canonical_title=f"Close {uuid.uuid4()}", embedding=close_vector)
-    await repo.create_entity(canonical_title=f"Far {uuid.uuid4()}", embedding=_one_hot())
-    await db_session.commit()
-
-    match = await repo.semantic_search(close_vector)
-    assert match is not None
-    assert match.product.entity_key == close_entity.entity_key
-    assert match.distance < 0.01
-
-
-async def test_semantic_search_ignores_far_embeddings(db_session: AsyncSession) -> None:
-    repo = ProductRepository(db_session)
-    await repo.create_entity(canonical_title=f"Only far {uuid.uuid4()}", embedding=_one_hot())
-    await db_session.commit()
-
-    match = await repo.semantic_search(_one_hot())  # different random dimension -> orthogonal -> above threshold
-    assert match is None
+    resultado = await repo.trigram_search(f"totally-unrelated-query-{uuid.uuid4()}")
+    assert resultado.match is None
+    assert resultado.vetoed == [], "nada bateu não é a mesma coisa que algo ter sido vetado"
 
 
 async def test_merge_repoints_aliases_and_marks_duplicate(db_session: AsyncSession) -> None:

@@ -113,7 +113,8 @@ curl -s -X POST $BASE/indicators/compute -H "Content-Type: application/json" \
   -d '{"country": "ESP", "entity_key": "<entity_key del paso 1>"}'
 
 # 3) Recalcula los límites de normalización (0-100) contra la población de referencia
-curl -s -X POST "$BASE/admin/indicators/refresh-reference"
+# ⚠️ removido: la ruta /admin/indicators/refresh-reference ya no existe (verificado 25/08/2026);
+# los bounds vienen sembrados por migrations. Ver transparencia-tecnica §2.
 
 # 4) Recalcula los 5 pesos de dimensión (ROC — instantáneo, no lee ningún dato)
 curl -s -X POST "$BASE/admin/mos/refresh-weights"

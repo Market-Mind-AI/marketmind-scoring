@@ -79,6 +79,9 @@ _SYSTEM = (
     "Each entry lists the search terms already curated for it, across markets. A query that is "
     "a translation or synonym of those terms is the same product; a query that names a "
     "neighbouring product in the same category is not.\n\n"
+    "An entry may also list 'NOT this product' terms: terms the catalog has already declared "
+    "denote something ELSE. A query that matches one of those is NOT that entry, however much "
+    "it looks like its name.\n\n"
     "Calling two different products the same MERGES them permanently and corrupts both. Calling "
     "two identical products different only creates a duplicate, which is easily fixed. When the "
     "evidence does not clearly settle it, return an empty entity_key."
@@ -87,8 +90,16 @@ _SYSTEM = (
 
 def _describe(product: "ProductCatalog", max_terms: int = 12) -> str:
     """Uma entidade como o LLM a vê: nome, categoria e uma amostra dos termos
-    curados. Os termos são a evidência real — o `canonical_title` sozinho é o
-    idioma de quem cadastrou primeiro, não o vocabulário do produto."""
+    curados, nos DOIS sinais. Os termos são a evidência real — o
+    `canonical_title` sozinho é o idioma de quem cadastrou primeiro, não o
+    vocabulário do produto.
+
+    Os `excluded_terms` entram desde 2026-08-25. Antes só os positivos eram
+    enviados, e o modelo tinha que adivinhar a fronteira do produto sem ver o
+    que o catálogo já tinha declarado do outro lado dela — justamente nos casos
+    que chegam aqui, que são os que a semelhança de forma não decidiu. É também
+    o que o passo 2 usa para vetar: quando uma entidade chega aqui vetada, esta
+    linha é a razão do veto, e o LLM precisa vê-la para arbitrar."""
     termos: list[str] = []
     for market in (product.localized_markets or {}).values():
         if not isinstance(market, dict):
@@ -96,13 +107,23 @@ def _describe(product: "ProductCatalog", max_terms: int = 12) -> str:
         for term in market.get("search_terms") or []:
             if term and term not in termos:
                 termos.append(term)
+    excluidos: list[str] = []
+    for market in (product.localized_markets or {}).values():
+        if not isinstance(market, dict):
+            continue
+        for term in market.get("excluded_terms") or []:
+            if term and term not in excluidos:
+                excluidos.append(term)
     amostra = ", ".join(termos[:max_terms]) if termos else "(sem termos curados)"
-    return (
-        f"- entity_key: {product.entity_key}\n"
-        f"  name: {product.canonical_title}\n"
-        f"  category: {product.category or 'unknown'}\n"
-        f"  known terms: {amostra}"
-    )
+    linhas = [
+        f"- entity_key: {product.entity_key}",
+        f"  name: {product.canonical_title}",
+        f"  category: {product.category or 'unknown'}",
+        f"  known terms: {amostra}",
+    ]
+    if excluidos:
+        linhas.append(f"  NOT this product: {', '.join(excluidos[:max_terms])}")
+    return "\n".join(linhas)
 
 
 class CatalogMatcher:

@@ -47,8 +47,8 @@ flowchart LR
     API -.->|"SQL read-only directo"| OE_PG
     API -.->|"SQL read-only directo"| UN_PG
 
-    OPENAI[["OpenAI API<br/>(embeddings, solución provisional)"]]
-    API -->|"HTTP"| OPENAI
+    LLM[["LLM (Claude)<br/>visión, enriquecimiento,<br/>match de catálogo, narrativa"]]
+    API -->|"HTTPS"| LLM
 ```
 
 **Dos formas diferentes de comunicación con los 4 microservicios, a propósito:**
@@ -72,10 +72,10 @@ flowchart LR
 | Driver Postgres (migrations) | psycopg2-binary 2.9 | Alembic corre en modo sync, usa este driver |
 | Migrations | Alembic 1.14 | 7 migrations hasta ahora, una por cada cambio de esquema |
 | Validación/serialización | Pydantic 2.10 + pydantic-settings 2.7 | Schemas de request/response, `Settings` cargado desde `.env` |
-| Cliente HTTP | httpx 0.28 | Llamadas a las APIs de los 4 microservicios y a OpenAI |
+| Cliente HTTP | httpx 0.28 | Llamadas a las APIs de los 4 microservicios y a los proveedores de LLM |
 | Retry/backoff | tenacity 9.0 | Usado en los 4 microservicios de recolección (no en el Core directamente) |
 | Base de datos | Postgres 16 (`pgvector/pgvector:pg16`) | Uno por servicio — el del Core usa la imagen con pgvector |
-| Extensión de vector | pgvector 0.3 (Python) + extensión `vector` (Postgres) | Embedding del catálogo de productos, búsqueda por similitud de coseno |
+| ~~Extensión de vector~~ | — | Eliminada: la columna `product_catalog.embedding` y la extensión `vector` salieron en la migration 027, junto con la dependencia `pgvector` (ver transparencia técnica §1.3) |
 | Extensión de texto | `pg_trgm` (extensión Postgres) | Similitud de trigram para matching de alias de producto |
 | Matemática MCDA (validación) | pymcdm 1.4 | TOPSIS + Entropy Weight *clásicos*, solo para comparación — no decide el MOS de producción |
 | Empaquetado/dependencias | Poetry 1.8 | `pyproject.toml` + `poetry.lock` |
@@ -116,8 +116,9 @@ app/
 |---|---|
 | `services/collection_client.py` | Traduce un pedido de recolección genérico al formato HTTP específico de cada una de las 4 fuentes |
 | `services/coverage_service.py` | Decide si un dato ya está "fresco" (`coverage_index` + TTL) o necesita recolectarse de nuevo |
-| `services/catalog_service.py` | Pipeline de resolución de producto: alias exacto → trigram → embedding → crear entidad nueva |
-| `services/embedding_client.py` | Llamada aislada a la API de embeddings (OpenAI, vía `httpx` puro) |
+| `services/catalog_service.py` | Pipeline de resolución de producto: alias exacto → trigram (arbitrado por `excluded_terms`) → LLM → crear entidad nueva |
+| `services/catalog_matcher.py` | Paso 3: decide identidad de producto con un LLM cuando alias y trigram no deciden |
+
 | `services/indicator_engine.py` | Orquesta el cálculo de los 17 indicadores del Cap. 4 (un país + opcionalmente un producto) |
 | `services/indicators/*.py` | Una función por indicador, leyendo directo de la tabla bruta de la fuente correspondiente |
 | `services/reference_calculator_service.py` | Recalcula `normalization_reference` (bounds p5/p95) periódicamente |
@@ -129,6 +130,10 @@ app/
 
 ## Base de datos
 
+> ⚠️ El conteo de tablas y migrations de abajo quedó desactualizado (hay 27 migrations al 25/08/2026). La lista de
+> módulos de arriba sí está al día. La tabla `product_excluded_terms` (migration 026) guarda la evidencia negativa
+> de identidad — ver transparencia técnica §1.2.
+
 **11 tablas** en el Postgres del Core (ver `app/db/models/`): `countries`, `product_catalog`, `product_alias`,
 `coverage_index`, `job`, `job_task`, `indicator_value`, `normalization_reference`, `indicator_weight`, `mos_result`,
 `monthly_snapshot`.
@@ -137,7 +142,8 @@ app/
 1. `001` — esquema inicial
 2. `002` — campos de cobertura en `job_task`
 3. `003` — seed de los ~27 países de referencia
-4. `004` — pipeline de resolución de catálogo (extensiones `pg_trgm`/`vector`, columna `embedding`)
+4. `004` — pipeline de resolución de catálogo (extensiones `pg_trgm`/`vector`, columna `embedding`; el paso de
+   embedding fue retirado en 14/08/2026 y la columna y la extensión se eliminaron en la migration 027)
 5. `005` — seed de los bounds fijos de normalización (Growth Score, Demand Stability)
 6. `006` — `entity_key` en `indicator_weights` (revertido después, ver migration 007)
 7. `007` — revierte `entity_key`, agrega `library_topsis_score`/`library_mos`

@@ -8,6 +8,12 @@ class EnrichmentReportResponse(BaseModel):
     failed: int
 
 
+class BackfillTermsResponse(BaseModel):
+    entidades: int
+    aliases: int
+    excluidos: int
+
+
 class MergeReportResponse(BaseModel):
     merged_pairs: int
 

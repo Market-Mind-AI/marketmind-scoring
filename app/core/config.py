@@ -170,20 +170,13 @@ class Settings(BaseSettings):
     country_indicator_ttl_days: int = 90
 
     # Fase 2 — product catalog resolution pipeline (app/services/catalog_service.py).
-    # Embedding step uses OpenAI for now (explicit user decision, 2026-07-02):
-    # Anthropic has no first-party embeddings endpoint (their own docs point
-    # to Voyage AI); OpenAI was chosen as a stopgap ahead of a planned move to
-    # a locally-hosted model — see memory marketmind_core_architecture.
-    #
-    # A local sentence-transformers model was implemented and reverted on
-    # 2026-08-13: it works (multilingual-e5-small, 384 dims, offline), but it
-    # pulls torch and pushed the image from 1.67GB to >20GB, which is not a
-    # trade worth making for this step. If this is revisited, the constraint to
-    # respect is image weight — an ONNX runtime or a small sidecar, not torch
-    # in the API image.
+    # A chave da OpenAI continua aqui porque `GptProvider` (app/services/llm/providers.py)
+    # a usa quando algum call site é apontado para "gpt". O que sumiu foi o
+    # passo de EMBEDDING: medido e retirado em 2026-08-14 (nenhum limiar de
+    # distância separa "mesmo produto" de "produto vizinho" neste catálogo), e
+    # a coluna `product_catalog.embedding` foi removida na migration 027.
+    # Ver docs/marketmind-transparencia-tecnica.md §1.3.
     openai_api_key: str = ""
-    openai_embedding_model: str = "text-embedding-3-small"
-    openai_embedding_dimensions: int = 1536
 
     # Fase 5 — identificação de produto por foto (app/services/vision_client.py,
     # product_identification_service.py). Anthropic tem endpoint de visão
@@ -201,39 +194,18 @@ class Settings(BaseSettings):
     # not point vision_llm_model at a small model without re-testing that
     # payload.
 
-    # Trigram (pg_trgm) similarity threshold to accept a fuzzy alias match
-    # without falling through to the more expensive embedding step.
+    # Limiar de similaridade do trigram (pg_trgm) para aceitar um alias fuzzy
+    # sem cair para o passo 3 (LLM).
+    #
+    # É também o valor aplicado a `pg_trgm.similarity_threshold` por transação
+    # em ProductRepository.trigram_search, para que o operador `%` — o único
+    # que usa os índices GIN — filtre exatamente neste ponto.
+    #
+    # ⚠️ Calibrado apenas contra termos POSITIVOS (89 termos, 2026-08-14). O
+    # conjunto negativo (excluded_terms) só passou a existir como guarda em
+    # 2026-08-25; vale re-medir os dois lados com
+    # `scripts/benchmark_catalog_resolution.py` antes de mexer neste número.
     catalog_trigram_similarity_threshold: float = 0.4
-    # Cosine distance ceiling (0 = identical, 2 = opposite) to accept an
-    # embedding match.
-    #
-    # ⚠️ MEASURED UNSOUND, 2026-08-13 — left at 0.5 only because the embedding
-    # step is currently inert (no OPENAI_API_KEY in any environment, so
-    # _try_embed returns None and resolution never reaches it). Do not
-    # provision an embeddings provider without reading this first.
-    #
-    # Benchmarked against this catalog's own data with five embedding models
-    # (multilingual-e5-small/base, BGE-M3, LaBSE, paraphrase-MiniLM), NO
-    # threshold separates same-product from adjacent-product, because cosine
-    # distance ranks them in the wrong order:
-    #
-    #     freidora de aire <-> freidora de aceite           0.044  DIFFERENT
-    #     krem do loków    <-> krem prostujący              0.062  DIFFERENT
-    #     crema de tratamiento capilar <-> lockencreme      0.188  SAME
-    #
-    # The distinguishing token is tiny ("aire"/"aceite") while paraphrase
-    # variation spans the whole phrase. At the cutoff needed to catch real
-    # cross-language paraphrases, 100% of the catalog's own curated
-    # `excluded_terms` were also accepted — i.e. turning this step on as-is
-    # merges distinct products into one entity, silently, corrupting
-    # localized_markets and demand for both.
-    #
-    # The fix is not a better model or a better number: the same-product
-    # decision has to be made by something that reads the words. Whatever
-    # provides the vectors, this value must stop being an ACCEPT threshold and
-    # become a RECALL cutoff feeding a real adjudication step.
-    catalog_embedding_distance_threshold: float = 0.5
-
     log_level: str = "INFO"
 
     # Path prefix a reverse proxy serves this API under and strips before

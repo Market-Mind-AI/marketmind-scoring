@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.schemas.admin import (
+    BackfillTermsResponse,
     EnrichmentReportResponse,
     MergeReportResponse,
     ReconciliationReportResponse,
@@ -56,6 +57,24 @@ async def enrich_mid(limit: int = 20, session: AsyncSession = Depends(get_sessio
     return EnrichmentReportResponse(
         checked=report.checked, enriched=report.enriched, no_match=report.no_match, failed=report.failed
     )
+
+
+@router.post(
+    "/catalog/backfill-terms",
+    response_model=BackfillTermsResponse,
+    summary="Index the curated vocabulary of existing catalog entities",
+    description=(
+        "Indexes every entity's `search_terms` as aliases and its "
+        "`excluded_terms` as negative evidence. Both only run inside "
+        "`resolve()`, so entities created before those features have neither. "
+        "The two sides are always filled together: indexing only the positive "
+        "terms turns on multilingual recall AND the merges the negative "
+        "evidence exists to block. See app/db/models/product_excluded_term.py."
+    ),
+)
+async def backfill_terms(session: AsyncSession = Depends(get_session)) -> BackfillTermsResponse:
+    relatorio = await CatalogService(session).backfill_terms()
+    return BackfillTermsResponse(**relatorio)
 
 
 @router.post(

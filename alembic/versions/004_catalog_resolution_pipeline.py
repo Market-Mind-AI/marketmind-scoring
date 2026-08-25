@@ -12,9 +12,6 @@ Create Date: 2026-07-02
 
 from collections.abc import Sequence
 
-import pgvector.sqlalchemy
-import sqlalchemy as sa
-
 from alembic import op
 
 revision: str = "004"
@@ -22,17 +19,19 @@ down_revision: str | None = "003"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_EMBEDDING_DIMENSIONS = 1536  # must match settings.openai_embedding_dimensions
+# A coluna é criada em SQL puro, e não com `pgvector.sqlalchemy.Vector`, desde
+# 2026-08-25. Motivo: o Alembic importa TODOS os arquivos de versão a cada
+# `upgrade`, então este import obrigava o projeto a carregar a dependência
+# `pgvector` para sempre — mesmo depois da migration 027, que remove a coluna e
+# a extensão. O DDL emitido é idêntico; só deixou de precisar da biblioteca.
+_EMBEDDING_DIMENSIONS = 1536
 
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-    op.add_column(
-        "product_catalog",
-        sa.Column("embedding", pgvector.sqlalchemy.Vector(_EMBEDDING_DIMENSIONS), nullable=True),
-    )
+    op.execute(f"ALTER TABLE product_catalog ADD COLUMN embedding vector({_EMBEDDING_DIMENSIONS})")
 
     op.create_index(
         "ix_product_aliases_alias_normalized_trgm",

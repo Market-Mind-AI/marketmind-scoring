@@ -20,11 +20,13 @@ services:
     restart: unless-stopped
 
   postgres:
-    # pgvector/pgvector:pg16 (not plain postgres:16-alpine): Fase 2's product
-    # catalog resolution pipeline needs the `vector` extension for semantic
-    # (embedding) similarity search — see migration 004 and
-    # app/services/catalog_service.py. Same Postgres 16 major version as
-    # before, so no data-format change for existing installs.
+    # pgvector/pgvector:pg16 — herdado da Fase 2, quando o passo 3 da resolução
+    # de catálogo era busca por embedding. Esse passo foi retirado em
+    # 2026-08-14 e a extensão `vector` foi removida do banco na migration 027,
+    # então `postgres:16` puro já bastaria hoje. A imagem é mantida por ser um
+    # superconjunto (mesmo PG 16, mesmo formato de dados): trocá-la não traria
+    # ganho e exigiria uma janela de manutenção no volume existente.
+    # O que o pipeline realmente usa é `pg_trgm`, presente nas duas.
     image: pgvector/pgvector:pg16
     container_name: marketmind-core-postgres
     environment:
