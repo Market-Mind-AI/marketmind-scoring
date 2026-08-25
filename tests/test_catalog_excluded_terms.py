@@ -245,3 +245,44 @@ async def test_produto_diferente_da_mesma_marca_nao_funde(db_session: AsyncSessi
 
     assert purificador.entity_key != fryer.entity_key
     assert purificador.method == "created"
+
+
+async def test_categoria_divergente_escala_em_vez_de_aceitar(db_session: AsyncSession) -> None:
+    """Acessório, serviço e conteúdo do produto compartilham o NOME dele por
+    construção, então nenhuma medida de semelhança os separa. O caso extremo:
+    `air fryer basket` mede 1.000 contra o termo curado `basket air fryer`,
+    porque o pg_trgm compara sacos de trigramas e ignora a ordem das palavras.
+    O que os separa é a categoria, que a identificação já traz."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    fryer = await service.resolve(f"basket air fryer {sufixo}", source="test", category="Kitchen Appliances")
+
+    acessorio = await service.resolve(f"air fryer basket {sufixo}", source="test", category="Kitchen Accessories")
+
+    assert acessorio.entity_key != fryer.entity_key
+    assert acessorio.method == "created"
+
+
+async def test_mesma_categoria_continua_casando(db_session: AsyncSession) -> None:
+    """A guarda não pode custar recall quando as categorias concordam."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    criado = await service.resolve(
+        f"air fryer {sufixo}", source="test", category="Kitchen Appliances", localized_markets=_mercados(sufixo)
+    )
+
+    variante = await service.resolve(f"air fryers {sufixo}", source="test", category="Kitchen Appliances")
+    assert variante.entity_key == criado.entity_key
+    assert variante.method == "trigram"
+
+
+async def test_categoria_ausente_nao_desqualifica(db_session: AsyncSession) -> None:
+    """Categoria faltando de um dos lados não é evidência de divergência — a
+    guarda só age quando as duas são conhecidas."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    criado = await service.resolve(f"air fryer {sufixo}", source="test", category="Kitchen Appliances")
+
+    sem_categoria = await service.resolve(f"air fryers {sufixo}", source="test")
+    assert sem_categoria.entity_key == criado.entity_key
+    assert sem_categoria.method == "trigram"

@@ -165,7 +165,7 @@ class CatalogService:
             )
 
         trigram = (
-            await self._repo.trigram_search(alias_normalized)
+            await self._repo.trigram_search(alias_normalized, category=category)
             if alias_normalized
             else TrigramOutcome(match=None, vetoed=[])
         )

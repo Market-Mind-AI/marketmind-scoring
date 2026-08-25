@@ -97,7 +97,7 @@ margen 0 — la regla simple, sin ningún número que calibrar.
 
 **Estas cifras son reproducibles**, no de una sesión perdida: `python scripts/benchmark_catalog_resolution.py`
 las recalcula contra el catálogo vivo, en sólo-lectura, usando el `similarity()` real del pg_trgm. Los 102
-términos excluidos son los 103 curados menos uno descartado por contradicción (§1.8). "Consulta inédita" elimina,
+términos excluidos son los 103 curados menos uno descartado por contradicción (§1.9). "Consulta inédita" elimina,
 por consulta, el término idéntico de los dos lados — sin eso la medición sólo pregunta si el índice encuentra lo
 que él mismo contiene, que es exactamente la falla de método de la calibración original.
 
@@ -240,7 +240,41 @@ paso más barato — que es exactamente el destrozo que la migration 028 y la po
 Es JSONB y no tabla propia, al contrario que `product_excluded_terms`: aquélla tiene que ser **consultable** por
 `similarity()` con índice GIN porque participa del veto; la marca se lee junto con la entidad y nunca se busca sola.
 
-### 1.8 Limitaciones conocidas
+### 1.8 La categoría separa lo que el nombre no puede
+
+Accesorio, repuesto, consumible, servicio y contenido **de** un producto comparten el nombre de ese producto por
+construcción, así que ninguna medida de parecido los separa. El caso extremo lo deja claro: `air fryer basket` (la
+cesta) mide **1.000** contra el término curado `basket air fryer` (el aparato) — el `pg_trgm` compara bolsas de
+trigramas e **ignora el orden de las palabras**, de modo que para él las dos cadenas son idénticas. Ningún umbral
+alcanza eso, y el veto tampoco, porque nadie curó la cesta como término excluido.
+
+Lo que sí los separa es la categoría, que la identificación ya devolvía y sólo se usaba para priorizar candidatos
+del paso 3. Desde el 25/08/2026 una **categoría divergente descalifica** al candidato en el paso 2, exactamente
+igual que la evidencia negativa: no decide que sean distintos, escala al paso 3 con esa entidad en la lista.
+
+La guarda sólo actúa cuando **ambas** categorías son conocidas — que falte una no es evidencia de divergencia.
+
+Medido sobre el conjunto adversarial, los seis falsos positivos que quedaban pasaron todos a escalar, sin perder
+ni un caso de recuperación legítima (incluidos `air fryers` con y sin categoría, y las seis escrituras de air
+fryer). Y de punta a punta, por el endpoint que usa el frontend, la batería pasó de 5/7 a **8/8**.
+
+La guarda depende de que el modelo dé categorías distintas, y al principio no lo hacía: clasificó una cesta de
+repuesto como `Kitchen Appliances`, la misma del aparato. El prompt de visión pasó a decirlo explícitamente — un
+accesorio, repuesto, consumible, servicio o contenido recibe su **propia** categoría (`Kitchen Accessories`,
+`Spare Parts`, `Cookbooks`, `Services`), nunca la del producto al que pertenece. Después de eso, la cesta, el
+libro de recetas y el papel de horno se resuelven cada uno como entidad propia.
+
+**Coste conocido:** categorías equivalentes escritas distinto cuestan un viaje al paso 3. Ocurrió en la propia
+medición — el modelo devolvió `Kitchen Appliance` en singular una vez, contra `Kitchen Appliances`. Ahí no costó
+nada porque el caso resolvió por alias exacto (paso 1, donde la guarda no actúa), pero en el paso 2 habría
+escalado sin necesidad. Es el error barato, elegido a propósito.
+
+**Lo que la categoría no resuelve:** `fritadeira` a secas mide 0.647 contra la air fryer y es `Kitchen Appliances`
+de verdad — la categoría coincide y la guarda no tiene nada que decir. Es ambigüedad genuina del idioma (en
+pt-BR el término solo suele designar la de aceite) y es exactamente el tipo de caso que el paso 3 existe para
+juzgar.
+
+### 1.9 Limitaciones conocidas
 
 - **El veto sólo cubre la colisión que alguien curó.** Repetida la medición eliminando también el término excluido
   idéntico (para simular una colisión que nadie anotó), las fusiones caen de 43,1% a 16,7% — una reducción del 61%,

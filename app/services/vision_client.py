@@ -92,7 +92,11 @@ class ProductIdentification(BaseModel):
     category: str | None = Field(
         description=(
             "Short, generic product category in English, one level broader than `product_name` (e.g. "
-            "'Charcuterie', 'Kitchen Appliances', 'Toys'). Always English regardless of the product's origin."
+            "'Charcuterie', 'Kitchen Appliances', 'Toys'). Always English regardless of the product's origin. "
+            "If the item is an ACCESSORY, spare part, consumable, service or content FOR another product "
+            "(a basket, liner, filter, cookbook, repair service), the category must say so — 'Kitchen "
+            "Accessories', 'Spare Parts', 'Cookbooks', 'Services' — and NEVER the category of the product it "
+            "belongs to. An air fryer basket is not a Kitchen Appliance."
         )
     )
     markets: list[MarketTerms] = Field(
@@ -141,7 +145,10 @@ class VisionClient:
             "return no markets — do NOT invent, guess, or default to any product. "
             "`product_name`: short, generic, commonly-searched canonical name, plain ASCII, no brand/size/"
             "certification (e.g. 'Iberian ham', 'air fryer'; 'Jamon Iberico', not 'Jamón Ibérico'). "
-            "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'). "
+            "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'); an "
+            "ACCESSORY, part, consumable, service or content FOR another product gets its OWN category "
+            "('Kitchen Accessories', 'Spare Parts', 'Cookbooks', 'Services'), never the category of the product "
+            "it belongs to. "
             "Put the brand only in `brand`. "
             "`markets`: provide EXACTLY ONE entry for EACH of these ISO-3166 alpha-3 countries: "
             f"{country_list}. For each country, `search_terms` is a GENEROUS list of the real terms a local "

@@ -10,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.logging import logger
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.db.models.product_excluded_term import ProductExcludedTerm
+from app.utils.text import normalize_alias
 from app.utils.time import utc_now
 
 
@@ -72,7 +74,7 @@ class ProductRepository:
         alias.hit_count += 1
         await self._session.flush()
 
-    async def trigram_search(self, alias_normalized: str) -> TrigramOutcome:
+    async def trigram_search(self, alias_normalized: str, *, category: str | None = None) -> TrigramOutcome:
         """Passo 2, com a evidência negativa no mesmo julgamento.
 
         Para cada entidade que tem algum alias acima do limiar, compara a
@@ -97,6 +99,26 @@ class ProductRepository:
         sessão. Ele é fixado por TRANSAÇÃO (`set_config(..., is_local => true)`)
         e nunca por sessão: as conexões vêm de um pool, e um SET de sessão
         vazaria o limiar deste passo para todo o resto da aplicação.
+
+        CATEGORIA DIVERGENTE TAMBÉM DESQUALIFICA. A identificação traz a
+        categoria do produto e ela nunca era usada aqui — só para priorizar
+        candidatos do passo 3. Mas quatro dos seis falsos positivos que
+        sobraram na medição de 2026-08-25 são acessório, serviço ou conteúdo
+        DO produto (`air fryer basket`, `air fryer repair`, `air fryer
+        cookbook`, `空气炸锅配件`): compartilham o nome dele por construção, e
+        por isso nenhuma medida de semelhança os separa. O que os separa é a
+        categoria, que o sistema já recebe.
+
+        O caso extremo mostra por que limiar não resolve: `air fryer basket`
+        (a cesta) mede 1.000 contra o termo curado `basket air fryer` (o
+        produto), porque o pg_trgm compara sacos de trigramas e IGNORA a ordem
+        das palavras — para ele as duas strings são idênticas.
+
+        A guarda só age quando as duas categorias são conhecidas: categoria
+        ausente de um dos lados não é evidência de divergência. Categorias
+        equivalentes escritas de formas diferentes ("Kitchen Appliances" x
+        "Small Kitchen Appliances") custam uma ida ao passo 3, que é o erro
+        barato de propósito.
 
         Filtrar o lado negativo pelo mesmo `%` é exato, não uma aproximação:
         vetar exige `sim_negativa >= sim_positiva`, e uma candidata só existe
@@ -132,9 +154,7 @@ class ProductRepository:
         # catálogo inteiro para este texto. O `%` mantém a leitura no índice
         # GIN, então isto não varre a tabela de termos excluídos.
         sim_negativa = (
-            select(
-                func.coalesce(func.max(func.similarity(ProductExcludedTerm.term_normalized, alias_normalized)), 0.0)
-            )
+            select(func.coalesce(func.max(func.similarity(ProductExcludedTerm.term_normalized, alias_normalized)), 0.0))
             .where(ProductExcludedTerm.term_normalized.bool_op("%")(alias_normalized))
             .scalar_subquery()
         )
@@ -149,12 +169,22 @@ class ProductRepository:
         )
         result = await self._session.execute(stmt)
 
+        categoria_consulta = normalize_alias(category) if category else ""
+
         melhor: TrigramMatch | None = None
         vetadas: list[ProductCatalog] = []
         for product, sim, melhor_negativa in result.all():
+            # Candidata desqualificada vai para o passo 3 na lista de
+            # prioridade, porque é justamente ela que o LLM tem de julgar.
             if float(melhor_negativa) >= float(sim):
-                # Candidata desqualificada: vai para o passo 3 na lista de
-                # prioridade, porque é justamente ela que o LLM tem de julgar.
+                vetadas.append(product)
+                continue
+            categoria_entidade = normalize_alias(product.category) if product.category else ""
+            if categoria_consulta and categoria_entidade and categoria_consulta != categoria_entidade:
+                logger.info(
+                    f"Categoria divergente para {alias_normalized!r}: consulta {category!r} x "
+                    f"{product.canonical_title!r} {product.category!r}; escalando para o LLM"
+                )
                 vetadas.append(product)
                 continue
             if melhor is None:
@@ -244,8 +274,10 @@ class ProductRepository:
             }
             for normalizado, superficie in termos.items()
         ]
-        stmt = pg_insert(ProductExcludedTerm).values(linhas).on_conflict_do_nothing(
-            constraint="uq_product_excluded_terms_entity_term"
+        stmt = (
+            pg_insert(ProductExcludedTerm)
+            .values(linhas)
+            .on_conflict_do_nothing(constraint="uq_product_excluded_terms_entity_term")
         )
         result = cast(CursorResult[Any], await self._session.execute(stmt))
         return int(result.rowcount or 0)
@@ -335,9 +367,7 @@ class ProductRepository:
 
         if category:
             result = await self._session.execute(
-                base.where(ProductCatalog.category == category)
-                .order_by(ProductCatalog.created_at.desc())
-                .limit(limite)
+                base.where(ProductCatalog.category == category).order_by(ProductCatalog.created_at.desc()).limit(limite)
             )
             for produto in result.scalars():
                 if produto.entity_key in vistos:
@@ -346,9 +376,7 @@ class ProductRepository:
                 vistos.add(produto.entity_key)
 
         if len(selecionadas) < limite:
-            result = await self._session.execute(
-                base.order_by(ProductCatalog.created_at.desc()).limit(limite * 2)
-            )
+            result = await self._session.execute(base.order_by(ProductCatalog.created_at.desc()).limit(limite * 2))
             for produto in result.scalars():
                 if produto.entity_key in vistos:
                     continue
