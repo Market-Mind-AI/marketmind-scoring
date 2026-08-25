@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.product_alias import ProductAlias
 from app.repositories.product_repository import ProductRepository
 from app.services.catalog_service import CatalogService
+from app.utils.text import normalize_alias
 
 
 def _sem_match() -> AsyncMock:
@@ -107,3 +108,44 @@ async def test_banco_recusa_alias_vazio(db_session: AsyncSession) -> None:
     with pytest.raises(Exception):  # IntegrityError da CHECK
         await repo.create_alias(alias_normalized="", entity_key=entidade.entity_key, source="test")
     await db_session.rollback()
+
+
+async def test_backfill_poda_alias_derivado_obsoleto(db_session: AsyncSession) -> None:
+    """O normalizador antigo TRUNCAVA termo de escrita mista: `Ninja エアフライヤー`
+    virava o alias `ninja`. Dez marcas isoladas ficaram assim apontando para a
+    air fryer — e marca isolada casa por igualdade exata, no passo 1, onde o
+    veto não roda. O backfill reconcilia: o que a curadoria atual não produz
+    mais é apagado."""
+    sufixo = uuid.uuid4().hex[:6]
+    repo = ProductRepository(db_session)
+    entidade = await repo.create_entity(
+        canonical_title=f"air fryer {sufixo}",
+        localized_markets={
+            "JPN": {
+                "primary_name": f"Ninja エアフライヤー{sufixo}",
+                "search_terms": [f"Ninja エアフライヤー{sufixo}"],
+                "excluded_terms": [],
+                "confidence": 0.9,
+            }
+        },
+    )
+    # O que a normalização antiga teria gravado.
+    await repo.create_alias(
+        alias_normalized=f"ninja{sufixo}", entity_key=entidade.entity_key, source="localized_market"
+    )
+    # E um alias de consulta real, que NUNCA pode ser podado.
+    await repo.create_alias(
+        alias_normalized=f"consulta real {sufixo}", entity_key=entidade.entity_key, source="analyze"
+    )
+    await db_session.commit()
+
+    await CatalogService(db_session, matcher=_sem_match()).backfill_terms()
+
+    donos = await repo.existing_alias_owners(
+        {f"ninja{sufixo}", f"consulta real {sufixo}", normalize_alias(f"Ninja エアフライヤー{sufixo}")}
+    )
+    assert f"ninja{sufixo}" not in donos, "alias derivado truncado tem de ser podado"
+    assert (
+        donos.get(f"consulta real {sufixo}") == entidade.entity_key
+    ), "alias de consulta real é evidência, nunca podado"
+    assert donos.get(normalize_alias(f"Ninja エアフライヤー{sufixo}")) == entidade.entity_key

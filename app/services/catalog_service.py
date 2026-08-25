@@ -228,6 +228,29 @@ class CatalogService:
             entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="created"
         )
 
+    async def _podar_termos_derivados(self, entity: ProductCatalog) -> int:
+        """Remove da entidade os termos derivados que a curadoria atual não
+        gera mais. As formas válidas são recalculadas do zero a partir de
+        `localized_markets` e do `canonical_title`, com o normalizador vigente."""
+        aliases_validos = {normalize_alias(entity.canonical_title)}
+        excluidos_validos: set[str] = set()
+        for market in (entity.localized_markets or {}).values():
+            if not isinstance(market, dict):
+                continue
+            for termo in as_term_list(market.get("search_terms")):
+                aliases_validos.add(normalize_alias(termo))
+            for termo in as_term_list(market.get("excluded_terms")):
+                excluidos_validos.add(normalize_alias(termo))
+        aliases_validos.discard("")
+        excluidos_validos.discard("")
+
+        apagados = await self._repo.prune_derived_terms(
+            entity_key=entity.entity_key, aliases=aliases_validos, excluidos=excluidos_validos
+        )
+        if apagados:
+            logger.info(f"Podados {apagados} termos derivados obsoletos de {entity.canonical_title!r}")
+        return apagados
+
     async def _gravar_alias(self, alias_normalized: str, entity_key: uuid.UUID, source: str) -> None:
         """Grava o alias da consulta, a menos que ela não tenha forma normalizada.
 
@@ -256,6 +279,13 @@ class CatalogService:
         Os dois lados são preenchidos na mesma passada: rodar o backfill só dos
         positivos ligaria as 44 fusões medidas sem a guarda que as impede.
 
+        RECONCILIA, não só acrescenta: o que a curadoria atual não produz mais
+        é apagado (ver `_podar_termos_derivados`). Sem isso, uma mudança na
+        regra de normalização deixa para trás aliases que ninguém consegue
+        explicar — foi o que aconteceu com o normalizador antigo, que truncava
+        termo de escrita mista e gravou dez marcas isoladas (`philips`,
+        `ninja`, `cosori`) apontando para a air fryer.
+
         Em lotes, com commit por lote e paginação por chave. Uma transação
         única sobre o catálogo inteiro seguraria locks em `product_aliases`
         durante todo o backfill — e é a tabela do caminho quente de QUALQUER
@@ -263,7 +293,7 @@ class CatalogService:
         uma interrupção também não perde o que já foi gravado: reexecutar é
         idempotente (`ON CONFLICT DO NOTHING`).
         """
-        relatorio = {"entidades": 0, "aliases": 0, "excluidos": 0}
+        relatorio = {"entidades": 0, "aliases": 0, "excluidos": 0, "obsoletos": 0}
         ultima: uuid.UUID | None = None
         while True:
             entidades = await self._repo.list_entities_with_markets(after=ultima, limit=batch_size)
@@ -272,6 +302,7 @@ class CatalogService:
             for entidade in entidades:
                 relatorio["aliases"] += await self._index_localized_terms(entidade, entidade.localized_markets)
                 relatorio["excluidos"] += await self._index_excluded_terms(entidade, entidade.localized_markets)
+                relatorio["obsoletos"] += await self._podar_termos_derivados(entidade)
                 relatorio["entidades"] += 1
             ultima = entidades[-1].entity_key
             await self._session.commit()

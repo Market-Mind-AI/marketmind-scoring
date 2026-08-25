@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
+from sqlalchemy import true as sa_true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -272,6 +273,37 @@ class ProductRepository:
             stmt = stmt.where(ProductCatalog.entity_key > after)
         result = await self._session.execute(stmt)
         return list(result.scalars())
+
+    async def prune_derived_terms(self, *, entity_key: uuid.UUID, aliases: set[str], excluidos: set[str]) -> int:
+        """Apaga alias e termo excluído DERIVADOS que a curadoria atual não
+        produz mais. Só toca em `source = "localized_market"`.
+
+        Alias vindo de `analyze` ou `text_identification` nunca é apagado: veio
+        de uma consulta real de usuário, é evidência, não dado derivado.
+
+        Existe porque o normalizador antigo TRUNCAVA termo de escrita mista em
+        vez de preservá-lo — `Ninja エアフライヤー` virava o alias `ninja`,
+        `SK매직 에어프라이어` virava `sk`. Dez marcas isoladas ficaram assim
+        apontando para a air fryer, e marca isolada é o pior alias possível:
+        casa por igualdade exata, no passo 1, onde o veto do passo 2 nem roda.
+        Consultar `philips` (qualquer produto Philips) resolvia para air fryer.
+        """
+        apagados = 0
+        stmt_alias = delete(ProductAlias).where(
+            ProductAlias.entity_key == entity_key,
+            ProductAlias.source == "localized_market",
+            ProductAlias.alias_normalized.notin_(aliases) if aliases else sa_true(),
+        )
+        resultado = cast(CursorResult[Any], await self._session.execute(stmt_alias))
+        apagados += int(resultado.rowcount or 0)
+
+        stmt_excl = delete(ProductExcludedTerm).where(
+            ProductExcludedTerm.entity_key == entity_key,
+            ProductExcludedTerm.term_normalized.notin_(excluidos) if excluidos else sa_true(),
+        )
+        resultado = cast(CursorResult[Any], await self._session.execute(stmt_excl))
+        apagados += int(resultado.rowcount or 0)
+        return apagados
 
     async def list_match_candidates(
         self, *, category: str | None = None, priority: list[ProductCatalog] | None = None
