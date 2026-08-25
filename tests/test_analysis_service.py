@@ -47,6 +47,23 @@ def _mos_result(country: str) -> MosResultResponse:
     )
 
 
+def _mos_excluded(country: str, motivo: str) -> MosResultResponse:
+    """Como o compute_mos devolve um país sem dado: sem MOS, com o motivo
+    (Cap. 5 §5.3 — nunca some em silêncio)."""
+    linha = _mos_result(country)
+    return linha.model_copy(
+        update={
+            "mos": None,
+            "mos_before_cap": None,
+            "topsis_score": None,
+            "availability_status": "unavailable",
+            "excluded_reason": motivo,
+            "mos_interpretation": None,
+            "explanation": None,
+        }
+    )
+
+
 def _patched_service(
     *, all_covered: bool, missing_terms: list[str] | None = None, related_exists: bool = True
 ) -> tuple[AsyncMock, dict[str, AsyncMock]]:
@@ -201,9 +218,7 @@ async def test_run_happy_path_marks_done_with_result() -> None:
     # compute_all runs for the requested market (USA) AND the off-request
     # reference candidate (BRA), which is scored for the champion benchmark.
     assert mocks["indicator_engine"].compute_all.await_count == 2
-    mocks["mos_engine"].compute_mos.assert_any_await(
-        entity_key=_ENTITY_KEY, countries=["USA"], period_key="2026-07"
-    )
+    mocks["mos_engine"].compute_mos.assert_any_await(entity_key=_ENTITY_KEY, countries=["USA"], period_key="2026-07")
     mocks["coverage_service"].check_or_collect.assert_not_awaited()  # everything already covered
     mocks["analysis_repo"].mark_done.assert_awaited_once()
     result_arg = mocks["analysis_repo"].mark_done.call_args.kwargs["result"]
@@ -244,6 +259,7 @@ async def test_off_request_champion_is_surfaced_and_crowned() -> None:
     it is appended to the results, flagged requested=False + is_champion=True, and
     the requested market keeps requested=True (crowned only if it's the top)."""
     session, mocks = _patched_service(all_covered=True)
+
     # BRA (candidate) scores higher than requested USA → BRA is the champion.
     def _mos_by_country(*, entity_key: object, countries: list[str], period_key: str) -> list[MosResultResponse]:
         out = []
@@ -391,12 +407,38 @@ async def test_no_demand_collection_when_terms_already_cached() -> None:
     assert by_code == {}
 
 
-async def test_run_aborts_when_data_incomplete_never_partial_mos() -> None:
-    # Completeness gate: if any requested country is missing a mandatory
-    # indicator after collection, the whole analysis fails — no partial MOS.
+async def test_pais_incompleto_ganha_segunda_coleta_antes_de_ser_excluido() -> None:
+    """Até 2026-08-25 um país incompleto derrubava a ANÁLISE INTEIRA. Agora ele
+    ganha uma segunda passada de coleta e recálculo — que pega falha transitória
+    de coletor e é no-op quando o dado realmente não existe."""
     session, mocks = _patched_service(all_covered=True)
     mocks["mos_engine"].find_incomplete_countries = AsyncMock(
-        return_value={"USA": "Missing mandatory indicator(s): trend_score"}
+        side_effect=[{"USA": "Missing mandatory indicator(s): trend_score"}, {}]
+    )
+    chamadas_antes = mocks["indicator_engine"].compute_all.await_count
+    try:
+        service = AnalysisService(session)
+        await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    assert mocks["indicator_engine"].compute_all.await_count > chamadas_antes, "recalculou o país incompleto"
+    assert mocks["mos_engine"].find_incomplete_countries.await_count == 2, "reconferiu depois da 2ª passada"
+    mocks["analysis_repo"].mark_done.assert_awaited_once()
+    mocks["analysis_repo"].mark_failed.assert_not_awaited()
+
+
+async def test_pais_sem_dado_e_excluido_e_os_outros_sao_entregues() -> None:
+    """O que sobra incompleto é excluído COM MOTIVO e viaja no resultado — o
+    relatório diz quem ficou de fora e por quê. Os demais são entregues."""
+    session, mocks = _patched_service(all_covered=True)
+    mocks["mos_engine"].find_incomplete_countries = AsyncMock(
+        return_value={"BRA": "Missing mandatory indicator(s): growth_score"}
+    )
+    mocks["mos_engine"].compute_mos = AsyncMock(
+        return_value=[_mos_result("USA"), _mos_excluded("BRA", "Missing mandatory indicator(s): growth_score")]
     )
     try:
         service = AnalysisService(session)
@@ -406,9 +448,35 @@ async def test_run_aborts_when_data_incomplete_never_partial_mos() -> None:
             if key.startswith("_patcher_"):
                 value.stop()
 
-    mocks["mos_engine"].compute_mos.assert_not_awaited()  # never computed on partial data
+    mocks["analysis_repo"].mark_done.assert_awaited_once()
+    resultado = mocks["analysis_repo"].mark_done.call_args.kwargs["result"]
+    por_pais = {linha["country"]: linha for linha in resultado}
+    assert por_pais["USA"]["mos"] is not None
+    assert por_pais["BRA"]["mos"] is None
+    assert "growth_score" in por_pais["BRA"]["excluded_reason"]
+
+
+async def test_falha_somente_quando_nenhum_pais_pode_ser_pontuado() -> None:
+    """O único caso em que não há mais o que fazer."""
+    session, mocks = _patched_service(all_covered=True)
+    mocks["mos_engine"].find_incomplete_countries = AsyncMock(
+        return_value={"USA": "Missing mandatory indicator(s): trend_score"}
+    )
+    mocks["mos_engine"].compute_mos = AsyncMock(
+        return_value=[_mos_excluded("USA", "Missing mandatory indicator(s): trend_score")]
+    )
+    try:
+        service = AnalysisService(session)
+        await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
     mocks["analysis_repo"].mark_failed.assert_awaited_once()
-    assert "partial data" in mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+    mensagem = mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+    assert "no country could be scored" in mensagem
+    assert "trend_score" in mensagem, "a mensagem tem de dizer o motivo, não só que falhou"
     mocks["analysis_repo"].mark_done.assert_not_awaited()
 
 

@@ -251,29 +251,70 @@ class AnalysisService:
             # is_closed immutability of already-locked periods.
             await self._weight_calibration.calibrate(period_key=period_key)
 
-            # Completeness gate (user principle 2026-07-11): never compute a MOS
-            # on partial data. Every requested country must carry the full,
-            # uniform mandatory indicator set (same 0-100 ruler for all) before
-            # any MOS is produced — otherwise the whole analysis fails loudly
-            # rather than returning an asymmetric/partial ranking. Reliable
-            # collection (retry + DataForSEO live fallback) is what makes this
-            # gate pass; it is never satisfied by skipping a signal.
+            # Completeness (princípio do usuário de 2026-07-11): o MOS nunca sai
+            # de dado parcial. Todo país pontuado carrega o mesmo conjunto de
+            # indicadores obrigatórios, na mesma régua 0-100 — é isso que mantém
+            # os scores comparáveis entre si.
+            #
+            # Até 2026-08-25 um país incompleto derrubava a ANÁLISE INTEIRA.
+            # Aconteceu em produção (e152761b, `3D printer filament`): três
+            # países perderam growth/stability por uma inconsistência de leitura
+            # já corrigida (ver indicators/pytrends._demand_rows) e a análise
+            # inteira morreu — com o volume de demanda dos três já calculado.
+            #
+            # A regra passou a ser: esgotar o que dá para fazer, e só falhar
+            # quando não sobrar nada. Em ordem —
+            #   1. um país incompleto ganha uma segunda passada de coleta e
+            #      recálculo (pega falha transitória de coletor; é no-op quando
+            #      o dado realmente não existe, porque a coleta é incremental
+            #      por termo);
+            #   2. o que continuar incompleto é EXCLUÍDO com motivo pelo
+            #      compute_mos — Cap. 5 §5.3, "never silently drops the
+            #      country" — e a linha de exclusão viaja no resultado, então
+            #      o relatório diz quem ficou de fora e por quê;
+            #   3. a análise só falha se NENHUM país puder ser pontuado.
+            # A comparabilidade continua intacta: quem é pontuado carrega o
+            # conjunto completo. O que mudou é que um país sem dado não leva os
+            # outros junto.
             if entity_key is not None:
                 incomplete = await self._mos_engine.find_incomplete_countries(
                     entity_key=entity_key, countries=countries, period_key=period_key
                 )
                 if incomplete:
-                    detail = "; ".join(f"{country}: {reason}" for country, reason in incomplete.items())
-                    raise MarketMindCoreError(
-                        "Analysis aborted — the MOS is never computed on partial data. "
-                        f"Incomplete after collection: {detail}"
+                    logger.warning(
+                        f"Incompletos após a 1ª coleta: {incomplete}. Tentando uma segunda passada antes de excluir."
                     )
+                    for country_iso3 in incomplete:
+                        await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
+                        await self._indicator_engine.compute_all(
+                            country_iso3=country_iso3,
+                            entity_key=entity_key,
+                            period_key=period_key,
+                            demand_ceiling=demand_ceiling,
+                        )
+                    incomplete = await self._mos_engine.find_incomplete_countries(
+                        entity_key=entity_key, countries=countries, period_key=period_key
+                    )
+                    if incomplete:
+                        detalhe = "; ".join(f"{c}: {motivo}" for c, motivo in incomplete.items())
+                        logger.warning(f"Excluídos do MOS por dado ausente: {detalhe}")
 
             mos_results = (
                 await self._mos_engine.compute_mos(entity_key=entity_key, countries=countries, period_key=period_key)
                 if entity_key is not None
                 else []
             )
+
+            # Só agora se sabe se sobrou alguma coisa. Nenhum país pontuável é o
+            # único caso em que não há mais o que fazer.
+            if entity_key is not None and not any(r.mos is not None for r in mos_results):
+                motivos = (
+                    "; ".join(f"{r.country}: {r.excluded_reason or 'sem dado'}" for r in mos_results)
+                    or "nenhum país avaliado"
+                )
+                raise MarketMindCoreError(
+                    "Analysis aborted — no country could be scored, so there is no ranking to return. " + motivos
+                )
 
             # Reference "champion" (2026-07-27): the product's best-MOS market
             # among the enrichment LLM's reference candidates. MOS uses fixed
@@ -316,8 +357,10 @@ class AnalysisService:
                     # requested market beats it, there is nothing to surface —
                     # the caller already has the product's best market in their
                     # own list.
-                    beats_requested = cached_country is not None and cached_mos is not None and (
-                        best_requested is None or float(cached_mos) > float(best_requested.mos)
+                    beats_requested = (
+                        cached_country is not None
+                        and cached_mos is not None
+                        and (best_requested is None or float(cached_mos) > float(best_requested.mos))
                     )
 
                     if beats_requested:
@@ -449,9 +492,7 @@ class AnalysisService:
                     await self._analysis_repo.set_explanation(analysis_request, narrative)
                     await self._session.commit()
                 except Exception:  # noqa: BLE001 — the answer is already delivered; nothing here may undo it
-                    logger.exception(
-                        f"AnalysisRequest {request_id} is done, but attaching its narrative failed"
-                    )
+                    logger.exception(f"AnalysisRequest {request_id} is done, but attaching its narrative failed")
                     await self._session.rollback()
         except Exception as exc:  # noqa: BLE001 — background task boundary, must never crash the process
             logger.exception(f"AnalysisRequest {request_id} failed")
@@ -467,16 +508,16 @@ class AnalysisService:
         import json
         import httpx
         from app.core.config import settings
-        
+
         analysis_request = await self._analysis_repo.get(request_id)
         if analysis_request is None:
             logger.warning(f"AnalysisRequest {request_id} not found")
             return
-            
+
         try:
             await self._analysis_repo.mark_running(analysis_request)
             await self._session.commit()
-            
+
             payload = {
                 "analysis_id": str(request_id),
                 "product_description": analysis_request.user_prompt or (analysis_request.canonical_title or ""),
@@ -485,23 +526,25 @@ class AnalysisService:
                 "enrichment_results": [],
                 "mos_score": {},
                 "report": {},
-                "errors": []
+                "errors": [],
             }
-            
+
             async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("POST", f"{settings.orchestrator_api_base_url}/run-analysis", json=payload) as response:
+                async with client.stream(
+                    "POST", f"{settings.orchestrator_api_base_url}/run-analysis", json=payload
+                ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             data = json.loads(line[6:])
                             logger.info(f"Orchestrator event received: {list(data.keys())}")
-                            
+
                             if "report" in data and "narrative" in data["report"]:
                                 await self._analysis_repo.mark_done(
                                     analysis_request,
                                     result=[],
                                     explanation=data["report"]["narrative"],
-                                    breakdown={"status": "done via orchestrator"}
+                                    breakdown={"status": "done via orchestrator"},
                                 )
                                 await self._session.commit()
                                 break
@@ -512,7 +555,6 @@ class AnalysisService:
             if failed_request is not None:
                 await self._analysis_repo.mark_failed(failed_request, error_message=str(exc))
                 await self._session.commit()
-
 
     async def _search_language(self, iso3: str) -> str | None:
         country = await self._country_repo.get_by_iso3(iso3)
@@ -858,6 +900,4 @@ class AnalysisService:
                 logger.warning(f"Reference candidate {iso3} could not be scored (skipped): {exc}")
         if not attempted:
             return []
-        return await self._mos_engine.compute_mos(
-            entity_key=entity_key, countries=attempted, period_key=period_key
-        )
+        return await self._mos_engine.compute_mos(entity_key=entity_key, countries=attempted, period_key=period_key)

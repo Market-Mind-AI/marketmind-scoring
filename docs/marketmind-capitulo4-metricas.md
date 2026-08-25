@@ -75,7 +75,23 @@ _Histórico (prosa Trends, superseded pelo banner acima):_
 
 Endpoints usados para el MOS: `interest_over_time` (Growth + Demand Stability), `interest_by_country` (Trend Score, worldwide), `interest_by_region_worldwide` (Regional Demand, worldwide), `related_queries` (solo `top`, Search Intent). `suggestions` es identificación de producto (Fase 2, no entra al MOS). `related_topics` llegó null/null. `trending_rss` es general del país, no del producto. `categories` es catálogo auxiliar.
 
-> **PRINCIPIO DE COMPLETUD 2026-07-11 (decisión del usuario, transversal a todo el MOS):** los 5 indicadores de Demanda son **obligatorios** — el MOS jamás se calcula sobre datos parciales. Todos los países de una consulta llevan el MISMO conjunto de indicadores en la MISMA regla 0-100; es eso lo que los hace comparables. La recolección debe COMPLETARSE para todos los países antes de calcular cualquier score/MOS (portón de completud en `analysis_service`); si algo falta tras la recolección, la consulta **falla por entero** en vez de devolver un ranking parcial/asimétrico. Los límites de tasa de Google se resuelven con reintento + el fallback DataForSEO (live), nunca saltándose una señal. La Demanda es la media simple de sus 5 señales (todas presentes → conjunto uniforme → media comparable).
+> **PRINCIPIO DE COMPLETUD 2026-07-11 (decisión del usuario, transversal a todo el MOS):** los 5 indicadores de Demanda son **obligatorios** — el MOS jamás se calcula sobre datos parciales. Todos los países de una consulta llevan el MISMO conjunto de indicadores en la MISMA regla 0-100; es eso lo que los hace comparables. La recolección debe COMPLETARSE para todos los países antes de calcular cualquier score/MOS (portón de completud en `analysis_service`); si algo falta tras la recolección, el país **queda excluido con su motivo** y los demás se entregan (ver la revisión de 2026-08-25 más abajo). Los límites de tasa de Google se resuelven con reintento + el fallback DataForSEO (live), nunca saltándose una señal. La Demanda es la media simple de sus 5 señales (todas presentes → conjunto uniforme → media comparable).
+>
+> **REVISIÓN 2026-08-25 — resiliencia.** El portón se aplicaba a la consulta ENTERA: un país incompleto mataba
+> el análisis completo. Ocurrió en producción (análisis `e152761b`, "3D printer filament"): BRA, PRT y ESP
+> perdieron `growth_score` y `demand_stability_score` y el análisis murió — con el Demand Volume de los tres ya
+> calculado. La causa era una inconsistencia de lectura, no falta de dato: las cuatro señales de Demanda no leían
+> el mismo conjunto de términos (sólo el Demand Volume incorporaba la expansión de keywords relacionadas), y un
+> producto cuyos términos CURADOS no tienen volumen en el país se quedaba sin serie mensual. Corregido: las tres
+> señales leen ahora el mismo conjunto.
+>
+> El principio de completud NO cambia — el MOS sigue sin calcularse sobre datos parciales y todo país puntuado
+> lleva el conjunto uniforme. Lo que cambia es el alcance del fallo, en tres capas: (1) un país incompleto recibe
+> una segunda pasada de recolección y recálculo; (2) lo que siga incompleto se **excluye con su motivo**, que es
+> lo que el Cap. 5 §5.3 ya prescribía ("never silently drops the country") y viaja en el resultado para que el
+> informe diga quién quedó fuera y por qué; (3) el análisis sólo falla cuando **ningún** país puede puntuarse.
+> La comparabilidad queda intacta: los puntuados comparten el conjunto completo. Lo que deja de ocurrir es que
+> un país sin dato se lleve por delante a los demás.
 >
 > **Keyword per-país = término GANADOR (2026-07-11):** las señales per-país (Growth/Demand Stability/Regional Demand/Search Intent) se consultan (geo=XX) con el término local que **ganó** el arbitraje mundial — el de mayor valor en `interest_by_country` para ese país — no con el primer candidato del LLM. Motivo: el nombre local más específico (p.ej. "presunto de porco preto") sirve para el arbitraje mundial pero puede ser demasiado nicho para tener una serie temporal per-país propia (Google devuelve vacío/404); el ganador (p.ej. "presunto pata negra") sí tiene volumen. El dato ya nos dijo cuál es el término real — se reutiliza ese veredicto en todas las consultas per-país (`app/services/indicators/pytrends.py::best_localized_term`).
 
