@@ -1,16 +1,20 @@
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import EntityNotFoundError, MarketMindCoreError
 from app.db.session import get_session
 from app.schemas.admin import (
     BackfillTermsResponse,
+    BrandSplitRequest,
+    BrandSplitResponse,
     EnrichmentReportResponse,
     MergeReportResponse,
     ReconciliationReportResponse,
     RefreshWeightsResponse,
 )
+from app.services.brand_split_service import BrandSplitService
 from app.services.catalog_service import CatalogService
 from app.services.enrichment_service import EnrichmentService
 from app.services.merge_service import MergeService
@@ -89,6 +93,32 @@ async def backfill_terms(session: AsyncSession = Depends(get_session)) -> Backfi
 async def merge_catalog(session: AsyncSession = Depends(get_session)) -> MergeReportResponse:
     report = await MergeService(session).merge_duplicates()
     return MergeReportResponse(merged_pairs=report.merged_pairs)
+
+
+@router.post(
+    "/catalog/split-brand",
+    response_model=BrandSplitResponse,
+    summary="Separa uma entidade genérica cujo vocabulário é de uma marca",
+    description=(
+        "Conserta o estado legado que a partição da identidade (migration 031) impede de acontecer de "
+        "novo mas não desfaz: uma entidade com título genérico e vocabulário de uma marca só. Produz três "
+        "entidades — a família LIMPA (dona do alias genérico), a entidade da marca (com todo o vocabulário "
+        "curado, termos excluídos, categoria e campeão) e a original APOSENTADA via merged_into, que "
+        "mantém indicator_values e mos_results para os relatórios já entregues continuarem abrindo. "
+        "Não recoleta nada: as linhas de demanda seguem em cache no coletor. "
+        "Ver app/services/brand_split_service.py."
+    ),
+)
+async def split_brand(request: BrandSplitRequest, session: AsyncSession = Depends(get_session)) -> BrandSplitResponse:
+    try:
+        report = await BrandSplitService(session).split(
+            entity_key=request.entity_key, brand=request.brand, generic_title=request.generic_title
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MarketMindCoreError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return BrandSplitResponse(**asdict(report))
 
 
 @router.post(
