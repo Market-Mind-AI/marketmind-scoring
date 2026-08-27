@@ -89,8 +89,9 @@ def _com_share_da_marca(categoria: RawIndicatorResult, *, brand_raw: RawIndicato
         categoria.direction,
         categoria.calculation_window,
         categoria.availability_status,
-        f"{categoria.notes} for the category's GENERIC terms; {comparacao} — a small fraction of a large "
-        f"category means the market exists and this brand is not in it, not that demand is absent",
+        f"{categoria.notes} for the category's GENERIC terms; {comparacao} — both sides count CURATED terms "
+        f"only, so they are comparable; a small fraction of a large category means the market exists and "
+        f"this brand is not in it, not that demand is absent",
     )
 
 
@@ -338,7 +339,24 @@ class IndicatorEngine:
                 outras_marcas=todas_as_marcas,
                 expandir=False,
             )
-            categoria = _com_share_da_marca(categoria, brand_raw=trend)
+            # A razão compara IGUAL com IGUAL: os termos curados dos dois lados.
+            # O Demand Volume pontuado da marca soma a expansão (é a régua dela),
+            # e a categoria não soma — então usar aquele número aqui compararia
+            # "curados + 15 relacionadas" contra "curados". Medido ao vivo em
+            # 27/08 no Reino Unido, a diferença troca a conclusão: 20.980 x
+            # 18.460 diz "a marca é maior que a categoria", enquanto os curados
+            # dos dois lados dizem outra coisa. É leitura de linhas já em cache,
+            # sem coleta nova.
+            marca_curada = await pytrends_indicators.compute_trend_score(
+                search_terms,
+                location,
+                period_key,
+                seed_terms=seed_terms,
+                language=language,
+                outras_marcas=outras_marcas,
+                expandir=False,
+            )
+            categoria = _com_share_da_marca(categoria, brand_raw=marca_curada)
             indicator_raws.append((IndicatorCode.CATEGORY_VOLUME_SCORE, categoria))
 
         saved: list[IndicatorValue] = []

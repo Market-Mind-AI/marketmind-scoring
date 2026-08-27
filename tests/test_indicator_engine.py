@@ -192,7 +192,8 @@ async def test_categoria_e_medida_como_contexto_ao_lado_da_marca(db_session: Asy
 
     engine = IndicatorEngine(db_session)
     # A primeira chamada é a da marca, a segunda a da categoria.
-    with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria]):
+    # marca (com expansão) -> categoria -> marca CURADA, que é a que entra na razão
+    with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria, volume_marca]):
         results = await engine.compute_all(
             country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=1_000.0
         )
@@ -264,7 +265,7 @@ async def test_marca_maior_que_a_categoria_e_dita_como_razao(db_session: AsyncSe
         3_140.0, IndicatorDirection.DIRECT, "2026-08", AvailabilityStatus.AVAILABLE, "3,140 total monthly searches"
     )
     engine = IndicatorEngine(db_session)
-    with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria]):
+    with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria, volume_marca]):
         results = await engine.compute_all(
             country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=9_630.0
         )
@@ -274,3 +275,48 @@ async def test_marca_maior_que_a_categoria_e_dita_como_razao(db_session: AsyncSe
     assert "3.1x MORE than the generic category terms" in categoria
     assert "9,630 vs 3,140" in categoria
     assert "share" not in categoria.lower(), "share implica parte-de-um-todo que o denominador não é"
+
+
+async def test_razao_compara_termos_curados_dos_dois_lados(db_session: AsyncSession) -> None:
+    """O Demand Volume pontuado da marca soma a expansão (é a régua dela) e a
+    categoria não soma. Usar aquele número na razão compararia "curados + 15
+    relacionadas" contra "curados" — medido ao vivo no Reino Unido, isso dizia
+    "a marca é 1,1x MAIOR que a categoria" quando os curados dos dois lados
+    dizem o contrário."""
+    from app.domain.enums import IndicatorCode
+    from app.repositories.product_repository import ProductRepository
+
+    sufixo = uuid.uuid4().hex[:8]
+    repo = ProductRepository(db_session)
+    familia = await repo.create_entity(
+        canonical_title=f"single malt whisky {sufixo}",
+        localized_markets={"USA": {"primary_name": "single malt whisky", "search_terms": ["single malt whisky"]}},
+    )
+    marca = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
+    entidade = await repo.create_entity(
+        canonical_title=f"Cardhu single malt whisky {sufixo}",
+        localized_markets={"USA": {"primary_name": "cardhu", "search_terms": ["cardhu"]}},
+        brand_key=marca.brand_key,
+        generic_entity_key=familia.entity_key,
+    )
+    await db_session.commit()
+
+    def _raw(v: float) -> RawIndicatorResult:
+        return RawIndicatorResult(
+            v, IndicatorDirection.DIRECT, "2026-08", AvailabilityStatus.AVAILABLE, f"{v:,.0f} total monthly searches"
+        )
+
+    # Marca COM expansão 20.980; categoria 18.460; marca só com os curados 14.000.
+    engine = IndicatorEngine(db_session)
+    with _patched_country_level(), _patched_pytrends(trend=[_raw(20_980), _raw(18_460), _raw(14_000)]):
+        results = await engine.compute_all(
+            country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=20_980.0
+        )
+
+    por_codigo = {r.indicator_code: r for r in results if r.entity_key is not None}
+    # O score da marca segue usando o número COM expansão — a régua dela não muda.
+    assert float(por_codigo[IndicatorCode.TREND_SCORE.value].raw_value) == 20_980.0
+    # A razão usa os curados dos dois lados: 14.000 / 18.460 = 76%.
+    categoria = por_codigo[IndicatorCode.CATEGORY_VOLUME_SCORE.value].notes
+    assert "the brand is 76% of that (14,000 vs 18,460)" in categoria
+    assert "CURATED terms" in categoria
