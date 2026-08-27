@@ -185,6 +185,13 @@ class Settings(BaseSettings):
     # fonte é blip de segundos; longo depois porque uma queda real não se
     # resolve insistindo rápido.
     analysis_retry_max_backoff_seconds: int = 900
+    # Silêncio maior que isto significa que a análise morreu, não que está
+    # demorando: é mais que o passo mais longo entre dois batimentos (a
+    # cobertura de UM país). Quem varre para retomar respeita esta janela, então
+    # análise viva nunca é retomada em paralelo com ela mesma.
+    analysis_stale_after_seconds: int = 15 * 60
+    # De quanto em quanto tempo a varredura roda. Zero desliga (útil em teste).
+    analysis_sweep_interval_seconds: int = 5 * 60
 
     # Fase 2 — product catalog resolution pipeline (app/services/catalog_service.py).
     # A chave da OpenAI continua aqui porque `GptProvider` (app/services/llm/providers.py)

@@ -62,6 +62,11 @@ class AnalysisRequest(Base):
     # porque quem retoma depois de um restart precisa saber se ainda está
     # dentro do orçamento ou se o pedido já deveria ter falhado.
     deadline_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # Último sinal de vida (migration 034). Com D3 uma análise legítima fica
+    # horas em `running`, então o status sozinho não distingue quem está
+    # trabalhando de quem morreu com o pod. Atualizado a cada país coberto e a
+    # cada tentativa do laço de insistência.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
 

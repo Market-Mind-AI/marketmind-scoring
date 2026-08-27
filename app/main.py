@@ -1,5 +1,6 @@
+import asyncio
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,12 +17,21 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.db.external import dispose_all_external_engines
 from app.db.session import engine
+from app.services.analysis_resume_service import AnalysisResumeService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
+    # Análise que morreu com o processo anterior fica em `running` para sempre,
+    # e com a regra de "nada parcial sai" (D3) isso deixou de ser um registro
+    # feio para virar um pedido pago que nunca entrega. A varredura retoma o que
+    # está calado e encerra o que passou do prazo — ver analysis_resume_service.
+    varredura = asyncio.create_task(AnalysisResumeService().run_forever())
     yield
+    varredura.cancel()
+    with suppress(asyncio.CancelledError):
+        await varredura
     await engine.dispose()
     await dispose_all_external_engines()
     logger.info(f"Shutting down {settings.app_name}")

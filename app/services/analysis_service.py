@@ -183,6 +183,7 @@ class AnalysisService:
 
         try:
             await self._analysis_repo.mark_running(analysis_request)
+            analysis_request.heartbeat_at = utc_now()
             await self._session.commit()
 
             entity_key = analysis_request.entity_key
@@ -215,6 +216,10 @@ class AnalysisService:
 
             for country_iso3 in countries:
                 await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
+                # Sinal de vida por país: é o passo mais longo entre dois
+                # batimentos, e é o que a varredura usa para distinguir uma
+                # análise ocupada de uma que morreu com o pod.
+                await self._bater(analysis_request)
 
             period_key = current_month_period_key()
 
@@ -711,11 +716,17 @@ class AnalysisService:
             )
             await asyncio.sleep(espera)
 
+    async def _bater(self, analysis_request: AnalysisRequest) -> None:
+        """Marca que a análise ainda está viva. Ver analysis_resume_service."""
+        analysis_request.heartbeat_at = utc_now()
+        await self._session.commit()
+
     async def _anotar_progresso(self, analysis_request: AnalysisRequest, mensagem: str | None) -> None:
         """Grava no que a análise está esperando. Uma análise legítima
         insistindo numa fonte fora do ar pode levar horas, e sem esta frase ela
         é indistinguível de uma travada — para o usuário e para quem retomar."""
         analysis_request.progress = mensagem
+        analysis_request.heartbeat_at = utc_now()
         await self._session.commit()
         if mensagem:
             logger.info(f"AnalysisRequest {analysis_request.id}: {mensagem}")
