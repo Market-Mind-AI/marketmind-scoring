@@ -308,12 +308,29 @@ class IndicatorEngine:
         ]
 
         if category_terms:
-            # Sem veto de marcas aqui, ao contrário dos sinais da marca: a
-            # categoria inclui as concorrentes por definição. Quem procura
-            # "cardhu" está no mercado de whisky, e tirar isso subestimaria a
-            # escala contra a qual a marca deve ser lida.
+            # Veto de TODAS as marcas, inclusive a própria — ao contrário dos
+            # sinais da marca, onde o veto poupa a dela. Os termos curados da
+            # família já são genéricos por construção (o enriquecimento roda com
+            # `brand=None`), mas a EXPANSÃO dobra keywords relacionadas, e o
+            # portão de relevância deixa passar qualquer uma que contenha um
+            # termo aprovado: medido ao vivo em 27/08, a categoria da Espanha
+            # tinha somado `grant's scotch whisky` (720) e
+            # `chivas regal 12 premium scotch whisky precio` (40), porque as duas
+            # contêm "scotch whisky".
+            #
+            # Isso faria o número dizer outra coisa do que o rótulo promete. O
+            # denominador aqui existe para responder "o mercado em abstrato
+            # existe?", e só responde isso se for demanda SEM marca — a leitura
+            # que a narrativa faz dele ("a categoria é muito buscada e a marca
+            # não está nela") não sobrevive a um denominador feito de marcas.
+            todas_as_marcas = await self._product_repo.list_all_brand_names()
             categoria = await pytrends_indicators.compute_trend_score(
-                category_terms, location, period_key, seed_terms=seed_terms, language=language
+                category_terms,
+                location,
+                period_key,
+                seed_terms=seed_terms,
+                language=language,
+                outras_marcas=todas_as_marcas,
             )
             categoria = _com_share_da_marca(categoria, brand_raw=trend)
             indicator_raws.append((IndicatorCode.CATEGORY_VOLUME_SCORE, categoria))

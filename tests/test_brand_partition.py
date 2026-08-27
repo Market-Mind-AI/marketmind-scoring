@@ -244,3 +244,17 @@ async def test_resposta_expoe_marca_e_categoria_separadas(db_session: AsyncSessi
     # Produto genérico: nada de marca, e ele é a própria família.
     generico = await service.resolve(f"air fryer {sufixo}", source="test")
     assert generico.brand is None and generico.generic_title is None
+
+
+async def test_lista_de_todas_as_marcas_inclui_a_propria(db_session: AsyncSession) -> None:
+    """A medição da CATEGORIA veta TODAS as marcas, inclusive a do produto: ela é
+    o denominador que responde "o mercado em abstrato existe?", e só responde
+    isso se for demanda sem marca nenhuma. Diferente do veto dos sinais da
+    marca, que poupa a dela — ver list_other_brand_names."""
+    sufixo = uuid.uuid4().hex[:6]
+    cardhu, glenfiddich = _marca(f"Cardhu{sufixo}"), _marca(f"Glenfiddich{sufixo}")
+    db_session.add_all([cardhu, glenfiddich])
+    await db_session.commit()
+
+    todas = await ProductRepository(db_session).list_all_brand_names()
+    assert cardhu.name_normalized in todas and glenfiddich.name_normalized in todas

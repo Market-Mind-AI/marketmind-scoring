@@ -288,6 +288,17 @@ class ProductRepository:
         result = await self._session.execute(select(Brand.name_normalized).where(Brand.brand_key != brand_key))
         return [nome for nome in result.scalars().all() if nome]
 
+    async def list_all_brand_names(self) -> list[str]:
+        """Formas normalizadas de TODAS as marcas do cadastro.
+
+        Usada só na medição da CATEGORIA: ali o que se quer é a demanda
+        genérica, sem marca nenhuma — nem as concorrentes, nem a própria. É o
+        denominador contra o qual a demanda da marca é lida, e ele só responde
+        "o mercado existe?" se for de fato o mercado em abstrato.
+        """
+        result = await self._session.execute(select(Brand.name_normalized))
+        return [nome for nome in result.scalars().all() if nome]
+
     async def repoint_alias(self, alias: ProductAlias, entity_key: uuid.UUID) -> None:
         """Troca o dono de um alias.
 
