@@ -50,7 +50,14 @@ class AnalyzeAcceptedResponse(BaseModel):
 class AnalysisStatusResponse(BaseModel):
     request_id: uuid.UUID
     status: str  # "pending" | "running" | "done" | "failed"
+    # Com marca, canonical_title carrega a marca ("Cardhu single malt Scotch
+    # whisky"). `brand` e `category_title` vêm separados, lidos da entidade, para
+    # o relatório poder dizer "Cardhu · single malt Scotch whisky" e para a
+    # leitura do contexto de categoria (o sinal `category_volume_score` do
+    # breakdown) ter nome. Nulos numa análise de produto genérico.
     canonical_title: str | None
+    brand: str | None = None
+    category_title: str | None = None
     user_prompt: str | None = None  # the buyer's free-text prompt/question, echoed back for the UI
     result: list[dict[str, Any]] | None
     explanation: str | None = None  # LLM narrative of the ranking (best-effort; null if unavailable)

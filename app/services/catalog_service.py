@@ -124,18 +124,23 @@ def _merge_reference_candidates(
 
 @dataclass
 class _Resolvido:
-    """Saída de uma resolução dentro de uma partição: a entidade e por qual dos
-    quatro passos ela foi encontrada."""
+    """Saída de uma resolução dentro de uma partição: a entidade, por qual dos
+    quatro passos ela foi encontrada, e — quando é entidade de marca — a marca e
+    a família, que o chamador expõe separadas em vez de fatiar o título."""
 
     entity: ProductCatalog
     method: str
     match_score: float | None = None
+    marca: Brand | None = None
+    familia: ProductCatalog | None = None
 
 
 def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
     return CatalogResolveResponse(
         entity_key=resolvido.entity.entity_key,
         canonical_title=resolvido.entity.canonical_title,
+        brand=resolvido.marca.name if resolvido.marca is not None else None,
+        generic_title=resolvido.familia.canonical_title if resolvido.familia is not None else None,
         method=resolvido.method,
         match_score=resolvido.match_score,
     )
@@ -296,7 +301,7 @@ class CatalogService:
                     target_age_min=target_age_min,
                     target_age_max=target_age_max,
                 )
-                return _Resolvido(entity=entity, method="alias")
+                return _Resolvido(entity=entity, method="alias", marca=marca, familia=familia)
             logger.warning(
                 f"Alias {chave!r} pertence a {entity.canonical_title!r}, que está em outra partição de marca; "
                 f"resolvendo na partição correta e repontando"
@@ -327,7 +332,9 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            return _Resolvido(entity=entity, method="trigram", match_score=trigram.match.similarity)
+            return _Resolvido(
+                entity=entity, method="trigram", match_score=trigram.match.similarity, marca=marca, familia=familia
+            )
 
         # Passo 3: o LLM decide, entre os candidatos da MESMA partição. Só
         # chega aqui o que alias e trigram não resolveram — medido contra o
@@ -349,7 +356,7 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            return _Resolvido(entity=correspondente, method="llm")
+            return _Resolvido(entity=correspondente, method="llm", marca=marca, familia=familia)
 
         entity = await self._repo.create_entity(
             canonical_title=titulo,
@@ -363,7 +370,7 @@ class CatalogService:
         )
         await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao)
         await self._index_terms(entity, localized_markets)
-        return _Resolvido(entity=entity, method="created")
+        return _Resolvido(entity=entity, method="created", marca=marca, familia=familia)
 
     async def _atualizar(
         self,

@@ -267,6 +267,13 @@ class ProductRepository:
         logger.info(f"Marca nova no cadastro: {marca.name!r}")
         return marca
 
+    async def get_brand(self, brand_key: uuid.UUID | None) -> Brand | None:
+        """A marca desta entidade, ou None se ela está na partição genérica."""
+        if brand_key is None:
+            return None
+        result = await self._session.execute(select(Brand).where(Brand.brand_key == brand_key))
+        return result.scalar_one_or_none()
+
     async def list_other_brand_names(self, brand_key: uuid.UUID | None) -> list[str]:
         """Formas normalizadas de todas as marcas do cadastro MENOS esta.
 

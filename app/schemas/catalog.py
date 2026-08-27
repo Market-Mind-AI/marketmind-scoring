@@ -18,7 +18,19 @@ class CatalogResolveRequest(BaseModel):
 
 class CatalogResolveResponse(BaseModel):
     entity_key: uuid.UUID
+    # Com marca, o título carrega a marca ("Cardhu single malt Scotch whisky"):
+    # é a identidade da entidade que a análise mede, e é isso que o relatório
+    # mostra. `brand` e `generic_title` vêm separados para o frontend poder
+    # exibir "Produto: X · Marca: Y" sem ter que fatiar string.
     canonical_title: str
+    brand: str | None = None
+    generic_title: str | None = Field(
+        default=None,
+        description=(
+            "Título da entidade-família (a categoria genérica) quando esta entidade é de uma marca. "
+            "Nulo numa entidade genérica, que é a própria família."
+        ),
+    )
     method: str  # "alias" | "trigram" | "llm" | "created"
     # Exact meaning depends on method: trigram = pg_trgm similarity (0-1);
     # trigram = similaridade pg_trgm (0-1); alias/llm/created
@@ -38,6 +50,14 @@ class CatalogEntityResponse(BaseModel):
     google_mid: str | None
     google_type: str | None
     category: str | None
+    # A marca como PARTIÇÃO da identidade (migration 031) e a família genérica.
+    # Expostos porque são o que torna a entidade auditável de fora: foi olhando
+    # esta rota que se viu a entidade chamada `single malt Scotch whisky` com
+    # vocabulário 100% Cardhu.
+    brand: str | None = None
+    generic_entity_key: uuid.UUID | None = None
+    # SUPERADO por `brand` (ver ProductCatalog.brands): mantido enquanto o
+    # reparo do catálogo não roda, porque é o único ponteiro do estado legado.
     brands: list[str] = []
     merged_into: uuid.UUID | None
     aliases: list[ProductAliasItem]

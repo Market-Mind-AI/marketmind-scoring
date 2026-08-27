@@ -12,6 +12,7 @@ from app.db.models.analysis_request import AnalysisRequest
 from app.db.session import async_session_factory, get_session
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.mos_repository import MosRepository
+from app.repositories.product_repository import ProductRepository
 from app.schemas.analyze import AnalysisStatusResponse, AnalyzeAcceptedResponse, AnalyzeRequest
 from app.services.analysis_service import AnalysisService
 from app.services.catalog_service import CatalogService
@@ -55,11 +56,41 @@ async def _load_breakdown(session: AsyncSession, analysis_request: AnalysisReque
     )
 
 
-def _status_payload(analysis_request: AnalysisRequest, breakdown: dict[str, Any] | None) -> AnalysisStatusResponse:
+async def _identidade(session: AsyncSession, analysis_request: AnalysisRequest) -> tuple[str | None, str | None]:
+    """(marca, título da categoria) da entidade analisada.
+
+    O `canonical_title` gravado na análise já carrega a marca ("Cardhu single
+    malt Scotch whisky"), mas o relatório precisa das duas partes separadas —
+    para exibir "Cardhu · single malt Scotch whisky" e para dar nome ao sinal de
+    contexto `category_volume_score` do breakdown — e fatiar string para obter
+    isso seria frágil. Lido da entidade, que é onde a partição vive.
+    """
+    if analysis_request.entity_key is None:
+        return None, None
+    repo = ProductRepository(session)
+    entity = await repo.get_by_entity_key(analysis_request.entity_key)
+    if entity is None:
+        return None, None
+    marca = await repo.get_brand(entity.brand_key)
+    familia = await repo.get_by_entity_key(entity.generic_entity_key) if entity.generic_entity_key else None
+    return (
+        marca.name if marca is not None else None,
+        familia.canonical_title if familia is not None else None,
+    )
+
+
+def _status_payload(
+    analysis_request: AnalysisRequest,
+    breakdown: dict[str, Any] | None,
+    brand: str | None = None,
+    category_title: str | None = None,
+) -> AnalysisStatusResponse:
     return AnalysisStatusResponse(
         request_id=analysis_request.id,
         status=analysis_request.status,
         canonical_title=analysis_request.canonical_title,
+        brand=brand,
+        category_title=category_title,
         user_prompt=analysis_request.user_prompt,
         result=analysis_request.result,
         explanation=analysis_request.explanation,
@@ -92,8 +123,9 @@ async def analyze(
 ) -> AnalyzeAcceptedResponse:
     from app.core.config import settings
     catalog_service = CatalogService(session)
-    # Identidade pelo nome genérico; a marca é acumulada na entidade, não
-    # concatenada ao texto (ver catalog_service.resolve).
+    # A marca PARTICIONA a identidade: um pedido com marca resolve para a
+    # entidade daquela marca (título com a marca), com a família genérica
+    # ligada por trás. Ver catalog_service.resolve.
     resolved = await catalog_service.resolve(
         request.product_name,
         source="analyze",
@@ -146,7 +178,8 @@ async def get_analysis(request_id: str, session: AsyncSession = Depends(get_sess
         raise HTTPException(status_code=404, detail=f"Analysis request {request_id} not found")
 
     breakdown = await _load_breakdown(session, analysis_request)
-    return _status_payload(analysis_request, breakdown)
+    brand, category_title = await _identidade(session, analysis_request)
+    return _status_payload(analysis_request, breakdown, brand, category_title)
 
 
 @router.get(

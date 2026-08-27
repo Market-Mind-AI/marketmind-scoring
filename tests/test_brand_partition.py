@@ -226,3 +226,21 @@ async def test_lista_de_outras_marcas_exclui_a_propria(db_session: AsyncSession)
 
     # Produto sem marca: lista vazia, o veto não age (a categoria soma as marcas).
     assert await repo.list_other_brand_names(None) == []
+
+
+async def test_resposta_expoe_marca_e_categoria_separadas(db_session: AsyncSession) -> None:
+    """O relatório precisa das duas partes separadas — "Cardhu · single malt
+    Scotch whisky" — e fatiar o título para obter isso seria frágil. A resolução
+    devolve marca e título da família junto com o título da entidade."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    nome = f"single malt scotch whisky {sufixo}"
+
+    com_marca = await service.resolve(nome, source="test", brand=f"Cardhu{sufixo}")
+    assert com_marca.brand == f"Cardhu{sufixo}"
+    assert com_marca.generic_title == nome
+    assert com_marca.canonical_title == f"Cardhu{sufixo} {nome}"
+
+    # Produto genérico: nada de marca, e ele é a própria família.
+    generico = await service.resolve(f"air fryer {sufixo}", source="test")
+    assert generico.brand is None and generico.generic_title is None
