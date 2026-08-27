@@ -67,9 +67,15 @@ _FIXED_BOUNDS_INDICATORS = frozenset(
 # highest in the world, vs. India ~11% — reflects economic model, not
 # consumer-market quality). Never normalized, never enters a dimension;
 # raw_value is kept purely as LLM context. See marketmind_mos_engine.
+# Category Volume é o volume absoluto de busca da CATEGORIA do produto, medido
+# ao lado da marca para dar escala à narrativa. Não é normalizado porque não é
+# pontuado: a régua de demanda (o teto do mercado de referência) é da MARCA, e
+# aplicá-la aqui produziria um número que parece comparável ao Demand Volume
+# sem ser — os dois medem assuntos diferentes. Fica como raw_value + nota.
 _CONTEXT_ONLY_INDICATORS = frozenset(
     {
         IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE,
+        IndicatorCode.CATEGORY_VOLUME_SCORE,
     }
 )
 

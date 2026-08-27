@@ -39,6 +39,7 @@ _PACKET_INDICATORS: list[IndicatorCode] = [
     *DIMENSION_BY_INDICATOR,
     IndicatorCode.REGIONAL_DEMAND_SCORE,
     IndicatorCode.GOVERNMENT_EXPENDITURE_SCORE,
+    IndicatorCode.CATEGORY_VOLUME_SCORE,
 ]
 
 # --- demand-confidence guard (automated stand-in for human term curation) ---

@@ -50,6 +50,38 @@ from app.utils.period import current_month_period_key
 from app.utils.text import as_term_list
 
 
+def _com_share_da_marca(categoria: RawIndicatorResult, *, brand_raw: RawIndicatorResult) -> RawIndicatorResult:
+    """Acrescenta o share da marca dentro da categoria à nota do indicador de
+    contexto — determinístico, calculado aqui, nunca pedido ao LLM.
+
+    É a frase que a narrativa precisa para separar "mercado não existe" de
+    "mercado existe e a marca não está nele" (decisão D2: contexto, nunca sinal
+    pontuado). O share compara o volume da MARCA com o volume dos termos
+    GENÉRICOS da categoria — não com a demanda total do mercado, que ninguém
+    mede —, e a nota diz isso com os dois números à vista para o leitor poder
+    conferir.
+    """
+    if (
+        categoria.availability_status != AvailabilityStatus.AVAILABLE
+        or categoria.raw_value is None
+        or brand_raw.availability_status != AvailabilityStatus.AVAILABLE
+        or brand_raw.raw_value is None
+        or float(categoria.raw_value) <= 0
+    ):
+        return categoria
+    volume_marca, volume_categoria = float(brand_raw.raw_value), float(categoria.raw_value)
+    share = volume_marca / volume_categoria * 100
+    return RawIndicatorResult(
+        categoria.raw_value,
+        categoria.direction,
+        categoria.calculation_window,
+        categoria.availability_status,
+        f"{categoria.notes}; brand share {share:.1f}% of the category's generic searches "
+        f"({volume_marca:,.0f} of {volume_categoria:,.0f}) — low share with high category volume means the "
+        f"market exists and this brand is not in it, not that demand is absent",
+    )
+
+
 class IndicatorEngine:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -187,7 +219,30 @@ class IndicatorEngine:
         else:
             market = (entity.localized_markets or {}).get(country.iso3) or {}
             search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
-        seed_terms = search_terms[:20]  # keywords_for_keywords accepts up to 20 seeds
+        # A CATEGORIA do produto, medida ao lado da marca (decisão D4). Os termos
+        # genéricos vêm da entidade-família (`generic_entity_key`), que o
+        # enriquecimento preenche com `brand=None` — nenhum deles carrega marca.
+        #
+        # Custo: zero de coleta nova. Os dois conjuntos viajam na MESMA request
+        # de `search_volume` (que aceita 1000 keywords por task) e dividem os 20
+        # seeds de `keywords_for_keywords` (14/6, ver build_seed_terms).
+        #
+        # `terms_override` fica de fora: são os países candidatos pontuados só
+        # para o benchmark do campeão, e a categoria ali não seria usada.
+        category_terms: list[str] = []
+        if entity.generic_entity_key is not None and not terms_override:
+            familia = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
+            if familia is not None:
+                mercado_familia = (familia.localized_markets or {}).get(country.iso3) or {}
+                category_terms = as_term_list(mercado_familia.get("search_terms")) or as_term_list(
+                    mercado_familia.get("primary_name")
+                )
+
+        seed_terms = pytrends_indicators.build_seed_terms(search_terms, category_terms)
+        # Portão de relevância da intenção, ligado SÓ quando os seeds atendem os
+        # dois assuntos: sem ele, as related genéricas comporiam a intenção de
+        # compra da marca. Ver compute_search_intent_score.
+        intent_relevantes = search_terms if category_terms else None
         # Veto cruzado de marcas: as keywords relacionadas que o Google devolve
         # para os termos desta marca incluem as concorrentes, e o filtro de
         # relevância da expansão não as pega quando a keyword carrega ao mesmo
@@ -225,7 +280,12 @@ class IndicatorEngine:
             search_terms, location, period_key, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
         )
         intent = await pytrends_indicators.compute_search_intent_score(
-            seed_terms, location, period_key, language, outras_marcas=outras_marcas
+            seed_terms,
+            location,
+            period_key,
+            language,
+            outras_marcas=outras_marcas,
+            relevant_terms=intent_relevantes,
         )
 
         indicator_raws = [
@@ -234,6 +294,17 @@ class IndicatorEngine:
             (IndicatorCode.DEMAND_STABILITY_SCORE, stability),
             (IndicatorCode.SEARCH_INTENT_SCORE, intent),
         ]
+
+        if category_terms:
+            # Sem veto de marcas aqui, ao contrário dos sinais da marca: a
+            # categoria inclui as concorrentes por definição. Quem procura
+            # "cardhu" está no mercado de whisky, e tirar isso subestimaria a
+            # escala contra a qual a marca deve ser lida.
+            categoria = await pytrends_indicators.compute_trend_score(
+                category_terms, location, period_key, seed_terms=seed_terms, language=language
+            )
+            categoria = _com_share_da_marca(categoria, brand_raw=trend)
+            indicator_raws.append((IndicatorCode.CATEGORY_VOLUME_SCORE, categoria))
 
         saved: list[IndicatorValue] = []
         for code, raw in indicator_raws:

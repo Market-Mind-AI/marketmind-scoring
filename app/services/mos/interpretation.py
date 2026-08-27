@@ -52,6 +52,12 @@ INDICATOR_MEANING: dict[IndicatorCode, str] = {
         "both very high shares (e.g. Nordic welfare states) and very low shares occur in strong "
         "and weak consumer markets alike, so there is no defensible market-opportunity direction."
     ),
+    IndicatorCode.CATEGORY_VOLUME_SCORE: (
+        "How much online search demand exists for the product's whole CATEGORY here — context only, "
+        "not scored: it is the scale against which this brand's own demand should be read. A brand "
+        "with little demand in a market where the category is searched heavily is losing to "
+        "competitors, not facing an absent market."
+    ),
     IndicatorCode.INVESTMENT_SCORE: (
         "How much of the economy is being reinvested in fixed capital "
         "(a proxy for infrastructure and productive investment)?"

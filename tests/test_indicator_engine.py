@@ -154,3 +154,82 @@ async def test_product_specific_indicators_computed_with_entity_key(db_session: 
     assert by_code["median_age_fit_score"].entity_key == entity.entity_key
     country_level = [r for r in results if r.entity_key is None]
     assert len(country_level) >= 8
+
+
+async def test_categoria_e_medida_como_contexto_ao_lado_da_marca(db_session: AsyncSession) -> None:
+    """Decisão D4: a análise de um produto COM marca mede também a categoria, e o
+    número da categoria é contexto puro — nunca pontuado.
+
+    É o que separa "não existe mercado aqui" de "existe mercado e esta marca não
+    está nele", que era a leitura impossível no relatório da Cardhu: 24 países
+    com demanda baixa e nada dizendo se whisky vendia ou não naqueles mercados.
+    """
+    from app.domain.enums import IndicatorCode
+    from app.repositories.product_repository import ProductRepository
+    from app.services.mos.dimension_mapping import DIMENSION_BY_INDICATOR
+
+    sufixo = uuid.uuid4().hex[:8]
+    repo = ProductRepository(db_session)
+    familia = await repo.create_entity(
+        canonical_title=f"single malt whisky {sufixo}",
+        localized_markets={"USA": {"primary_name": "single malt whisky", "search_terms": ["single malt whisky"]}},
+    )
+    marca = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
+    entidade = await repo.create_entity(
+        canonical_title=f"Cardhu single malt whisky {sufixo}",
+        localized_markets={"USA": {"primary_name": "cardhu 12", "search_terms": ["cardhu 12"]}},
+        brand_key=marca.brand_key,
+        generic_entity_key=familia.entity_key,
+    )
+    await db_session.commit()
+
+    volume_marca = RawIndicatorResult(
+        1_000.0, IndicatorDirection.DIRECT, "2026-08", AvailabilityStatus.AVAILABLE, "1,000 total monthly searches"
+    )
+    volume_categoria = RawIndicatorResult(
+        50_000.0, IndicatorDirection.DIRECT, "2026-08", AvailabilityStatus.AVAILABLE, "50,000 total monthly searches"
+    )
+
+    engine = IndicatorEngine(db_session)
+    # A primeira chamada é a da marca, a segunda a da categoria.
+    with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria]):
+        results = await engine.compute_all(
+            country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=1_000.0
+        )
+
+    by_code = {r.indicator_code: r for r in results if r.entity_key is not None}
+    categoria = by_code[IndicatorCode.CATEGORY_VOLUME_SCORE.value]
+
+    assert float(categoria.raw_value) == 50_000.0
+    assert categoria.normalized_score is None, "contexto puro: não tem régua, não tem score"
+    assert IndicatorCode.CATEGORY_VOLUME_SCORE not in DIMENSION_BY_INDICATOR, "não entra em dimensão nenhuma"
+    # O share vem calculado aqui, determinístico, com os dois números à vista.
+    assert "brand share 2.0%" in categoria.notes
+    assert "1,000 of 50,000" in categoria.notes
+    # A marca segue pontuada normalmente, sem contaminação.
+    assert float(by_code[IndicatorCode.TREND_SCORE.value].raw_value) == 1_000.0
+    assert by_code[IndicatorCode.TREND_SCORE.value].normalized_score is not None
+
+
+async def test_produto_sem_marca_nao_mede_categoria(db_session: AsyncSession) -> None:
+    """Numa entidade genérica não há categoria acima dela: o indicador de
+    contexto simplesmente não existe, em vez de duplicar o próprio número."""
+    from app.domain.enums import IndicatorCode
+    from app.repositories.product_repository import ProductRepository
+
+    entidade = await ProductRepository(db_session).create_entity(
+        canonical_title=f"air fryer {uuid.uuid4().hex[:8]}",
+        localized_markets={"USA": {"primary_name": "air fryer", "search_terms": ["air fryer"]}},
+    )
+    await db_session.commit()
+
+    trend = RawIndicatorResult(
+        900.0, IndicatorDirection.DIRECT, "2026-08", AvailabilityStatus.AVAILABLE, "900 total monthly searches"
+    )
+    engine = IndicatorEngine(db_session)
+    with _patched_country_level(), _patched_pytrends(trend=trend):
+        results = await engine.compute_all(
+            country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key()
+        )
+
+    assert IndicatorCode.CATEGORY_VOLUME_SCORE.value not in {r.indicator_code for r in results}

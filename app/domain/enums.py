@@ -97,6 +97,12 @@ class IndicatorCode(StrEnum):
     NET_EXPORTS_SCORE = "net_exports_score"
     TRADE_OPENNESS_SCORE = "trade_openness_score"
     GOVERNMENT_EXPENDITURE_SCORE = "government_expenditure_score"  # context-only, never scored
+    # Volume de busca da CATEGORIA genérica do produto (2026-08-27). Contexto
+    # puro, nunca pontuado: existe para a narrativa poder dizer "a marca é fraca
+    # aqui, mas a busca pela categoria é altíssima". Pontuá-lo entraria em
+    # conflito com o Demand Volume da própria marca e quebraria a
+    # comparabilidade do Cap. 5 (decisão D2).
+    CATEGORY_VOLUME_SCORE = "category_volume_score"  # context-only, never scored
     # Economic Readiness addition (added 2026-07-08)
     REAL_ESTATE_GROWTH_SCORE = "real_estate_growth_score"
 

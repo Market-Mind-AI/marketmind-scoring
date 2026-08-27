@@ -449,3 +449,66 @@ def test_veto_compara_forma_normalizada() -> None:
     assert not pytrends_indicators._de_outra_marca("cardhu 12", ["glenfiddich"])
     assert not pytrends_indicators._de_outra_marca("cardhu 12", [])
     assert not pytrends_indicators._de_outra_marca("cardhu 12", None)
+
+
+# --- SEEDS COMPARTILHADOS ENTRE MARCA E CATEGORIA ---------------------------
+
+
+def test_seeds_divididos_14_6_entre_marca_e_categoria() -> None:
+    """`keywords_for_keywords` aceita 20 seeds por task, e numa análise com marca
+    esses 20 atendem dois assuntos. 14 para a marca, que é o lado pontuado, 6
+    para a categoria, que é contexto — divisão fixa porque previsível é
+    auditável."""
+    marca = [f"marca {i}" for i in range(30)]
+    categoria = [f"categoria {i}" for i in range(30)]
+    seeds = pytrends_indicators.build_seed_terms(marca, categoria)
+
+    assert len(seeds) == 20
+    assert seeds[:14] == marca[:14]
+    assert seeds[14:] == categoria[:6]
+
+
+def test_sobra_de_um_lado_vai_para_o_outro() -> None:
+    """Lado curto não desperdiça slot: a request é a mesma e o custo é o mesmo,
+    então os 20 são sempre usados quando há termo disponível."""
+    seeds = pytrends_indicators.build_seed_terms(["m1", "m2"], [f"c{i}" for i in range(30)])
+    assert len(seeds) == 20
+    assert seeds[:2] == ["m1", "m2"]
+
+    # Sem categoria, a marca usa os 20 — o comportamento de sempre.
+    assert pytrends_indicators.build_seed_terms([f"m{i}" for i in range(30)]) == [f"m{i}" for i in range(20)]
+    # Sem marca (entidade genérica), a categoria usa os 20.
+    assert pytrends_indicators.build_seed_terms([], ["c1", "c2"]) == ["c1", "c2"]
+
+
+def test_termo_repetido_nos_dois_lados_conta_uma_vez() -> None:
+    """Um slot gasto duas vezes com a mesma palavra é um slot perdido."""
+    assert pytrends_indicators.build_seed_terms(["air fryer"], ["Air Fryer"]) == ["air fryer"]
+
+
+async def test_intencao_da_marca_ignora_related_da_categoria() -> None:
+    """Com os seeds compartilhados, as related voltam TODAS sob o mesmo rótulo —
+    então a intenção de compra da marca seria composta também pelas keywords
+    genéricas da categoria. O portão de relevância só liga nesse caso: com um
+    assunto só, exigir que a keyword contenha o nome do produto descartaria
+    keyword local legítima que não o repete."""
+    related = [
+        ("cardhu 12 where to buy", 100.0, _months([10.0] * 12), 2.0, 100),  # da marca
+        ("what is single malt whisky", 20_000.0, _months([2000.0] * 12), 0.1, 5),  # da categoria
+    ]
+    engine = make_mock_engine([result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        com_portao = await pytrends_indicators.compute_search_intent_score(
+            ["cardhu 12", "single malt whisky"], "GB", "2026-08", "en", relevant_terms=["cardhu 12"]
+        )
+
+    engine = make_mock_engine([result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        sem_portao = await pytrends_indicators.compute_search_intent_score(
+            ["cardhu 12", "single malt whisky"], "GB", "2026-08", "en"
+        )
+
+    assert com_portao.raw_value is not None and sem_portao.raw_value is not None
+    # A keyword genérica é de curiosidade e tem 200x o volume: sem o portão ela
+    # domina a média ponderada e afunda a intenção da marca.
+    assert float(com_portao.raw_value) > float(sem_portao.raw_value)

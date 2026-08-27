@@ -63,6 +63,47 @@ _INTENT_LEXICAL_WEIGHT = 0.6
 _INTENT_COMMERCIAL_WEIGHT = 0.4
 
 
+# `keywords_for_keywords` aceita no máximo 20 seeds por task (limite do
+# DataForSEO), e numa análise com marca esses 20 slots atendem DOIS assuntos: a
+# marca (que é pontuada) e a categoria (que é contexto). A divisão é fixa em
+# 14/6 porque previsível é auditável, e a marca leva a maior parte por ser o
+# lado que entra no MOS. A sobra de um lado vai para o outro, então um produto
+# sem categoria (ou sem marca) continua usando os 20.
+#
+# O construtor é ÚNICO de propósito: quem coleta (analysis_service) e quem lê
+# (indicator_engine) precisam produzir exatamente a mesma lista, porque as
+# related keywords são gravadas sob o rótulo `", ".join(seeds)`. Duas listas
+# diferentes = rótulo diferente = intent órfão, que é o bug que a coleta
+# forçada de `related_rows_exist` existe para não deixar acontecer.
+_MAX_SEEDS = 20
+_SEEDS_DA_MARCA = 14
+
+
+def build_seed_terms(brand_terms: list[str], category_terms: list[str] | None = None) -> list[str]:
+    """Os seeds de `keywords_for_keywords` para este país, marca primeiro."""
+    categoria = [t for t in (category_terms or []) if t]
+    marca = [t for t in brand_terms if t]
+    if not categoria:
+        return marca[:_MAX_SEEDS]
+    if not marca:
+        return categoria[:_MAX_SEEDS]
+
+    cota_marca = min(_SEEDS_DA_MARCA, len(marca))
+    cota_categoria = min(_MAX_SEEDS - cota_marca, len(categoria))
+    # Sobra redistribuída: um lado curto não pode desperdiçar slot.
+    cota_marca = min(len(marca), _MAX_SEEDS - cota_categoria)
+    escolhidos = [*marca[:cota_marca], *categoria[:cota_categoria]]
+    # Dedup preservando ordem: um termo pode estar nas duas listas.
+    vistos: set[str] = set()
+    saida: list[str] = []
+    for termo in escolhidos:
+        chave = termo.strip().lower()
+        if chave and chave not in vistos:
+            vistos.add(chave)
+            saida.append(termo)
+    return saida
+
+
 def _norm_term(term: str) -> str:
     """Comparison key for a query: lowercase, strip accents, keep only
     alphanumerics. 'Air Fryer'/'air-fryer'/'airfryer' -> 'airfryer';
@@ -558,6 +599,7 @@ async def compute_search_intent_score(
     period_key: str,
     language: str | None = None,
     outras_marcas: list[str] | None = None,
+    relevant_terms: list[str] | None = None,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.6 — IntentRaw = volume-weighted average of a lexical buy-vs-
     curiosity classification over the country's related keywords (Google Ads
@@ -587,6 +629,16 @@ async def compute_search_intent_score(
     # composta pelas keywords de outra. Sem isto, um comparativo de alto volume
     # da concorrente pesaria na intenção deste produto.
     rows = [r for r in related if r["volume"] > 0 and not _de_outra_marca(r["keyword"], outras_marcas)]
+    # `relevant_terms` só vem preenchido quando o conjunto de seeds é
+    # COMPARTILHADO entre dois assuntos (marca + categoria, na mesma request do
+    # DataForSEO para não pagar duas vezes). Aí as related voltam todas sob o
+    # mesmo rótulo e a intenção da marca seria composta também pelas keywords
+    # genéricas. Com um assunto só, o portão fica desligado de propósito: as
+    # related são todas dele, e exigir que contenham o nome do produto
+    # descartaria keyword local legítima que não o repete.
+    if relevant_terms:
+        relevantes = [n for n in (_norm_term(t) for t in relevant_terms) if n]
+        rows = [r for r in rows if any(n in _norm_term(r["keyword"]) for n in relevantes)]
 
     if not rows:
         return RawIndicatorResult(

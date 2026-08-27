@@ -196,6 +196,18 @@ class AnalysisService:
                 entity_to_enrich = await self._product_repo.get_by_entity_key(entity_key)
                 if entity_to_enrich is not None:
                     await self._ensure_product_enrichment(entity_to_enrich, countries)
+                    # A CATEGORIA do produto também precisa de vocabulário: é ela
+                    # que dá a escala contra a qual a demanda da marca é lida
+                    # (decisão D4). Roda com `brand=None`, então produz termos
+                    # genéricos, e é reaproveitada por TODAS as marcas dessa
+                    # família — a segunda marca do mesmo produto não paga de novo.
+                    # Sem candidatos de referência: a régua de demanda é da marca,
+                    # a categoria é contexto e nunca é pontuada.
+                    familia_key = entity_to_enrich.generic_entity_key
+                    if familia_key is not None:
+                        familia = await self._product_repo.get_by_entity_key(familia_key)
+                        if familia is not None:
+                            await self._ensure_product_enrichment(familia, countries, com_candidatos=False)
                     await self._session.commit()
 
             for country_iso3 in countries:
@@ -560,11 +572,18 @@ class AnalysisService:
         country = await self._country_repo.get_by_iso3(iso3)
         return country.search_language if country is not None else None
 
-    async def _ensure_product_enrichment(self, entity: Any, countries: list[str]) -> None:
+    async def _ensure_product_enrichment(
+        self, entity: Any, countries: list[str], *, com_candidatos: bool = True
+    ) -> None:
         """Fill the entity's per-country search vocabulary + reference candidates,
         calling the LLM ONLY for what's missing (a country without terms; empty
         reference_candidates). If the base already covers everything, no LLM call
-        is made — reuse it (faster + cheaper). Merges (never overwrites)."""
+        is made — reuse it (faster + cheaper). Merges (never overwrites).
+
+        `com_candidatos=False` para a entidade-família: os candidatos existem
+        para eleger o teto da régua de Demand Volume, e a categoria não é
+        pontuada — pedi-los ali seria uma chamada de LLM paga por um número que
+        ninguém usa."""
         product_name = entity.canonical_title or ""
 
         missing = [c for c in countries if not _has_terms((entity.localized_markets or {}).get(c))]
@@ -591,7 +610,7 @@ class AnalysisService:
                     current_lm[iso3] = _fallback_market(iso3, product_name, None)
                 entity.localized_markets = current_lm
 
-        if not entity.reference_candidates:
+        if com_candidatos and not entity.reference_candidates:
             try:
                 supported = [c.iso3 for c in await self._country_repo.list_all()]
                 supported_set = set(supported)
@@ -629,6 +648,20 @@ class AnalysisService:
             search_terms = as_term_list((market or {}).get("search_terms")) or as_term_list(
                 (market or {}).get("primary_name")
             )
+            # Os termos GENÉRICOS da família viajam na mesma coleta (decisão D4).
+            # `search_volume` aceita 1000 keywords por task, então medir a
+            # categoria ao lado da marca não custa uma request nova; os seeds de
+            # `keywords_for_keywords`, que só aceitam 20, são divididos 14/6 pelo
+            # MESMO construtor que o indicator_engine usa para ler — rótulos
+            # diferentes deixariam o intent órfão.
+            category_terms: list[str] = []
+            if entity is not None and entity.generic_entity_key is not None:
+                familia = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
+                if familia is not None:
+                    mercado_familia = (familia.localized_markets or {}).get(country_iso3) or {}
+                    category_terms = as_term_list(mercado_familia.get("search_terms")) or as_term_list(
+                        mercado_familia.get("primary_name")
+                    )
             location = country.iso2 if country is not None else None
             language = (country.search_language if country is not None else None) or "en"
             if search_terms and location is not None:
@@ -636,7 +669,8 @@ class AnalysisService:
                 # collect ONLY the search terms that don't yet have volume data —
                 # already-cached terms are never re-downloaded. Nothing missing =>
                 # no search_volume collection at all.
-                missing_sv = await pytrends_indicators.missing_volume_terms(search_terms, location)
+                termos_para_volume = [*search_terms, *category_terms]
+                missing_sv = await pytrends_indicators.missing_volume_terms(termos_para_volume, location)
                 if missing_sv:
                     gaps.append(
                         CoverageGap(
@@ -653,7 +687,7 @@ class AnalysisService:
                 # individual terms, so re-collect only when the current seed's
                 # related rows are absent — i.e. a genuinely new term entered the
                 # top-20 seeds. A stable/merged seed set => cache hit => no download.
-                seed_terms = search_terms[:20]
+                seed_terms = pytrends_indicators.build_seed_terms(search_terms, category_terms)
                 if seed_terms and not await pytrends_indicators.related_rows_exist(seed_terms, location):
                     gaps.append(
                         CoverageGap(
@@ -788,7 +822,7 @@ class AnalysisService:
                     collection_params={"location": country.iso2, "language": language, "keywords": terms},
                 )
             )
-            seed_terms = terms[:20]
+            seed_terms = pytrends_indicators.build_seed_terms(terms)
             # Force collection when related rows are absent under THIS seed set
             # (a stale "covered" flag from a prior run under different seeds must
             # not strand the candidate's search_intent — same fix as requested
@@ -847,7 +881,11 @@ class AnalysisService:
             # Identical pipeline to the requested countries — including the
             # related-keyword expansion — so the ceiling is apples-to-apples.
             r = await pytrends_indicators.compute_trend_score(
-                terms, country.iso2, period_key, seed_terms=terms[:20], language=country.search_language
+                terms,
+                country.iso2,
+                period_key,
+                seed_terms=pytrends_indicators.build_seed_terms(terms),
+                language=country.search_language,
             )
             if r.raw_value is not None and float(r.raw_value) > 0:
                 measured.append({"country": iso3, "volume": float(r.raw_value)})

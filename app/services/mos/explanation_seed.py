@@ -41,6 +41,7 @@ METRIC_META: dict[str, tuple[str, str, bool | None]] = {
     "median_age_fit_score": ("indicator", "Median Age Fit", True),
     "consumer_spending_score": ("indicator", "Consumer Spending", True),
     "government_expenditure_score": ("indicator", "Government Expenditure", None),
+    "category_volume_score": ("indicator", "Category Demand", None),
     "investment_score": ("indicator", "Investment", True),
     "net_exports_score": ("indicator", "Net Exports", True),
     "trade_openness_score": ("indicator", "Trade Openness", True),
@@ -180,6 +181,13 @@ BAND_PHRASES: dict[str, dict[str, str]] = {
         "Moderate": "Public and private spending are fairly balanced",
         "High": "Government is a large presence in the economy",
         "Very High": "The economy leans heavily on public spending",
+    },
+    "category_volume_score": {
+        "Very Low": "The category itself is barely searched here",
+        "Low": "The category draws little search demand here",
+        "Moderate": "The category has moderate search demand here",
+        "High": "The category is searched heavily here",
+        "Very High": "The category is one of this market's big search subjects",
     },
     "investment_score": {
         "Very Low": "Very little is being invested in productive capacity",

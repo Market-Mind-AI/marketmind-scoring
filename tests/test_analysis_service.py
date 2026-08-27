@@ -114,6 +114,11 @@ def _patched_service(
         return_value=SimpleNamespace(
             canonical_title="air fryer",
             entity_key=_ENTITY_KEY,
+            # Produto sem marca: a partição é a genérica e não há família acima
+            # dele, então nenhuma medição de categoria é disparada (o volume da
+            # categoria só existe para produto COM marca — ver indicator_engine).
+            brand_key=None,
+            generic_entity_key=None,
             localized_markets={"USA": {"primary_name": "air fryer", "search_terms": ["air fryer", "airfryer"]}},
             reference_candidates=[{"country": "BRA", "primary_name": "fritadeira", "search_terms": ["air fryer br"]}],
             # No cached champion: champion_period_key is None, so these tests
