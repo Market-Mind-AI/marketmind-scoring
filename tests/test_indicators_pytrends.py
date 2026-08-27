@@ -512,3 +512,27 @@ async def test_intencao_da_marca_ignora_related_da_categoria() -> None:
     # A keyword genérica é de curiosidade e tem 200x o volume: sem o portão ela
     # domina a média ponderada e afunda a intenção da marca.
     assert float(com_portao.raw_value) > float(sem_portao.raw_value)
+
+
+async def test_categoria_sem_expansao_soma_apenas_os_termos_curados() -> None:
+    """A categoria é o denominador que responde "existe mercado para este tipo
+    de produto aqui?". A expansão dobraria keywords de concorrentes — medido ao
+    vivo, a categoria da Espanha somou `grant's scotch whisky` (720) porque ela
+    contém o termo aprovado "scotch whisky" — e o veto por cadastro não pega
+    marca que a plataforma nunca viu. Sem expansão, o número é exatamente o que
+    o rótulo promete."""
+    approved = [("scotch whisky", 590.0, _months([50.0] * 12))]
+    related = [("grant's scotch whisky", 720.0, _months([60.0] * 12), 1.5, 90)]
+    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        sem_expansao = await pytrends_indicators.compute_trend_score(
+            ["scotch whisky"], "ES", "2026-08", language="es", expandir=False
+        )
+    assert sem_expansao.raw_value == pytest.approx(590.0)
+    assert "folded" not in (sem_expansao.notes or "")
+
+    # Com expansão (o caminho da MARCA), a concorrente desconhecida entraria.
+    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        com_expansao = await pytrends_indicators.compute_trend_score(["scotch whisky"], "ES", "2026-08", language="es")
+    assert float(com_expansao.raw_value) > 590.0

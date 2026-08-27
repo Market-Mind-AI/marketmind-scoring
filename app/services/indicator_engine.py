@@ -308,21 +308,26 @@ class IndicatorEngine:
         ]
 
         if category_terms:
-            # Veto de TODAS as marcas, inclusive a própria — ao contrário dos
-            # sinais da marca, onde o veto poupa a dela. Os termos curados da
-            # família já são genéricos por construção (o enriquecimento roda com
-            # `brand=None`), mas a EXPANSÃO dobra keywords relacionadas, e o
-            # portão de relevância deixa passar qualquer uma que contenha um
-            # termo aprovado: medido ao vivo em 27/08, a categoria da Espanha
-            # tinha somado `grant's scotch whisky` (720) e
-            # `chivas regal 12 premium scotch whisky precio` (40), porque as duas
-            # contêm "scotch whisky".
+            # A categoria é medida SEM expansão: só os termos genéricos curados.
             #
-            # Isso faria o número dizer outra coisa do que o rótulo promete. O
-            # denominador aqui existe para responder "o mercado em abstrato
-            # existe?", e só responde isso se for demanda SEM marca — a leitura
-            # que a narrativa faz dele ("a categoria é muito buscada e a marca
-            # não está nela") não sobrevive a um denominador feito de marcas.
+            # A expansão dobra keywords relacionadas se elas contiverem um termo
+            # aprovado, e as concorrentes passam por aí facilmente — medido ao
+            # vivo em 27/08, a categoria da Espanha somou `grant's scotch whisky`
+            # (720) e `chivas regal 12 premium scotch whisky precio` (40), porque
+            # as duas contêm "scotch whisky". O veto por cadastro não resolve:
+            # ele só conhece marcas que a plataforma já viu, e Grant's e Chivas
+            # nunca foram analisadas.
+            #
+            # Este denominador existe para responder "existe mercado para este
+            # tipo de produto aqui, independentemente desta marca?", e a leitura
+            # que a narrativa faz dele — "a categoria é muito buscada e a marca
+            # não está nela" — não sobrevive a um denominador feito de outras
+            # marcas. Sem expansão ele é exatamente o que o rótulo promete, e não
+            # depende de a plataforma conhecer as concorrentes.
+            #
+            # O veto de marcas fica como guarda dos termos CURADOS: eles são
+            # genéricos por construção (o enriquecimento roda com `brand=None`),
+            # e o veto é o que percebe se algum dia deixarem de ser.
             todas_as_marcas = await self._product_repo.list_all_brand_names()
             categoria = await pytrends_indicators.compute_trend_score(
                 category_terms,
@@ -331,6 +336,7 @@ class IndicatorEngine:
                 seed_terms=seed_terms,
                 language=language,
                 outras_marcas=todas_as_marcas,
+                expandir=False,
             )
             categoria = _com_share_da_marca(categoria, brand_raw=trend)
             indicator_raws.append((IndicatorCode.CATEGORY_VOLUME_SCORE, categoria))

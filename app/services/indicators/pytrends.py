@@ -383,6 +383,7 @@ async def _demand_rows(
     seed_terms: list[str] | None = None,
     language: str | None = None,
     outras_marcas: list[str] | None = None,
+    expandir: bool = True,
 ) -> tuple[list[tuple[str, float, list[tuple[int, int, float]]]], int]:
     """As linhas de demanda do produto neste país: termos aprovados MAIS a
     expansão conservadora de keywords relacionadas, deduplicadas.
@@ -409,7 +410,7 @@ async def _demand_rows(
     nunca "o dado veio truncado".
     """
     approved = await _fetch_approved_raw(connection, search_terms, location)
-    if not search_terms:
+    if not search_terms or not expandir:
         return _dedup_volume_rows(approved), 0
     seed_label = ", ".join(seed_terms or search_terms[:20])
     related = await _fetch_related_rows(connection, seed_label, location)
@@ -426,6 +427,7 @@ async def compute_trend_score(
     seed_terms: list[str] | None = None,
     language: str | None = None,
     outras_marcas: list[str] | None = None,
+    expandir: bool = True,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.1 — DEMAND VOLUME (market potential): SUM of the absolute
     monthly search volume of the country's approved terms PLUS a conservative
@@ -440,7 +442,13 @@ async def compute_trend_score(
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         rows, expansion_count = await _demand_rows(
-            connection, search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+            connection,
+            search_terms,
+            location,
+            seed_terms=seed_terms,
+            language=language,
+            outras_marcas=outras_marcas,
+            expandir=expandir,
         )
 
     if not rows:
