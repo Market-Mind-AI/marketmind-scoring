@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import EntityNotFoundError, MarketMindCoreError
 from app.domain.enums import AvailabilityStatus, IndicatorDirection
-from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.product_repository import ProductRepository
 from app.services.indicator_engine import IndicatorEngine
 from app.services.indicators.results import RawIndicatorResult
@@ -106,15 +105,14 @@ async def test_country_level_inflation_from_worldbank_only(db_session: AsyncSess
     # 2026-07-08); it's AVAILABLE like any other WB indicator, no OECD
     # inflation codes ever appear in the output.
     period_key = _unique_period_key()
-    # gdp_per_capita_score's fixed bound is seeded by migration 010 under
-    # period_key="FIXED"; seed it here too since db_session may run against a
-    # DB where that migration ran, but keep the test self-contained.
-    await IndicatorRepository(db_session).upsert_reference(
-        indicator_code="gdp_per_capita_score", period_key="FIXED", min_x=500, max_x=100000,
-        reference_population_size=0, is_closed=False,
-    )  # fmt: skip
-    await db_session.commit()
-
+    # Este teste NÃO semeia o bound FIXED de gdp_per_capita_score, de propósito.
+    # `normalization_reference` está em _PRESERVE_TABLES (conftest), ou seja,
+    # nunca é truncada entre testes: um upsert em period_key="FIXED" aqui
+    # sobrevive ao teste e passa a valer para todos os seguintes. Foi o que
+    # acontecia — a régua semeada pela migration virava (500, 100000) para o
+    # resto da suíte, e só aparecia como falha quando algum teste posterior
+    # afirmava o valor real. O bound vem das migrations, que a conftest já
+    # exige aplicadas; o que se mede aqui é disponibilidade, não score.
     engine = IndicatorEngine(db_session)
     with _patched_country_level():
         results = await engine.compute_all(country_iso3="USA", period_key=period_key)

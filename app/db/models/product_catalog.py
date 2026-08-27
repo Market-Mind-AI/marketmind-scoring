@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, Numeric, String
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,8 +49,12 @@ class ProductCatalog(Base):
     # scored/ranked itself — context only, explained by the final LLM. See
     # marketmind_mos_engine.
     reference_candidates: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # SUPERADO pela migration 031 (`brand_key` + a tabela `brands`), mantido
+    # enquanto for o único ponteiro de uma entidade poluída para as marcas que
+    # grudaram nela — é dele que o reparo do catálogo parte. Sai depois disso.
+    #
     # Marcas já vistas para este produto, acumuladas (2026-08-25). A identidade
-    # do catálogo é o produto GENÉRICO — `air fryer` é a entidade, Philips e
+    # do catálogo era o produto GENÉRICO — `air fryer` é a entidade, Philips e
     # Ninja são marcas dela —, então a marca não entra na decisão de identidade
     # (ver catalog_service.resolve e migration 029). Ela é acumulada aqui,
     # nunca substituída, e cada marca nova também vira um alias `marca + nome`
@@ -58,6 +62,33 @@ class ProductCatalog(Base):
     # resolveria qualquer produto Philips para este, que foi exatamente o
     # estrago que a migration 028 e a poda do backfill limparam.
     brands: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    # A marca como PARTIÇÃO da identidade (migration 031). A identidade do
+    # catálogo passou a ser o par (nome genérico, marca): `brand_key IS NULL` é
+    # a partição genérica, e duas entidades com o mesmo nome genérico e marcas
+    # diferentes são produtos diferentes.
+    #
+    # A marca continua NÃO entrando no texto que decide semelhança — foi
+    # exatamente isso que fundiu `philips air purifier` com o alias `philips
+    # airfryer` a 0.520 (ver 28ca6be). Os passos 2 e 3 comparam só o nome
+    # genérico; o que a partição faz é restringir CONTRA QUEM comparar. Dentro
+    # da Philips a medida volta a ser `air purifier` x `airfryer` = 0.278,
+    # abaixo do limiar, e os dois produtos seguem separados.
+    #
+    # O que motivou: sem partição, `single malt Scotch whisky` + Cardhu e
+    # `single malt Scotch whisky` + Glenfiddich resolvem para a MESMA entidade
+    # pelo alias exato, e a segunda marca herda o vocabulário e a demanda da
+    # primeira.
+    brand_key: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("brands.brand_key"), nullable=True
+    )
+    # A família genérica de uma entidade de marca. É o que permite medir a
+    # categoria ao lado da marca e narrar "a Cardhu é fraca aqui, mas a busca
+    # por whisky é altíssima" sem misturar os dois vocabulários numa entidade
+    # só (decisão D2 — o share da marca é contexto da narrativa, nunca sinal
+    # pontuado). NULL numa entidade genérica: ela é a própria família.
+    generic_entity_key: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("product_catalog.entity_key"), nullable=True
+    )
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
 
@@ -91,4 +122,13 @@ class ProductCatalog(Base):
         Index("ix_product_catalog_google_mid", "google_mid"),
         Index("ix_product_catalog_merged_into", "merged_into"),
         Index("ix_product_catalog_category", "category"),
+        Index("ix_product_catalog_brand_key", "brand_key"),
+        Index("ix_product_catalog_generic_entity_key", "generic_entity_key"),
+        # Não existe marca sem produto genérico por trás: o LLM de
+        # identificação sempre devolve o nome genérico junto (o prompt manda
+        # pôr a marca só em `brand`). Ver migration 031.
+        CheckConstraint(
+            "brand_key IS NULL OR generic_entity_key IS NOT NULL",
+            name="ck_product_catalog_brand_has_generic",
+        ),
     )
