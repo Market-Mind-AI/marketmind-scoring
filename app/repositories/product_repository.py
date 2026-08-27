@@ -267,6 +267,20 @@ class ProductRepository:
         logger.info(f"Marca nova no cadastro: {marca.name!r}")
         return marca
 
+    async def list_other_brand_names(self, brand_key: uuid.UUID | None) -> list[str]:
+        """Formas normalizadas de todas as marcas do cadastro MENOS esta.
+
+        É a lista contra a qual o veto cruzado da demanda compara (ver
+        indicators/pytrends._de_outra_marca). Vazia quando o produto não tem
+        marca: numa entidade genérica, consulta de marca é demanda legítima da
+        categoria — quem procura "cardhu" está no mercado de whisky — e
+        descartá-la subestimaria a categoria.
+        """
+        if brand_key is None:
+            return []
+        result = await self._session.execute(select(Brand.name_normalized).where(Brand.brand_key != brand_key))
+        return [nome for nome in result.scalars().all() if nome]
+
     async def repoint_alias(self, alias: ProductAlias, entity_key: uuid.UUID) -> None:
         """Troca o dono de um alias.
 

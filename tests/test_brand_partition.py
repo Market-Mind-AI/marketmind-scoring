@@ -208,3 +208,21 @@ async def test_dois_produtos_da_mesma_marca_seguem_separados(db_session: AsyncSe
 
     assert purificador.entity_key != fryer.entity_key
     assert purificador.method == "created"
+
+
+async def test_lista_de_outras_marcas_exclui_a_propria(db_session: AsyncSession) -> None:
+    """A lista que alimenta o veto cruzado da demanda: todas as marcas do
+    cadastro MENOS a do produto. Incluir a própria vetaria os termos que a
+    entidade declara serem dela."""
+    sufixo = uuid.uuid4().hex[:6]
+    cardhu, glenfiddich = _marca(f"Cardhu{sufixo}"), _marca(f"Glenfiddich{sufixo}")
+    db_session.add_all([cardhu, glenfiddich])
+    await db_session.commit()
+
+    repo = ProductRepository(db_session)
+    outras = await repo.list_other_brand_names(cardhu.brand_key)
+    assert glenfiddich.name_normalized in outras
+    assert cardhu.name_normalized not in outras
+
+    # Produto sem marca: lista vazia, o veto não age (a categoria soma as marcas).
+    assert await repo.list_other_brand_names(None) == []

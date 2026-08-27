@@ -372,3 +372,80 @@ async def test_sem_dado_nenhum_continua_indisponivel() -> None:
         )
 
     assert resultado.availability_status == AvailabilityStatus.UNAVAILABLE
+
+
+# --- VETO CRUZADO DE MARCAS -------------------------------------------------
+
+
+async def test_demanda_nao_soma_keyword_de_outra_marca() -> None:
+    """As keywords relacionadas que o Google devolve para os termos de uma marca
+    incluem as concorrentes — comparativos, listas, substituições. O filtro de
+    relevância não as pega quando a keyword carrega ao mesmo tempo um termo
+    aprovado E outra marca, e aí o volume de uma marca entra na demanda da
+    outra. Medido no armazém real (Cardhu, GBR): os oito termos aprovados
+    carregavam todos "cardhu", então as 21 relacionadas sem a marca caíram pelo
+    filtro de relevância — sorte, não garantia."""
+    approved = [("cardhu 12", 1000.0, _months([100.0] * 12))]
+    related = [
+        ("cardhu 12 price", 2000.0, _months([200.0] * 12), 1.2, 100),  # a marca -> entra
+        ("glenfiddich 12 vs cardhu 12", 9000.0, _months([900.0] * 12), 1.5, 90),  # outra marca -> vetada
+        ("macallan 12 price", 8000.0, _months([800.0] * 12), 1.4, 95),  # outra marca -> vetada
+    ]
+    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_trend_score(
+            ["cardhu 12"], "GB", "2026-08", language="en", outras_marcas=["glenfiddich", "macallan"]
+        )
+
+    # 1000 (aprovado) + 2000 (a própria marca). As 17.000 das concorrentes ficam fora.
+    assert result.raw_value == pytest.approx(3000.0)
+    assert result.notes is not None and "+1 folded" in result.notes
+
+
+async def test_sem_marca_a_categoria_soma_as_marcas() -> None:
+    """Numa entidade genérica — a categoria — consulta de marca é demanda
+    legítima: quem procura "cardhu" está no mercado de whisky. O veto não age,
+    e é por isso que ele é uma lista vinda de fora e não uma regra fixa."""
+    approved = [("single malt whisky", 1000.0, _months([100.0] * 12))]
+    related = [("cardhu single malt whisky", 2000.0, _months([200.0] * 12), 1.2, 100)]
+    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        result = await pytrends_indicators.compute_trend_score(
+            ["single malt whisky"], "GB", "2026-08", language="en", outras_marcas=[]
+        )
+
+    assert result.raw_value == pytest.approx(3000.0)
+
+
+async def test_intencao_de_compra_ignora_keyword_de_outra_marca() -> None:
+    """A intenção é média das relacionadas ponderada por volume, então um
+    comparativo de alto volume da concorrente pesaria na intenção deste
+    produto. Aqui a keyword vetada é transacional e a da marca é de curiosidade:
+    se o veto não agisse, o score subiria."""
+    related_com_veto = [
+        ("what is cardhu", 100.0, _months([10.0] * 12), 0.1, 5),
+        ("buy glenfiddich 12 online", 10_000.0, _months([1000.0] * 12), 2.0, 100),
+    ]
+    engine = make_mock_engine([result_with_all(related_com_veto)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        vetado = await pytrends_indicators.compute_search_intent_score(
+            ["cardhu"], "GB", "2026-08", "en", outras_marcas=["glenfiddich"]
+        )
+
+    engine = make_mock_engine([result_with_all(related_com_veto)])
+    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+        sem_veto = await pytrends_indicators.compute_search_intent_score(["cardhu"], "GB", "2026-08", "en")
+
+    assert vetado.raw_value is not None and sem_veto.raw_value is not None
+    assert float(vetado.raw_value) < float(sem_veto.raw_value), "a concorrente inflava a intenção deste produto"
+
+
+def test_veto_compara_forma_normalizada() -> None:
+    """A comparação é sobre a forma normalizada, então grafia e pontuação não
+    escapam do veto. Limite conhecido e aceito: marca transliterada (`カーデュ`)
+    não é reconhecida — o normalizador remove tudo fora de [a-z0-9]."""
+    assert pytrends_indicators._de_outra_marca("Glenfiddich-12 Review", ["glenfiddich"])
+    assert pytrends_indicators._de_outra_marca("GLEN FIDDICH 12", ["glenfiddich"])
+    assert not pytrends_indicators._de_outra_marca("cardhu 12", ["glenfiddich"])
+    assert not pytrends_indicators._de_outra_marca("cardhu 12", [])
+    assert not pytrends_indicators._de_outra_marca("cardhu 12", None)

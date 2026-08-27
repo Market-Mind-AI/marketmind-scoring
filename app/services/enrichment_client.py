@@ -30,11 +30,19 @@ _SYSTEM = (
     "You build the real online-search vocabulary a local buyer uses for a given product, per country, "
     "for a cross-country market-demand analysis. You are given the product identity (already determined); "
     "you do NOT re-identify it. Terms must be REAL, high-volume queries people actually type into a search "
-    "box — short, keyword-style (2-4 words). Prefer the BRAND with the product's model/name and its common "
-    "short variants (e.g. 'KTM Duke', 'KTM 390', 'KTM 390 Duke'), plus the plain generic product name. Do "
-    "NOT invent long descriptive noun phrases nobody types (they return zero search volume). ALWAYS include, "
-    "in EVERY list, the product's ORIGINAL English/Latin-script brand and model names untranslated (they "
-    "capture real demand and guard against bad transliterations). Return ONLY the structured result."
+    "box — short, keyword-style (2-4 words). Do NOT invent long descriptive noun phrases nobody types (they "
+    "return zero search volume). ALWAYS include, in EVERY list, the product's ORIGINAL English/Latin-script "
+    "names untranslated (they capture real demand and guard against bad transliterations).\n\n"
+    "THE BRAND RULE decides what every term must contain, and it is not stylistic — the volumes of these "
+    "terms are SUMMED into one product's demand score:\n"
+    "  - A BRAND was given: EVERY term must name that brand, in whatever script local buyers use "
+    "('cardhu 12', 'whisky cardhu', 'カーデュ 12年'). Vary the model/size/variant around the brand "
+    "('KTM Duke', 'KTM 390', 'KTM 390 Duke'). NEVER the plain generic product name on its own "
+    "('single malt whisky', 'motorcycle'): the whole category's search volume would be counted as this "
+    "brand's demand. NEVER another brand's name.\n"
+    "  - NO brand was given: the product is the CATEGORY. Use only generic names, never any brand — a "
+    "branded term would make one brand's demand stand for the entire category.\n"
+    "Return ONLY the structured result."
 )
 
 
@@ -70,10 +78,18 @@ class EnrichmentClient:
             f"{country_lines}\n\n"
             "For each country: `country` = the ISO3 code; `primary_name` = the single most-used real search "
             "term (local language); `search_terms` = a GENEROUS list of the REAL, high-volume queries a local "
-            "buyer types (brand+model and variants + plain generic name), local-language colloquial/loanword "
-            "names, spelling/spacing variants, and ALWAYS the original English/Latin brand+model names too, "
-            "NEVER literal translations or long descriptive phrases; `excluded_terms` = look-alike terms that "
-            "mean something ELSE; `confidence` = 0-1. Order search_terms primary-first."
+            "buyer types — local-language colloquial/loanword names, spelling/spacing variants, and ALWAYS "
+            "the original English/Latin-script names too, NEVER literal translations or long descriptive "
+            "phrases; `excluded_terms` = look-alike terms that mean something ELSE; `confidence` = 0-1. "
+            "Order search_terms primary-first.\n\n"
+            + (
+                f"EVERY search term must name the brand {brand!r} (in the local script), varying model/size/"
+                "variant around it. NEVER the bare generic name and NEVER another brand: the volumes are "
+                "summed into this brand's demand score."
+                if brand
+                else "This product is the CATEGORY, so no term may carry a brand name — a branded term would "
+                "make one brand's demand stand for the whole category."
+            )
         )
         try:
             result = await self._provider.complete(system=_SYSTEM, user=prompt, response_model=LocalizedMarketsResult)

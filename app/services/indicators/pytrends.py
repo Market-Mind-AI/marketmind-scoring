@@ -73,6 +73,33 @@ def _norm_term(term: str) -> str:
     return "".join(ch for ch in folded if ch.isalnum())
 
 
+def _de_outra_marca(keyword: str, outras_marcas: list[str] | None) -> bool:
+    """A keyword relacionada carrega o nome de OUTRA marca cadastrada.
+
+    POR QUE ISTO EXISTE. As keywords que o Google devolve para os termos
+    semente de uma marca incluem as concorrentes — comparativos, listas,
+    substituições. Medido no armazém real (Cardhu, GBR, 305 relacionadas): o
+    filtro de relevância da expansão exige que a keyword contenha um termo
+    aprovado, e como todos os oito termos aprovados carregavam "cardhu", as 21
+    keywords sem a marca caíram sozinhas. Isso é sorte, não garantia: basta uma
+    keyword conter ao mesmo tempo um termo aprovado e outra marca
+    (`glenfiddich 12 vs cardhu 12`) para o volume de uma marca entrar na
+    demanda da outra.
+
+    O veto só age em produto COM marca. Numa entidade genérica — a categoria —
+    consultas de marca são demanda legítima da categoria: quem procura "cardhu"
+    está no mercado de whisky, e descartar isso subestimaria a categoria.
+
+    Limite conhecido: compara formas normalizadas latinas, então a marca
+    transliterada (`カーデュ` para Cardhu) não é reconhecida. Vale como guarda
+    contra o caso comum, não como filtro completo.
+    """
+    if not outras_marcas:
+        return False
+    alvo = _norm_term(keyword)
+    return any(marca and marca in alvo for marca in outras_marcas)
+
+
 # Search Intent tiers/weights (Cap. 4 §4.2.6). Per-language markers live in
 # intent_lexicon.py (offline-LLM-built, frozen). CURIOSITY is the discriminator:
 # "what is / vs" = discovering (low purchase intent) vs "buy / price" = buying.
@@ -215,11 +242,15 @@ async def missing_volume_terms(terms: list[str], location: str) -> list[str]:
 
 
 def _select_expansion(
-    related: list[dict[str, Any]], approved_terms: list[str], tiers: dict[str, list[str]]
+    related: list[dict[str, Any]],
+    approved_terms: list[str],
+    tiers: dict[str, list[str]],
+    outras_marcas: list[str] | None = None,
 ) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
     """Conservatively pick related keywords to FOLD into the demand sum, WITHOUT
     any per-product exclusion list (that doesn't scale). A keyword qualifies when:
       - its volume clears the floor;
+      - it does not carry ANOTHER registered brand's name (see _de_outra_marca);
       - it is clearly the product — its normalized form contains an approved
         product/brand term (drops unrelated products that bleed in);
       - its intent is purchase-oriented — NOT the lexicon's `usage`
@@ -234,6 +265,8 @@ def _select_expansion(
     qualifying: list[tuple[str, float, list[tuple[int, int, float]]]] = []
     for r in related:
         if r["volume"] < _VOLUME_FLOOR:
+            continue
+        if _de_outra_marca(r["keyword"], outras_marcas):
             continue
         kw_norm = _norm_term(r["keyword"])
         if not any(a in kw_norm for a in approved_norms):  # relevance: contains a product term
@@ -308,6 +341,7 @@ async def _demand_rows(
     *,
     seed_terms: list[str] | None = None,
     language: str | None = None,
+    outras_marcas: list[str] | None = None,
 ) -> tuple[list[tuple[str, float, list[tuple[int, int, float]]]], int]:
     """As linhas de demanda do produto neste país: termos aprovados MAIS a
     expansão conservadora de keywords relacionadas, deduplicadas.
@@ -339,7 +373,7 @@ async def _demand_rows(
     seed_label = ", ".join(seed_terms or search_terms[:20])
     related = await _fetch_related_rows(connection, seed_label, location)
     tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
-    expansao = _select_expansion(related, search_terms, tiers)
+    expansao = _select_expansion(related, search_terms, tiers, outras_marcas)
     return _dedup_volume_rows(approved + expansao), len(expansao)
 
 
@@ -350,6 +384,7 @@ async def compute_trend_score(
     *,
     seed_terms: list[str] | None = None,
     language: str | None = None,
+    outras_marcas: list[str] | None = None,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.1 — DEMAND VOLUME (market potential): SUM of the absolute
     monthly search volume of the country's approved terms PLUS a conservative
@@ -364,7 +399,7 @@ async def compute_trend_score(
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         rows, expansion_count = await _demand_rows(
-            connection, search_terms, location, seed_terms=seed_terms, language=language
+            connection, search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
         )
 
     if not rows:
@@ -403,12 +438,15 @@ async def compute_growth_score(
     *,
     seed_terms: list[str] | None = None,
     language: str | None = None,
+    outras_marcas: list[str] | None = None,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.2 — GrowthRaw = (final_avg - initial_avg)/max(initial_avg,1)*100
     over the SUMMED monthly_searches series (trailing 12 months), k = n//3."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        rows, _ = await _demand_rows(connection, search_terms, location, seed_terms=seed_terms, language=language)
+        rows, _ = await _demand_rows(
+            connection, search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+        )
     series = _summed_monthly_series(rows)
 
     n = len(series)
@@ -453,12 +491,15 @@ async def compute_demand_stability_score(
     *,
     seed_terms: list[str] | None = None,
     language: str | None = None,
+    outras_marcas: list[str] | None = None,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev/mean (population stddev) of the
     SUMMED monthly_searches series."""
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
-        rows, _ = await _demand_rows(connection, search_terms, location, seed_terms=seed_terms, language=language)
+        rows, _ = await _demand_rows(
+            connection, search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+        )
     series = _summed_monthly_series(rows)
 
     if len(series) < 2:
@@ -512,7 +553,11 @@ def _classify_query_intent(query: str, tiers: dict[str, list[str]]) -> float:
 
 
 async def compute_search_intent_score(
-    seed_terms: list[str], location: str, period_key: str, language: str | None = None
+    seed_terms: list[str],
+    location: str,
+    period_key: str,
+    language: str | None = None,
+    outras_marcas: list[str] | None = None,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.6 — IntentRaw = volume-weighted average of a lexical buy-vs-
     curiosity classification over the country's related keywords (Google Ads
@@ -538,7 +583,10 @@ async def compute_search_intent_score(
     engine = get_external_engine(DataSource.PYTRENDS)
     async with engine.connect() as connection:
         related = await _fetch_related_rows(connection, seed_label, location)
-    rows = [r for r in related if r["volume"] > 0]
+    # Mesmo veto da expansão: a intenção de compra desta marca não pode ser
+    # composta pelas keywords de outra. Sem isto, um comparativo de alto volume
+    # da concorrente pesaria na intenção deste produto.
+    rows = [r for r in related if r["volume"] > 0 and not _de_outra_marca(r["keyword"], outras_marcas)]
 
     if not rows:
         return RawIndicatorResult(

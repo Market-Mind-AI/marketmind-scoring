@@ -188,9 +188,16 @@ class IndicatorEngine:
             market = (entity.localized_markets or {}).get(country.iso3) or {}
             search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
         seed_terms = search_terms[:20]  # keywords_for_keywords accepts up to 20 seeds
+        # Veto cruzado de marcas: as keywords relacionadas que o Google devolve
+        # para os termos desta marca incluem as concorrentes, e o filtro de
+        # relevância da expansão não as pega quando a keyword carrega ao mesmo
+        # tempo um termo aprovado e outra marca (`glenfiddich 12 vs cardhu 12`).
+        # Vazio para produto sem marca, onde consulta de marca é demanda
+        # legítima da categoria. Ver ProductRepository.list_other_brand_names.
+        outras_marcas = await self._product_repo.list_other_brand_names(entity.brand_key)
 
         trend = await pytrends_indicators.compute_trend_score(
-            search_terms, location, period_key, seed_terms=seed_terms, language=language
+            search_terms, location, period_key, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
         )
         # Decision context for the LLM narrative (not scored): pair the absolute
         # demand VOLUME with population so it can say WHETHER the volume comes
@@ -212,12 +219,14 @@ class IndicatorEngine:
         # têm volume no país perde growth/stability e derruba a análise inteira
         # com o volume de demanda já calculado (ver _demand_rows).
         growth = await pytrends_indicators.compute_growth_score(
-            search_terms, location, period_key, seed_terms=seed_terms, language=language
+            search_terms, location, period_key, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
         )
         stability = await pytrends_indicators.compute_demand_stability_score(
-            search_terms, location, period_key, seed_terms=seed_terms, language=language
+            search_terms, location, period_key, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
         )
-        intent = await pytrends_indicators.compute_search_intent_score(seed_terms, location, period_key, language)
+        intent = await pytrends_indicators.compute_search_intent_score(
+            seed_terms, location, period_key, language, outras_marcas=outras_marcas
+        )
 
         indicator_raws = [
             (IndicatorCode.TREND_SCORE, trend),
