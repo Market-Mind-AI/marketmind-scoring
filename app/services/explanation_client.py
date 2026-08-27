@@ -126,6 +126,10 @@ ou recalcule qualquer valor. Não escreva nenhum número que não esteja no inpu
 O PACOTE traz, para CADA país: o MOS (com banda e um campo `explanation` em texto), a lista de \
 `dimensions` e a lista de `signals` (indicadores). CADA item — MOS, dimensão e sinal — tem um campo \
 `explanation`: uma leitura em linguagem natural do NÚMERO daquele score (o que aquele nível significa). \
+Cada país traz também `context_signals`: números SEM score, que não são bons nem ruins por si — use-os para \
+dar escala, nunca como elogio ou crítica. O mais importante deles é a demanda da CATEGORIA, que vem com o \
+share da marca: demanda baixa da marca num país onde a categoria é muito buscada significa que o mercado \
+existe e a marca não está nele, o que é uma conclusão diferente de "não há mercado aqui". \
 Há ainda um `glossary` no topo definindo o que cada métrica mede. USE o `explanation` de cada score e o \
 `glossary` para construir uma explicação RICA, aproveitando TODOS os dados que entram no MOS \
 (todas as dimensões e sinais), não só o volume.
@@ -168,7 +172,11 @@ value. Do not write any number that is not in the input.
 
 The PACKET carries, for EACH country: the MOS (with band and an `explanation` string), the list of \
 `dimensions` and the list of `signals` (indicators). EVERY item — MOS, dimension and signal — has an \
-`explanation` field: a plain-language reading of that score's NUMBER (what that level means). A \
+`explanation` field: a plain-language reading of that score's NUMBER (what that level means). Each country \
+also carries `context_signals`: numbers with NO score, neither good nor bad in themselves — use them for \
+scale, never as praise or criticism. The important one is the CATEGORY's demand, which comes with the \
+brand's share: low brand demand in a country where the category is searched heavily means the market exists \
+and this brand is not in it, which is a different conclusion from "there is no market here". A \
 top-level `glossary` defines what each metric measures. USE each score's `explanation` and the \
 `glossary` to build a RICH explanation that draws on ALL the data feeding the MOS (every dimension and \
 signal), not just volume.
@@ -417,10 +425,36 @@ class ExplanationClient:
         )
         merged = {**country_values, **product_values}
 
+        # Sinais de CONTEXTO viajam numa lista própria, e não misturados em
+        # `signals`. Dois motivos, e o segundo é um bug que estava dormente:
+        #
+        #  - em `signals` todo item tem `score` numérico, e é assim que o
+        #    frontend os desenha; um item sem score ali quebraria a renderização.
+        #  - o laço abaixo pula quem não tem `normalized_score`, e indicador de
+        #    contexto NUNCA tem — então `regional_demand_score` e
+        #    `government_expenditure_score` estavam declarados no pacote desde
+        #    que foram criados e nunca chegaram a sair nele. O
+        #    `category_volume_score` herdaria o mesmo destino.
+        #
+        # O que eles carregam é o número bruto e a nota determinística montada
+        # no cálculo — no caso do volume da categoria, o share da marca com os
+        # dois volumes à vista.
         signals: list[dict[str, Any]] = []
+        context_signals: list[dict[str, Any]] = []
         for code in _PACKET_INDICATORS:
             iv = merged.get(code.value)
-            if iv is None or iv.normalized_score is None:
+            if iv is None:
+                continue
+            if iv.normalized_score is None:
+                if iv.raw_value is not None:
+                    context_signals.append(
+                        {
+                            "code": code.value,
+                            "label": catalog.label(code.value),
+                            "value": float(iv.raw_value),
+                            "context": iv.notes,
+                        }
+                    )
                 continue
             # Each signal carries its stored per-score explanation (built at
             # compute time from the DB-parametrized band phrases). Demand Volume
@@ -464,6 +498,7 @@ class ExplanationClient:
             "mos_explanation": mos_result.explanation,
             "dimensions": dimensions,
             "signals": signals,
+            "context_signals": context_signals,
         }
 
     async def build_evidence(

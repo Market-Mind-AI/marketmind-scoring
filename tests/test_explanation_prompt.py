@@ -38,3 +38,66 @@ def test_single_country_prompt_instructs_against_comparison() -> None:
     # The negative instruction is expected (it tells the model NOT to compare).
     assert "apenas um país" in _system_prompt("pt", single_country=True).lower()
     assert "only one country" in _system_prompt("en", single_country=True).lower()
+
+
+async def test_sinais_de_contexto_saem_em_lista_propria(db_session) -> None:
+    """Indicador de contexto nunca tem `normalized_score`, e o laço que monta
+    `signals` pula quem não tem score — então `regional_demand_score` e
+    `government_expenditure_score` estavam declarados no pacote desde sempre e
+    NUNCA saíam nele. O `category_volume_score` herdaria o mesmo destino, que é
+    justamente o número que a narrativa precisa para separar "não há mercado
+    aqui" de "há mercado e esta marca não está nele".
+
+    Vão numa lista própria, e não misturados: em `signals` todo item tem `score`
+    numérico, que é como o frontend os desenha.
+    """
+    import uuid as _uuid
+    from decimal import Decimal
+
+    from app.db.models.indicator_value import IndicatorValue
+    from app.db.models.mos_result import MosResult
+    from app.repositories.metric_explanation_repository import MetricExplanationRepository
+    from app.repositories.product_repository import ProductRepository
+    from app.services.explanation_client import ExplanationClient
+
+    repo = ProductRepository(db_session)
+    entity = await repo.create_entity(canonical_title=f"whisky {_uuid.uuid4().hex[:8]}")
+    await db_session.commit()
+
+    db_session.add(
+        IndicatorValue(
+            id=_uuid.uuid4(),
+            entity_key=entity.entity_key,
+            country="GBR",
+            indicator_code="category_volume_score",
+            period_type="month",
+            period_key="2026-08",
+            source="pytrends",
+            raw_value=Decimal("50000"),
+            normalized_score=None,  # contexto puro: não tem régua
+            availability_status="available",
+            notes="50,000 total monthly searches; brand share 2.0% of the category's generic searches",
+        )
+    )
+    await db_session.commit()
+
+    mos_result = MosResult(
+        id=_uuid.uuid4(),
+        entity_key=entity.entity_key,
+        country="GBR",
+        period_type="month",
+        period_key="2026-08",
+        mos=Decimal("40"),
+        mos_interpretation="Low Opportunity",
+        availability_status="available",
+    )
+    client = ExplanationClient(db_session)
+    catalog = await MetricExplanationRepository(db_session).catalog()
+    pacote = await client._country_evidence(entity.entity_key, mos_result, "2026-08", catalog, {})
+
+    contextos = {c["code"]: c for c in pacote["context_signals"]}
+    assert "category_volume_score" in contextos
+    assert contextos["category_volume_score"]["value"] == 50000.0
+    assert "brand share 2.0%" in contextos["category_volume_score"]["context"]
+    # E não entra em `signals`, onde todo item tem score numérico.
+    assert all(s["score"] is not None for s in pacote["signals"])
