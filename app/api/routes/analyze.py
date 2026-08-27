@@ -96,6 +96,7 @@ def _status_payload(
         explanation=analysis_request.explanation,
         breakdown=breakdown,
         error_message=analysis_request.error_message,
+        progress=analysis_request.progress,
     )
 
 

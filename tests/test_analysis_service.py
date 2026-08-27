@@ -4,8 +4,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.domain.enums import DataSource
-from app.schemas.coverage import GapStatus
+from app.core.config import settings
+from app.domain.enums import DataSource, JobTaskStatus
+from app.schemas.coverage import GapStatus, JobTaskResult
 from app.schemas.mos import MosResultResponse
 from app.services.analysis_service import AnalysisService
 
@@ -516,3 +517,98 @@ async def test_run_skips_mos_when_entity_key_is_none() -> None:
     mocks["analysis_repo"].mark_done.assert_awaited_once_with(
         mocks["analysis_repo"].get.return_value, result=[], explanation=None, breakdown=None
     )
+
+
+# --- Nada parcial sai: insistir quando a causa é transitória (decisões D3/D5) ---
+
+
+def _task(status: str, *, country: str = "USA", source: DataSource = DataSource.UNDATA) -> JobTaskResult:
+    return JobTaskResult(
+        id=uuid.uuid4(),
+        source=source,
+        entity_key=None,
+        country=country,
+        indicator_code="POPULATION_GROWTH",
+        period_key="LATEST",
+        status=JobTaskStatus(status),
+        ingestion_run_id=None,
+        error_message="undata ingestion run ended with status=failed" if status == "failed" else None,
+    )
+
+
+async def test_falha_transitoria_de_fonte_faz_a_analise_insistir() -> None:
+    """O incidente de 25/08: a API do UN Data respondeu 503 por 29 minutos e 9
+    de 24 países saíram do ranking. A coleta FALHOU — a fonte não respondeu —, e
+    o mesmo dado veio inteiro 36 segundos depois de ela voltar. Causa
+    transitória não pode custar um país no resultado."""
+    session, mocks = _patched_service(all_covered=False, missing_terms=[], related_exists=True)
+    mocks["coverage_service"].check_or_collect = AsyncMock(return_value=(uuid.uuid4(), [_task("failed")]))
+    # Incompleto na 1ª tentativa; completo na 2ª, depois que a fonte voltou.
+    mocks["mos_engine"].find_incomplete_countries = AsyncMock(
+        side_effect=[
+            {"USA": "Missing mandatory indicator(s): population_growth_score"},
+            {"USA": "Missing mandatory indicator(s): population_growth_score"},
+            {},
+        ]
+    )
+    dormiu = AsyncMock()
+    try:
+        with patch("app.services.analysis_service.asyncio.sleep", dormiu):
+            service = AnalysisService(session)
+            await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    dormiu.assert_awaited()  # esperou a fonte voltar em vez de excluir o país
+    assert dormiu.await_args.args[0] == 30, "primeiro backoff curto: a maioria das falhas é blip"
+    mocks["analysis_repo"].mark_done.assert_awaited_once()
+    mocks["analysis_repo"].mark_failed.assert_not_awaited()
+
+
+async def test_orcamento_esgotado_falha_em_vez_de_entregar_parcial() -> None:
+    """A regra que substitui a de 9b84397: se sobrou país sem dado por falha de
+    fonte e o orçamento acabou, a análise termina em `failed` com motivo. Nunca
+    em `done` incompleta — o usuário paga por análise completa (D3)."""
+    session, mocks = _patched_service(all_covered=False, missing_terms=[], related_exists=True)
+    mocks["coverage_service"].check_or_collect = AsyncMock(return_value=(uuid.uuid4(), [_task("failed")]))
+    mocks["mos_engine"].find_incomplete_countries = AsyncMock(
+        return_value={"USA": "Missing mandatory indicator(s): population_growth_score"}
+    )
+    try:
+        with patch.object(settings, "analysis_retry_budget_seconds", 0):
+            service = AnalysisService(session)
+            await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    mocks["analysis_repo"].mark_done.assert_not_awaited()
+    mocks["analysis_repo"].mark_failed.assert_awaited_once()
+    motivo = mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+    assert "USA" in motivo and "sem dado por falha de fonte" in motivo
+
+
+async def test_fonte_sem_o_dado_nao_vira_espera_infinita() -> None:
+    """A exceção da D7: coleta que terminou SEM falha e mesmo assim não produziu
+    o indicador significa que a fonte não tem esse dado para este país.
+    Insistir não muda nada — o país sai declarado e os outros são entregues."""
+    session, mocks = _patched_service(all_covered=False, missing_terms=[], related_exists=True)
+    mocks["coverage_service"].check_or_collect = AsyncMock(return_value=(uuid.uuid4(), [_task("done")]))
+    mocks["mos_engine"].find_incomplete_countries = AsyncMock(
+        return_value={"USA": "Missing mandatory indicator(s): population_growth_score"}
+    )
+    dormiu = AsyncMock()
+    try:
+        with patch("app.services.analysis_service.asyncio.sleep", dormiu):
+            service = AnalysisService(session)
+            await service.run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    dormiu.assert_not_awaited(), "causa definitiva não gera espera"
+    mocks["analysis_repo"].mark_done.assert_awaited_once()

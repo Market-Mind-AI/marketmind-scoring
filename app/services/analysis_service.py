@@ -14,8 +14,9 @@ single row with a 90-day TTL (see COUNTRY_LEVEL_PERIOD_KEY and
 settings.country_indicator_ttl_days).
 """
 
+import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,15 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
+from app.db.models.analysis_request import AnalysisRequest
 from app.db.models.indicator_value import IndicatorValue
 from app.db.models.mos_result import MosResult
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, PeriodType
+from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, JobTaskStatus, PeriodType
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
-from app.schemas.coverage import CoverageGap
+from app.schemas.coverage import CoverageGap, JobTaskResult
 from app.schemas.mos import MosResultResponse
 from app.services.catalog_service import _merge_localized_markets
 from app.services.coverage_service import CoverageService
@@ -48,6 +50,7 @@ from app.services.reference_market_client import ReferenceMarketClient, Referenc
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import COUNTRY_LEVEL_PERIOD_KEY, current_month_period_key
 from app.utils.text import as_term_list
+from app.utils.time import utc_now
 
 # The reference-market shortlist is a ranked list from the LLM (biggest markets
 # first), and every candidate beyond the requested countries costs a full
@@ -263,53 +266,32 @@ class AnalysisService:
             # is_closed immutability of already-locked periods.
             await self._weight_calibration.calibrate(period_key=period_key)
 
-            # Completeness (princípio do usuário de 2026-07-11): o MOS nunca sai
+            # Completude (princípio do usuário de 2026-07-11): o MOS nunca sai
             # de dado parcial. Todo país pontuado carrega o mesmo conjunto de
             # indicadores obrigatórios, na mesma régua 0-100 — é isso que mantém
             # os scores comparáveis entre si.
             #
-            # Até 2026-08-25 um país incompleto derrubava a ANÁLISE INTEIRA.
-            # Aconteceu em produção (e152761b, `3D printer filament`): três
-            # países perderam growth/stability por uma inconsistência de leitura
-            # já corrigida (ver indicators/pytrends._demand_rows) e a análise
-            # inteira morreu — com o volume de demanda dos três já calculado.
+            # A regra de 25/08 era "esgotar o que dá e excluir o resto": duas
+            # passadas de coleta, e o que continuasse incompleto saía do
+            # ranking com motivo. Ela entregava um resultado a menos por uma
+            # queda de fonte de 29 minutos (incidente do UN Data em 25/08, 9 de
+            # 24 países), e o usuário paga por análise completa (decisão D3).
             #
-            # A regra passou a ser: esgotar o que dá para fazer, e só falhar
-            # quando não sobrar nada. Em ordem —
-            #   1. um país incompleto ganha uma segunda passada de coleta e
-            #      recálculo (pega falha transitória de coletor; é no-op quando
-            #      o dado realmente não existe, porque a coleta é incremental
-            #      por termo);
-            #   2. o que continuar incompleto é EXCLUÍDO com motivo pelo
-            #      compute_mos — Cap. 5 §5.3, "never silently drops the
-            #      country" — e a linha de exclusão viaja no resultado, então
-            #      o relatório diz quem ficou de fora e por quê;
-            #   3. a análise só falha se NENHUM país puder ser pontuado.
-            # A comparabilidade continua intacta: quem é pontuado carrega o
-            # conjunto completo. O que mudou é que um país sem dado não leva os
-            # outros junto.
+            # A regra agora é: insistir enquanto a causa for TRANSITÓRIA, e só
+            # aceitar país de fora quando a causa for DEFINITIVA. Ver
+            # `_completar_paises` para como as duas são distinguidas.
+            definitivos: dict[str, str] = {}
             if entity_key is not None:
-                incomplete = await self._mos_engine.find_incomplete_countries(
-                    entity_key=entity_key, countries=countries, period_key=period_key
+                definitivos = await self._completar_paises(
+                    analysis_request,
+                    entity_key=entity_key,
+                    countries=countries,
+                    period_key=period_key,
+                    demand_ceiling=demand_ceiling,
                 )
-                if incomplete:
-                    logger.warning(
-                        f"Incompletos após a 1ª coleta: {incomplete}. Tentando uma segunda passada antes de excluir."
-                    )
-                    for country_iso3 in incomplete:
-                        await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
-                        await self._indicator_engine.compute_all(
-                            country_iso3=country_iso3,
-                            entity_key=entity_key,
-                            period_key=period_key,
-                            demand_ceiling=demand_ceiling,
-                        )
-                    incomplete = await self._mos_engine.find_incomplete_countries(
-                        entity_key=entity_key, countries=countries, period_key=period_key
-                    )
-                    if incomplete:
-                        detalhe = "; ".join(f"{c}: {motivo}" for c, motivo in incomplete.items())
-                        logger.warning(f"Excluídos do MOS por dado ausente: {detalhe}")
+                if definitivos:
+                    detalhe = "; ".join(f"{c}: {motivo}" for c, motivo in definitivos.items())
+                    logger.warning(f"Excluídos do MOS porque a fonte não tem o dado: {detalhe}")
 
             mos_results = (
                 await self._mos_engine.compute_mos(entity_key=entity_key, countries=countries, period_key=period_key)
@@ -628,10 +610,126 @@ class AnalysisService:
             except ReferenceMarketError as exc:
                 logger.warning(f"Background reference-market candidates unavailable: {exc}")
 
-    async def _ensure_coverage(self, *, country_iso3: str, entity_key: uuid.UUID | None) -> None:
+    async def _completar_paises(
+        self,
+        analysis_request: AnalysisRequest,
+        *,
+        entity_key: uuid.UUID,
+        countries: list[str],
+        period_key: str,
+        demand_ceiling: float | None,
+    ) -> dict[str, str]:
+        """Insiste até todo país pedido ter indicador, ou até a causa ser
+        definitiva. Devolve `{país: motivo}` só dos DEFINITIVOS.
+
+        AS DUAS CAUSAS, e como são distinguidas sem contrato novo nos quatro
+        coletores. Depois de uma passada de coleta + recálculo, um país que
+        continua sem indicador está num de dois estados:
+
+          TRANSITÓRIO   alguma task de coleta FALHOU. A fonte não respondeu —
+                        503, timeout, erro de gateway. O dado provavelmente
+                        existe e a próxima tentativa o traz. Foi o caso do UN
+                        Data em 25/08: 78 coletas encerradas em 422 depois de
+                        236 respostas 503, e o mesmo dado veio inteiro 36
+                        segundos depois de a API voltar.
+          DEFINITIVO    nenhuma task falhou e o indicador continua faltando. A
+                        coleta rodou, a fonte respondeu, e não tem esse dado
+                        para este país. Insistir não muda nada — é a exceção
+                        que a decisão D7 abriu.
+
+        A distinção é observável de dentro do Core porque `_ensure_coverage`
+        agora devolve o resultado das tasks. Não precisa que os coletores
+        passem a separar `no_data` de `unavailable` na resposta deles, o que
+        seria mudança nos quatro repositórios ao mesmo tempo.
+
+        Enquanto houver transitório e orçamento, dorme e tenta de novo. Quando
+        o orçamento acaba, LEVANTA — quem chama marca a análise como `failed`
+        com motivo, nunca como `done` incompleta (decisões D3 e D5).
+        """
+        deadline = utc_now() + timedelta(seconds=settings.analysis_retry_budget_seconds)
+        analysis_request.deadline_at = deadline
+        await self._session.commit()
+
+        definitivos: dict[str, str] = {}
+        tentativa = 0
+        while True:
+            incompletos = await self._mos_engine.find_incomplete_countries(
+                entity_key=entity_key, countries=countries, period_key=period_key
+            )
+            pendentes = {pais: motivo for pais, motivo in incompletos.items() if pais not in definitivos}
+            if not pendentes:
+                await self._anotar_progresso(analysis_request, None)
+                return definitivos
+
+            tentativa += 1
+            transitorios: list[str] = []
+            for pais, _motivo in pendentes.items():
+                resultados = await self._ensure_coverage(country_iso3=pais, entity_key=entity_key)
+                await self._indicator_engine.compute_all(
+                    country_iso3=pais,
+                    entity_key=entity_key,
+                    period_key=period_key,
+                    demand_ceiling=demand_ceiling,
+                )
+                ainda = await self._mos_engine.find_incomplete_countries(
+                    entity_key=entity_key, countries=[pais], period_key=period_key
+                )
+                if not ainda:
+                    continue
+                falhas = [r for r in resultados if r.status == JobTaskStatus.FAILED]
+                if falhas:
+                    transitorios.append(pais)
+                    fontes = sorted({r.source.value for r in falhas})
+                    logger.warning(
+                        f"{pais} sem indicador e com coleta falhada em {fontes} (tentativa {tentativa}); "
+                        f"causa transitória, vai insistir"
+                    )
+                else:
+                    definitivos[pais] = ainda[pais]
+                    logger.warning(
+                        f"{pais} sem indicador com a coleta bem-sucedida: a fonte não tem este dado. {ainda[pais]}"
+                    )
+
+            if not transitorios:
+                await self._anotar_progresso(analysis_request, None)
+                return definitivos
+
+            restante = (deadline - utc_now()).total_seconds()
+            if restante <= 0:
+                raise MarketMindCoreError(
+                    f"Análise incompleta depois de {tentativa} tentativas em "
+                    f"{settings.analysis_retry_budget_seconds // 3600}h: {', '.join(sorted(transitorios))} seguem "
+                    f"sem dado por falha de fonte. Nada parcial é entregue (D3); refaça quando a fonte voltar."
+                )
+
+            espera = min(30 * 2 ** (tentativa - 1), settings.analysis_retry_max_backoff_seconds)
+            espera = min(espera, restante)
+            await self._anotar_progresso(
+                analysis_request,
+                f"aguardando dado de {', '.join(sorted(transitorios))} — tentativa {tentativa}, "
+                f"próxima em {espera:.0f}s (fonte indisponível; a análise não é entregue pela metade)",
+            )
+            await asyncio.sleep(espera)
+
+    async def _anotar_progresso(self, analysis_request: AnalysisRequest, mensagem: str | None) -> None:
+        """Grava no que a análise está esperando. Uma análise legítima
+        insistindo numa fonte fora do ar pode levar horas, e sem esta frase ela
+        é indistinguível de uma travada — para o usuário e para quem retomar."""
+        analysis_request.progress = mensagem
+        await self._session.commit()
+        if mensagem:
+            logger.info(f"AnalysisRequest {analysis_request.id}: {mensagem}")
+
+    async def _ensure_coverage(self, *, country_iso3: str, entity_key: uuid.UUID | None) -> list[JobTaskResult]:
         """Checks (read-only) the last 6 monthly period_keys for every gap
         this country/product needs, and only dispatches collection
-        (check_or_collect) for the ones actually missing."""
+        (check_or_collect) for the ones actually missing.
+
+        Devolve o resultado das tasks despachadas — vazio quando nada precisou
+        ser coletado. É esse resultado que distingue as duas causas de um país
+        continuar sem indicador (ver `_completar_paises`): task FALHADA é fonte
+        fora do ar, e vale insistir; coleta que terminou sem falha e mesmo assim
+        não produziu o indicador é fonte que não tem aquele dado."""
         gaps: list[CoverageGap] = []
 
         if entity_key is not None:
@@ -763,7 +861,7 @@ class AnalysisService:
                 )
 
         if not gaps:
-            return
+            return []
 
         # Dedup — some sources repeat the same native code across dimensions
         # (e.g. OECD's "CPI" backs both inflation level and volatility).
@@ -781,8 +879,10 @@ class AnalysisService:
         # collected even when its raw coverage row looks fresh — otherwise the
         # stale "covered" flag would strand a country whose indicator is empty.
         missing = [gap for gap, status in zip(unique_gaps, statuses, strict=True) if gap.force or not status.covered]
-        if missing:
-            await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")
+        if not missing:
+            return []
+        _job_id, resultados = await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")
+        return resultados
 
     @staticmethod
     def _demand_gap_needs_recollect(current: dict[str, IndicatorValue], collection_code: str) -> bool:

@@ -54,6 +54,14 @@ class AnalysisRequest(Base):
     # explains; it never computes or alters any score (Cap. 4 §4.0).
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # No que a análise está esperando AGORA (migration 033). Uma análise que
+    # insiste numa fonte fora do ar é legítima e pode levar horas; sem esta
+    # frase ela é indistinguível de uma travada.
+    progress: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Até quando vale insistir (decisão D5). Persistido, não só em memória,
+    # porque quem retoma depois de um restart precisa saber se ainda está
+    # dentro do orçamento ou se o pedido já deveria ter falhado.
+    deadline_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
 

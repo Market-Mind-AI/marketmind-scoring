@@ -169,6 +169,23 @@ class Settings(BaseSettings):
     # re-collected.
     country_indicator_ttl_days: int = 90
 
+    # Fase 5 — a análise NUNCA entrega ranking parcial (decisão D3, 2026-08-27:
+    # "o usuário vai pagar por essa análise"). Um país sem indicador por falha
+    # TRANSITÓRIA da fonte mantém a análise rodando, com backoff exponencial,
+    # até o dado vir ou até este orçamento estourar — e aí ela termina em
+    # `failed` com motivo, nunca em `done` incompleto (decisão D5).
+    #
+    # 24h é folga deliberada sobre o incidente que motivou isto: a API do UN
+    # Population Data Portal ficou fora por 29 minutos em 25/08/2026 e derrubou
+    # 9 dos 24 países de uma análise. O teto existe para não deixar um request
+    # preso para sempre, não para expirar em uso normal.
+    analysis_retry_budget_seconds: int = 24 * 60 * 60
+    # Teto do backoff entre tentativas. Começa em 30s e dobra: 30, 60, 120,
+    # 240, 480, 900, 900... Curto no começo porque a maioria das falhas de
+    # fonte é blip de segundos; longo depois porque uma queda real não se
+    # resolve insistindo rápido.
+    analysis_retry_max_backoff_seconds: int = 900
+
     # Fase 2 — product catalog resolution pipeline (app/services/catalog_service.py).
     # A chave da OpenAI continua aqui porque `GptProvider` (app/services/llm/providers.py)
     # a usa quando algum call site é apontado para "gpt". O que sumiu foi o

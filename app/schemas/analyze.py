@@ -67,3 +67,7 @@ class AnalysisStatusResponse(BaseModel):
     # analyses stored before this field existed; null only if nothing was scored.
     breakdown: dict[str, Any] | None = None
     error_message: str | None
+    # No que a análise está esperando AGORA. Uma análise que insiste numa fonte
+    # fora do ar é legítima e pode levar horas — sem esta frase, o frontend não
+    # tem como distingui-la de uma travada. Nulo quando não está esperando nada.
+    progress: str | None = None
