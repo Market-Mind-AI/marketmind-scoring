@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.logging import logger
+from app.db.models.brand import Brand
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.db.models.product_excluded_term import ProductExcludedTerm
@@ -74,7 +75,9 @@ class ProductRepository:
         alias.hit_count += 1
         await self._session.flush()
 
-    async def trigram_search(self, alias_normalized: str, *, category: str | None = None) -> TrigramOutcome:
+    async def trigram_search(
+        self, alias_normalized: str, *, category: str | None = None, brand_key: uuid.UUID | None = None
+    ) -> TrigramOutcome:
         """Passo 2, com a evidência negativa no mesmo julgamento.
 
         Para cada entidade que tem algum alias acima do limiar, compara a
@@ -138,6 +141,16 @@ class ProductRepository:
         indo ao passo 3). Como o máximo global é sempre >= o máximo da própria
         entidade, a regra global subsume a por-entidade e sobra uma comparação
         só.
+
+        PARTIÇÃO DA MARCA. A busca acontece dentro de UMA partição: `brand_key`
+        igual ao pedido, com NULL sendo a partição genérica (daí o
+        `IS NOT DISTINCT FROM`, e não `=`, que nunca casa com NULL). O texto
+        comparado continua sendo o NOME GENÉRICO — a marca nunca entra na
+        medida de semelhança, porque é um token que todos os produtos daquela
+        marca compartilham e foi ele que fundiu `philips air purifier` com o
+        alias `philips airfryer` a 0.520 (ver 28ca6be). O que a partição muda é
+        CONTRA QUEM comparar: dentro da Philips a medida volta a ser
+        `air purifier` x `airfryer` = 0.278, abaixo do limiar.
         """
         limiar = settings.catalog_trigram_similarity_threshold
         # Vale só até o fim desta transação (is_local => true).
@@ -165,6 +178,7 @@ class ProductRepository:
             select(ProductCatalog, positivos.c.sim, sim_negativa.label("sim_negativa"))
             .join(positivos, positivos.c.entity_key == ProductCatalog.entity_key)
             .where(ProductCatalog.merged_into.is_(None))
+            .where(ProductCatalog.brand_key.is_not_distinct_from(brand_key))
             .order_by(positivos.c.sim.desc())
         )
         result = await self._session.execute(stmt)
@@ -200,6 +214,8 @@ class ProductRepository:
         reference_candidates: list[dict[str, Any]] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
+        brand_key: uuid.UUID | None = None,
+        generic_entity_key: uuid.UUID | None = None,
     ) -> ProductCatalog:
         entity = ProductCatalog(
             entity_key=uuid.uuid4(),
@@ -209,11 +225,71 @@ class ProductRepository:
             reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
+            brand_key=brand_key,
+            generic_entity_key=generic_entity_key,
             created_at=utc_now(),
         )
         self._session.add(entity)
         await self._session.flush()
         return entity
+
+    async def get_or_create_brand(self, *, name: str, source: str | None = None) -> Brand:
+        """A marca do cadastro global, criada na primeira vez que é vista.
+
+        A chave é a forma normalizada, então "Cardhu", "CARDHU" e "cardhu" são
+        a mesma marca — sem isso o veto cruzado da demanda teria três listas
+        para a mesma empresa. A grafia de superfície guardada é a primeira
+        vista, que é a que o usuário lê.
+
+        Marca cuja forma normalizada é vazia (texto só de pontuação ou emoji)
+        não entra: é a mesma corrupção da migration 028, e a CHECK da tabela
+        recusaria de todo jeito.
+        """
+        normalizada = normalize_alias(name)
+        if not normalizada:
+            raise ValueError(f"Marca {name!r} não tem forma normalizada; não pode ser cadastrada")
+
+        existente = (
+            await self._session.execute(select(Brand).where(Brand.name_normalized == normalizada))
+        ).scalar_one_or_none()
+        if existente is not None:
+            return existente
+
+        marca = Brand(
+            brand_key=uuid.uuid4(),
+            name=name.strip(),
+            name_normalized=normalizada,
+            first_seen_source=source,
+            created_at=utc_now(),
+        )
+        self._session.add(marca)
+        await self._session.flush()
+        logger.info(f"Marca nova no cadastro: {marca.name!r}")
+        return marca
+
+    async def repoint_alias(self, alias: ProductAlias, entity_key: uuid.UUID) -> None:
+        """Troca o dono de um alias.
+
+        Existe para UM caso, e de propósito não é genérico: um alias com marca
+        (`marca + nome`) apontando para uma entidade que não é daquela marca. A
+        regra antiga (28ca6be até 27/08) gravava exatamente isso — o alias
+        `cardhu single malt scotch whisky` apontando para a entidade genérica
+        `single malt Scotch whisky`. Como `alias_normalized` é único global,
+        deixá-lo onde está impediria a entidade certa de ter alias exato, e
+        toda resolução da marca voltaria a cair no passo 2 ou 3 e criaria
+        entidade duplicada.
+
+        A regra do novo modelo é clara o suficiente para automatizar: quem
+        possui um alias qualificado por marca sem ser a entidade daquela marca
+        está errado por construção.
+        """
+        anterior = alias.entity_key
+        alias.entity_key = entity_key
+        await self._session.flush()
+        logger.warning(
+            f"Alias {alias.alias_normalized!r} repontado de {anterior} para {entity_key}: "
+            f"era artefato da regra antiga de marca"
+        )
 
     async def create_alias(self, *, alias_normalized: str, entity_key: uuid.UUID, source: str) -> ProductAlias:
         alias = ProductAlias(
@@ -338,7 +414,11 @@ class ProductRepository:
         return apagados
 
     async def list_match_candidates(
-        self, *, category: str | None = None, priority: list[ProductCatalog] | None = None
+        self,
+        *,
+        category: str | None = None,
+        priority: list[ProductCatalog] | None = None,
+        brand_key: uuid.UUID | None = None,
     ) -> list[ProductCatalog]:
         """Entidades que o LLM vai considerar quando alias e trigram falham.
 
@@ -353,9 +433,18 @@ class ProductRepository:
         não" — exatamente o caso que o LLM existe para arbitrar, então essa
         entidade não pode ficar de fora da lista por causa do teto ou de uma
         categoria divergente.
+
+        Os candidatos vêm da MESMA partição de marca do pedido (`brand_key`
+        igual, NULL = genérica). Mostrar ao LLM produtos de outra marca só
+        oferece fusão errada: ele decide identidade de produto, e "é o mesmo
+        produto de outra marca" é justamente a resposta que a partição existe
+        para tornar impossível.
         """
         limite = settings.catalog_match_candidate_limit
-        base = select(ProductCatalog).where(ProductCatalog.merged_into.is_(None))
+        base = select(ProductCatalog).where(
+            ProductCatalog.merged_into.is_(None),
+            ProductCatalog.brand_key.is_not_distinct_from(brand_key),
+        )
 
         selecionadas: list[ProductCatalog] = []
         vistos: set[uuid.UUID] = set()

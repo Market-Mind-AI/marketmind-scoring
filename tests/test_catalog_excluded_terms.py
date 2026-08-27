@@ -195,27 +195,42 @@ async def test_backfill_indexa_os_dois_lados(db_session: AsyncSession) -> None:
     assert donos.get(f"freidora sin aceite {sufixo}") == entidade.entity_key
 
 
-async def test_marca_nao_decide_identidade_mas_e_acumulada(db_session: AsyncSession) -> None:
-    """A identidade é o produto GENÉRICO. Até 2026-08-25 os chamadores
-    concatenavam `marca + nome` antes de resolver, e a marca — um token que
-    todos os produtos daquela marca compartilham — decidia identidade: um
-    purificador de ar Philips casou com o alias `philips airfryer` a 0.520 e
-    virou air fryer, levando junto os termos de busca e a categoria.
+async def test_marca_particiona_a_identidade(db_session: AsyncSession) -> None:
+    """A identidade do catálogo é o PAR (nome genérico, marca). Duas coisas
+    precisam ser verdade ao mesmo tempo, e até 27/08 só a primeira era:
+
+      - a marca NÃO decide semelhança. Concatenada ao texto, ela é um token
+        compartilhado por todos os produtos daquela marca: um purificador de ar
+        Philips casava com o alias `philips airfryer` a 0.520 e virava air
+        fryer, levando junto os termos de busca e a categoria (28ca6be).
+      - a marca NÃO pode ser ignorada. Sem ela na identidade, `single malt
+        Scotch whisky` + Cardhu e o mesmo nome + Glenfiddich resolviam para a
+        MESMA entidade pelo alias exato — medido no banco vivo em 27/08 —, e a
+        segunda marca herdava o vocabulário e a demanda da primeira.
+
+    A partição entrega as duas: o texto medido continua sendo só o nome
+    genérico, e a marca escolhe contra quem medir.
     """
     sufixo = uuid.uuid4().hex[:8]
     service = CatalogService(db_session, matcher=_sem_match())
+    repo = ProductRepository(db_session)
     nome = f"air fryer {sufixo}"
-    criado = await service.resolve(nome, source="test", brand="Philips", localized_markets=_mercados(sufixo))
 
-    entidade = await ProductRepository(db_session).get_by_entity_key(criado.entity_key)
-    assert entidade.brands == ["Philips"]
-    assert entidade.canonical_title == nome, "o título é o nome genérico, sem a marca"
+    philips = await service.resolve(nome, source="test", brand="Philips", localized_markets=_mercados(sufixo))
+    entidade = await repo.get_by_entity_key(philips.entity_key)
+    assert entidade.canonical_title == f"Philips {nome}", "o título mostrado carrega a marca"
+    assert entidade.brand_key is not None
 
-    # Marca nova para o MESMO produto: acrescenta, não substitui.
-    de_novo = await service.resolve(nome, source="test", brand="Ninja")
-    assert de_novo.entity_key == criado.entity_key
-    entidade = await ProductRepository(db_session).get_by_entity_key(criado.entity_key)
-    assert entidade.brands == ["Philips", "Ninja"]
+    familia = await repo.get_by_entity_key(entidade.generic_entity_key)
+    assert familia is not None, "toda entidade de marca tem família (CHECK da migration 031)"
+    assert familia.canonical_title == nome and familia.brand_key is None
+
+    # Outra marca do MESMO produto genérico: entidade própria, família comum.
+    ninja = await service.resolve(nome, source="test", brand="Ninja")
+    assert ninja.entity_key != philips.entity_key, "duas marcas não podem virar a mesma entidade"
+    outra = await repo.get_by_entity_key(ninja.entity_key)
+    assert outra.generic_entity_key == familia.entity_key
+    assert outra.brand_key != entidade.brand_key
 
 
 async def test_marca_vira_alias_composto_nunca_sozinha(db_session: AsyncSession) -> None:

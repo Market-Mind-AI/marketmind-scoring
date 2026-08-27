@@ -13,6 +13,14 @@ section 6). Cheapest-to-most-expensive match, in order:
 Um match nos passos 2 ou 3 grava um alias exato apontando para a entidade, de
 modo que o mesmo texto resolve pelo caminho O(1) na próxima vez.
 
+Os quatro passos rodam dentro de UMA PARTIÇÃO DE MARCA (2026-08-27, migration
+031): a identidade do catálogo é o par (nome genérico, marca), e `brand_key
+NULL` é a partição genérica. O que os passos 2 e 3 medem continua sendo só o
+nome genérico — a marca nunca entra na comparação de semelhança —, mas medem
+contra as entidades da mesma marca. Um pedido com marca resolve DUAS entidades:
+a família genérica e a filha da marca, que é quem recebe o vocabulário curado e
+quem a resposta devolve. Ver `resolve` para o caso medido que motivou.
+
 Os `search_terms` de cada mercado também viram aliases (ver
 _index_localized_terms). Isso é o que faz o passo 2 alcançar outros idiomas: o
 LLM de enrichment já traduziu o produto para cada mercado, e indexar esses
@@ -41,11 +49,14 @@ o erro recuperável.
 """
 
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import logger
+from app.db.models.brand import Brand
+from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.repositories.product_repository import ProductRepository, TrigramOutcome
 from app.schemas.catalog import CatalogResolveResponse
@@ -111,6 +122,25 @@ def _merge_reference_candidates(
     return list(by_country.values())
 
 
+@dataclass
+class _Resolvido:
+    """Saída de uma resolução dentro de uma partição: a entidade e por qual dos
+    quatro passos ela foi encontrada."""
+
+    entity: ProductCatalog
+    method: str
+    match_score: float | None = None
+
+
+def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
+    return CatalogResolveResponse(
+        entity_key=resolvido.entity.entity_key,
+        canonical_title=resolvido.entity.canonical_title,
+        method=resolvido.method,
+        match_score=resolvido.match_score,
+    )
+
+
 class CatalogService:
     def __init__(self, session: AsyncSession, matcher: CatalogMatcher | None = None) -> None:
         self._session = session
@@ -129,44 +159,153 @@ class CatalogService:
         target_age_min: int | None = None,
         target_age_max: int | None = None,
     ) -> CatalogResolveResponse:
-        # `text` é o NOME GENÉRICO do produto, sem marca. Até 2026-08-25 os
-        # dois chamadores concatenavam `marca + nome` aqui, e isso decidia
-        # identidade com um token que todos os produtos daquela marca
-        # compartilham: `air purifier` x `air fryer` mede 0.278, longe do
-        # limiar, mas `philips air purifier` x o alias `philips airfryer` mede
-        # 0.520 — e o purificador virava air fryer, levando junto os termos de
-        # busca e a categoria. A marca não some: ver `_registrar_marca`.
-        alias_normalized = normalize_alias(text)
+        """`text` é o NOME GENÉRICO do produto, sem marca. A marca vem separada
+        e PARTICIONA a identidade: a unidade do catálogo passou a ser o par
+        (nome genérico, marca), com a partição genérica sendo `brand_key NULL`.
 
-        # Sem forma normalizada não há o que casar por string: alias exato e
-        # trigram são pulados e a decisão vai direto para o LLM, que lê o texto
-        # original. Antes, `get_entity_by_alias_exact("")` casava com o alias
-        # vazio de uma entidade anterior e fundia produtos sem relação.
-        existing = await self._repo.get_entity_by_alias_exact(alias_normalized) if alias_normalized else None
-        if existing is not None:
-            existing_alias, entity = existing
-            await self._repo.bump_alias_hit(existing_alias)
-            # Re-analysis refreshes the entity with any fields the caller brought
-            # (identify-image / analyze pass-through), so a product's markets and
-            # reference candidates stay current instead of being frozen at creation.
-            self._refresh_entity_fields(
-                entity,
+        POR QUE PARTIÇÃO E NÃO CONCATENAÇÃO. Até 25/08 os dois chamadores
+        concatenavam `marca + nome` aqui, e isso decidia identidade com um token
+        que todos os produtos daquela marca compartilham: `air purifier` x
+        `air fryer` mede 0.278, longe do limiar, mas `philips air purifier` x o
+        alias `philips airfryer` mede 0.520 — e o purificador virava air fryer.
+        O commit 28ca6be tirou a marca da decisão, e aí apareceu o outro lado
+        do mesmo problema: sem a marca, `single malt Scotch whisky` + Cardhu e
+        `single malt Scotch whisky` + Glenfiddich resolvem para a MESMA
+        entidade pelo alias exato, e a segunda marca herda o vocabulário e a
+        demanda da primeira (medido no banco vivo em 27/08).
+
+        A partição resolve os dois: os passos 2 e 3 continuam medindo só o nome
+        genérico — a marca nunca entra na comparação de semelhança —, mas
+        medem dentro de uma partição só. Dentro da Philips a conta volta a ser
+        `air purifier` x `airfryer` = 0.278 e os dois produtos seguem
+        separados; entre marcas, nada se encontra.
+
+        UM PEDIDO COM MARCA RESOLVE DUAS ENTIDADES: a família genérica e a
+        filha da marca. A família precisa existir porque é ela que dá o
+        contexto de categoria ("a Cardhu é fraca aqui, mas a busca por whisky é
+        altíssima"), e a `CHECK` da migration 031 exige que toda entidade de
+        marca tenha família. O vocabulário curado vai TODO para a entidade da
+        marca — os `search_terms` que a identificação produziu são da marca, e
+        misturá-los na família é exatamente a poluição que isto conserta.
+
+        O que volta na resposta é a entidade da MARCA: é ela que a análise mede
+        e é o nome dela que o relatório mostra.
+        """
+        marca: Brand | None = None
+        if brand and brand.strip():
+            if normalize_alias(brand):
+                marca = await self._repo.get_or_create_brand(name=brand, source=source)
+            else:
+                # Marca sem forma normalizada (só pontuação/emoji) não pode ser
+                # chave de nada — mesma regra dos aliases (migration 028). O
+                # produto resolve como genérico em vez de falhar.
+                logger.info(f"Marca {brand!r} não tem forma normalizada; resolvendo como produto genérico")
+
+        if marca is None:
+            resolvido = await self._resolver_particao(
+                text,
+                marca=None,
+                familia=None,
+                source=source,
                 category=category,
                 localized_markets=localized_markets,
                 reference_candidates=reference_candidates,
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            await self._index_terms(entity, localized_markets)
-            await self._registrar_marca(entity, brand=brand, nome_generico=text)
             await self._session.commit()
-            return CatalogResolveResponse(
-                entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="alias"
+            return _resposta(resolvido)
+
+        # A família primeiro, e sem nada do vocabulário da marca: ela é a
+        # categoria, e quem preenche os termos genéricos dela é o enriquecimento
+        # (que roda com `brand=None` e produz termos sem marca).
+        familia = await self._resolver_particao(
+            text,
+            marca=None,
+            familia=None,
+            source=source,
+            category=category,
+            localized_markets=None,
+            reference_candidates=None,
+            target_age_min=target_age_min,
+            target_age_max=target_age_max,
+        )
+        resolvido = await self._resolver_particao(
+            text,
+            marca=marca,
+            familia=familia.entity,
+            source=source,
+            category=category,
+            localized_markets=localized_markets,
+            reference_candidates=reference_candidates,
+            target_age_min=target_age_min,
+            target_age_max=target_age_max,
+        )
+        await self._session.commit()
+        return _resposta(resolvido)
+
+    async def _resolver_particao(
+        self,
+        text: str,
+        *,
+        marca: Brand | None,
+        familia: ProductCatalog | None,
+        source: str,
+        category: str | None,
+        localized_markets: dict[str, dict[str, Any]] | None,
+        reference_candidates: list[dict[str, Any]] | None,
+        target_age_min: int | None,
+        target_age_max: int | None,
+    ) -> _Resolvido:
+        """Os quatro passos da resolução, dentro de UMA partição de marca.
+
+        Duas chaves diferentes, e a distinção é o coração do desenho:
+
+          `chave`     identidade exata — `marca + nome` quando há marca. É o
+                      que o passo 1 procura e o que fica gravado como alias.
+          `generico`  o que MEDE semelhança nos passos 2 e 3. Nunca leva marca.
+
+        Sem forma normalizada do nome genérico não existe chave: `marca + ""`
+        degeneraria no alias da marca sozinha, e um alias `philips` resolveria
+        qualquer produto Philips para esta entidade, por igualdade exata, no
+        passo mais barato. É o estrago que a migration 028 limpou.
+        """
+        brand_key = marca.brand_key if marca is not None else None
+        titulo = f"{marca.name} {text}".strip() if marca is not None else text
+        generico = normalize_alias(text)
+        chave = normalize_alias(titulo) if generico else ""
+
+        # Alias exato apontando para FORA desta partição: artefato da regra
+        # antiga, que gravava `marca + nome` na entidade genérica. Não pode ser
+        # ignorado nem aceito — `alias_normalized` é único global, então
+        # deixá-lo lá impediria a entidade certa de ter caminho O(1) e toda
+        # resolução da marca cairia no passo 2/3, criando duplicata. Ver
+        # ProductRepository.repoint_alias.
+        alias_orfao: ProductAlias | None = None
+
+        existente = await self._repo.get_entity_by_alias_exact(chave) if chave else None
+        if existente is not None:
+            alias_existente, entity = existente
+            if entity.brand_key == brand_key:
+                await self._repo.bump_alias_hit(alias_existente)
+                await self._atualizar(
+                    entity,
+                    category=category,
+                    localized_markets=localized_markets,
+                    reference_candidates=reference_candidates,
+                    target_age_min=target_age_min,
+                    target_age_max=target_age_max,
+                )
+                return _Resolvido(entity=entity, method="alias")
+            logger.warning(
+                f"Alias {chave!r} pertence a {entity.canonical_title!r}, que está em outra partição de marca; "
+                f"resolvendo na partição correta e repontando"
             )
+            alias_orfao = alias_existente
 
         trigram = (
-            await self._repo.trigram_search(alias_normalized, category=category)
-            if alias_normalized
+            await self._repo.trigram_search(generico, category=category, brand_key=brand_key)
+            if generico
             else TrigramOutcome(match=None, vetoed=[])
         )
         if trigram.vetoed:
@@ -178,36 +317,31 @@ class CatalogService:
                 f"{[p.canonical_title for p in trigram.vetoed]}; escalando para o LLM"
             )
         if trigram.match is not None:
-            await self._gravar_alias(alias_normalized, trigram.match.product.entity_key, source)
-            self._refresh_entity_fields(
-                trigram.match.product,
+            entity = trigram.match.product
+            await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao)
+            await self._atualizar(
+                entity,
                 category=category,
                 localized_markets=localized_markets,
                 reference_candidates=reference_candidates,
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            await self._index_terms(trigram.match.product, localized_markets)
-            await self._registrar_marca(trigram.match.product, brand=brand, nome_generico=text)
-            await self._session.commit()
-            return CatalogResolveResponse(
-                entity_key=trigram.match.product.entity_key,
-                canonical_title=trigram.match.product.canonical_title,
-                method="trigram",
-                match_score=trigram.match.similarity,
-            )
+            return _Resolvido(entity=entity, method="trigram", match_score=trigram.match.similarity)
 
-        # Passo 3: o LLM decide. Só chega aqui o que alias e trigram não
-        # resolveram — medido contra o catálogo real, ~20% das consultas, e
-        # sempre pelo mesmo motivo: o termo não tem parentesco de escrita com
-        # nada indexado (`lockencreme`, `odżywka bez spłukiwania`) ou é
-        # sinônimo de domínio (`quadcopter` para drone). Substituiu o passo de
-        # embedding, que não decidia esses casos: ver catalog_matcher.py.
-        candidatos = await self._repo.list_match_candidates(category=category, priority=trigram.vetoed)
+        # Passo 3: o LLM decide, entre os candidatos da MESMA partição. Só
+        # chega aqui o que alias e trigram não resolveram — medido contra o
+        # catálogo real, ~20% das consultas, e sempre pelo mesmo motivo: o
+        # termo não tem parentesco de escrita com nada indexado
+        # (`lockencreme`, `odżywka bez spłukiwania`) ou é sinônimo de domínio
+        # (`quadcopter` para drone). Ver catalog_matcher.py.
+        candidatos = await self._repo.list_match_candidates(
+            category=category, priority=trigram.vetoed, brand_key=brand_key
+        )
         correspondente = await self._matcher.pick(text=text, candidates=candidatos)
         if correspondente is not None:
-            await self._gravar_alias(alias_normalized, correspondente.entity_key, source)
-            self._refresh_entity_fields(
+            await self._registrar_chave(chave, correspondente, source=source, alias_orfao=alias_orfao)
+            await self._atualizar(
                 correspondente,
                 category=category,
                 localized_markets=localized_markets,
@@ -215,30 +349,56 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            await self._index_terms(correspondente, localized_markets)
-            await self._registrar_marca(correspondente, brand=brand, nome_generico=text)
-            await self._session.commit()
-            return CatalogResolveResponse(
-                entity_key=correspondente.entity_key,
-                canonical_title=correspondente.canonical_title,
-                method="llm",
-            )
+            return _Resolvido(entity=correspondente, method="llm")
 
         entity = await self._repo.create_entity(
-            canonical_title=text,
+            canonical_title=titulo,
+            category=category,
+            localized_markets=localized_markets,
+            reference_candidates=reference_candidates,
+            target_age_min=target_age_min,
+            target_age_max=target_age_max,
+            brand_key=brand_key,
+            generic_entity_key=familia.entity_key if familia is not None else None,
+        )
+        await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao)
+        await self._index_terms(entity, localized_markets)
+        return _Resolvido(entity=entity, method="created")
+
+    async def _atualizar(
+        self,
+        entity: ProductCatalog,
+        *,
+        category: str | None,
+        localized_markets: dict[str, dict[str, Any]] | None,
+        reference_candidates: list[dict[str, Any]] | None,
+        target_age_min: int | None,
+        target_age_max: int | None,
+    ) -> None:
+        """Reanálise refresca a entidade com o que o chamador trouxe e indexa o
+        vocabulário novo — os dois sempre juntos, porque indexar sem refrescar
+        deixaria alias apontando para termo que a entidade não declara."""
+        self._refresh_entity_fields(
+            entity,
             category=category,
             localized_markets=localized_markets,
             reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
         )
-        await self._gravar_alias(alias_normalized, entity.entity_key, source)
         await self._index_terms(entity, localized_markets)
-        await self._registrar_marca(entity, brand=brand, nome_generico=text)
-        await self._session.commit()
-        return CatalogResolveResponse(
-            entity_key=entity.entity_key, canonical_title=entity.canonical_title, method="created"
-        )
+
+    async def _registrar_chave(
+        self, chave: str, entity: ProductCatalog, *, source: str, alias_orfao: ProductAlias | None
+    ) -> None:
+        """Grava a chave desta partição como alias exato da entidade, para a
+        próxima resolução sair pelo caminho O(1). Quando a chave já pertencia a
+        uma entidade de outra partição, repontar é a única saída: o alias é
+        único global."""
+        if alias_orfao is not None:
+            await self._repo.repoint_alias(alias_orfao, entity.entity_key)
+            return
+        await self._gravar_alias(chave, entity.entity_key, source)
 
     async def _podar_termos_derivados(self, entity: ProductCatalog) -> int:
         """Remove da entidade os termos derivados que a curadoria atual não
@@ -262,33 +422,6 @@ class CatalogService:
         if apagados:
             logger.info(f"Podados {apagados} termos derivados obsoletos de {entity.canonical_title!r}")
         return apagados
-
-    async def _registrar_marca(self, entity: ProductCatalog, *, brand: str | None, nome_generico: str) -> None:
-        """Acumula a marca na entidade e indexa `marca + nome` como alias.
-
-        A marca não decide identidade (ver `resolve`), mas não pode se perder:
-        é ela que dá o vocabulário de busca de maior volume (`Philips Airfryer`,
-        `Ninja AF101`) e é informação que o usuário vê. Cada marca nova vista
-        para um produto é ACRESCENTADA, nunca substitui as anteriores — o mesmo
-        princípio de `localized_markets`.
-
-        O alias é sempre `marca + nome`, NUNCA a marca sozinha. Um alias
-        `philips` faria qualquer produto Philips resolver para esta entidade,
-        por igualdade exata, no passo mais barato — foi exatamente o estrago
-        que o normalizador antigo produziu e que a poda do backfill limpou.
-        """
-        if not brand or not brand.strip():
-            return
-
-        limpa = brand.strip()
-        atuais = list(entity.brands or [])
-        if not any(m.strip().lower() == limpa.lower() for m in atuais):
-            entity.brands = [*atuais, limpa]
-            logger.info(f"Marca nova no catálogo: {limpa!r} para {entity.canonical_title!r}")
-
-        alias = normalize_alias(f"{limpa} {nome_generico}")
-        if alias and alias != normalize_alias(nome_generico):
-            await self._repo.create_aliases_bulk(aliases={alias: entity.entity_key}, source="brand")
 
     async def _gravar_alias(self, alias_normalized: str, entity_key: uuid.UUID, source: str) -> None:
         """Grava o alias da consulta, a menos que ela não tenha forma normalizada.

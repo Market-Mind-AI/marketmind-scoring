@@ -11,6 +11,7 @@ decisão de identidade é o passo seguinte (`catalog_service.resolve`).
 """
 
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.brand import Brand
 from app.db.models.product_catalog import ProductCatalog
+from app.repositories.product_repository import ProductRepository
+from app.services.catalog_service import CatalogService
 from app.utils.text import normalize_alias
 
 
@@ -100,3 +103,108 @@ async def test_generica_e_marca_convivem_como_entidades_separadas(db_session: As
     assert filha.brand_key == marca.brand_key
     assert filha.generic_entity_key == familia.entity_key
     assert filha.entity_key != familia.entity_key
+
+
+# ---------------------------------------------------------------------------
+# Comportamento: a resolução particionada (catalog_service._resolver_particao)
+# ---------------------------------------------------------------------------
+
+
+def _sem_match() -> AsyncMock:
+    """Passo 3 desligado: o que se mede aqui é a partição, não o LLM."""
+    matcher = AsyncMock()
+    matcher.pick.return_value = None
+    return matcher
+
+
+def _mercado(termo: str) -> dict:
+    return {"USA": {"primary_name": termo, "search_terms": [termo], "excluded_terms": [], "confidence": 0.9}}
+
+
+async def test_vocabulario_da_marca_nao_vai_para_a_familia(db_session: AsyncSession) -> None:
+    """O estrago medido no relatório da Cardhu: a entidade chamada `single malt
+    Scotch whisky` guardava 24 mercados de vocabulário 100% Cardhu — o rótulo
+    dizia a categoria e o número media a marca. Os termos curados são da marca
+    e ficam na entidade da marca; a família nasce limpa."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    repo = ProductRepository(db_session)
+    nome = f"single malt scotch whisky {sufixo}"
+
+    marca = await service.resolve(
+        nome, source="test", brand=f"Cardhu{sufixo}", localized_markets=_mercado(f"cardhu {sufixo}")
+    )
+    entidade = await repo.get_by_entity_key(marca.entity_key)
+    familia = await repo.get_by_entity_key(entidade.generic_entity_key)
+
+    assert entidade.localized_markets, "os termos curados são da marca"
+    assert not familia.localized_markets, "a família não herda vocabulário de marca nenhuma"
+
+
+async def test_segunda_resolucao_da_mesma_marca_sai_pelo_alias(db_session: AsyncSession) -> None:
+    """A chave gravada é `marca + nome`, então a próxima consulta da mesma marca
+    resolve no passo 1 — o caminho O(1) — em vez de refazer trigram e LLM."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    nome = f"air fryer {sufixo}"
+
+    primeira = await service.resolve(nome, source="test", brand=f"Philips{sufixo}")
+    segunda = await service.resolve(nome, source="test", brand=f"Philips{sufixo}")
+
+    assert primeira.method == "created"
+    assert segunda.method == "alias"
+    assert segunda.entity_key == primeira.entity_key
+
+
+async def test_alias_de_marca_apontando_para_a_generica_e_repontado(db_session: AsyncSession) -> None:
+    """Estado legado real: a regra antiga gravava o alias `marca + nome`
+    apontando para a entidade GENÉRICA. Como `alias_normalized` é único global,
+    deixá-lo lá impediria a entidade da marca de ter caminho O(1), e cada
+    resolução criaria uma duplicata nova. O alias é repontado para a entidade
+    certa."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    repo = ProductRepository(db_session)
+    nome = f"air fryer {sufixo}"
+    marca_nome = f"Philips{sufixo}"
+
+    generica = await service.resolve(nome, source="test")
+    chave = normalize_alias(f"{marca_nome} {nome}")
+    await repo.create_alias(alias_normalized=chave, entity_key=generica.entity_key, source="brand")
+    await db_session.commit()
+
+    resolvida = await service.resolve(nome, source="test", brand=marca_nome)
+    assert resolvida.entity_key != generica.entity_key, "a marca não pode resolver para a entidade genérica"
+
+    donos = await repo.existing_alias_owners({chave})
+    assert donos[chave] == resolvida.entity_key, "o alias legado passou a apontar para a entidade da marca"
+
+
+async def test_marca_sem_forma_normalizada_resolve_como_generico(db_session: AsyncSession) -> None:
+    """Marca que normaliza para vazio (só pontuação/emoji) não pode ser chave de
+    nada — mesma regra da migration 028. O produto resolve como genérico em vez
+    de a resolução falhar."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    repo = ProductRepository(db_session)
+
+    resolvida = await service.resolve(f"air fryer {sufixo}", source="test", brand="!!!")
+    entidade = await repo.get_by_entity_key(resolvida.entity_key)
+
+    assert entidade.brand_key is None and entidade.generic_entity_key is None
+    assert entidade.canonical_title == f"air fryer {sufixo}"
+
+
+async def test_dois_produtos_da_mesma_marca_seguem_separados(db_session: AsyncSession) -> None:
+    """O caso que a concatenação fundia: dentro da mesma marca, a medida volta a
+    ser `air purifier` x `airfryer` = 0.278, abaixo do limiar. Sufixos
+    diferentes de propósito — com o mesmo sufixo nos dois, ele viraria o token
+    compartilhado e mascararia o que se mede."""
+    service = CatalogService(db_session, matcher=_sem_match())
+    marca = f"Philips{uuid.uuid4().hex[:6]}"
+
+    fryer = await service.resolve(f"air fryer {uuid.uuid4().hex[:8]}", source="test", brand=marca)
+    purificador = await service.resolve(f"air purifier {uuid.uuid4().hex[:8]}", source="test", brand=marca)
+
+    assert purificador.entity_key != fryer.entity_key
+    assert purificador.method == "created"
