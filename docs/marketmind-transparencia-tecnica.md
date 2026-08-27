@@ -323,8 +323,52 @@ sobrescriben después de que el período cierra** (`is_closed`).
 > bajo demanda. Es una laguna real, no un detalle de redacción: la cadencia mensual de recálculo sigue pendiente
 > (ver `marketmind-proximos-passos.md`). Lo mismo vale para los pesos de las dimensiones (`indicator_weights`).
 
-**Limitación conocida:** la población de referencia todavía es pequeña (~27 países) comparada con un ideal estadístico
-mayor — aceptado como suficiente para el MVP/TFM, no una solución definitiva de largo plazo (ver known gaps).
+**Limitación conocida:** la población de referencia todavía es pequeña (24 países, la canasta soportada entera)
+comparada con un ideal estadístico mayor — aceptado como suficiente para el MVP/TFM, no una solución definitiva de
+largo plazo (ver known gaps).
+
+### 2.1 Recalibración de las reglas de país (27/08/2026, migration 030)
+
+Los bounds sembrados por las migrations eran, según el propio código, *"plausible starting points, not perfectly
+researched limits"*: se eligieron cuando casi ningún país tenía datos macro, porque la población de referencia no
+existía todavía. Esa premisa venció — los **24 países soportados hoy tienen los 15 indicadores macro completos**, así
+que la población de referencia dejó de ser una muestra y pasó a ser la canasta entera.
+
+Medidos contra ella, los bounds ocupaban entre el 32% y el 73% de su propia escala. El espacio muerto no es neutro:
+comprime a todos los países en una franja estrecha del 0-100, y un indicador que **sí** separa mercados deja de
+separarlos. El caso más claro es Población: un rango real de Polonia encogiendo 0,8%/año a Arabia Saudí creciendo
+1,7%/año salía como scores de 27 a 59. Inversión era peor que plano — Sudáfrica (13,9%) caía **debajo** del piso de
+15 y puntuaba 0, leyéndose como "no invierte nada".
+
+Los nuevos bounds son el rango observado de la canasta, redondeado hacia afuera al número económicamente legible más
+cercano — nunca ajustado apretadamente a los valores de hoy. Efecto medido en la dispersión (desviación estándar de
+los scores de los 24 países), recomputando contra Postgres real:
+
+| indicador | regla | dp antes | dp después |
+|---|---|---|---|
+| population_growth | -3..5 → **-1..2** | 6,9 | 17,5 |
+| gdp_growth | -10..10 → **-2..8** | 8,7 | 17,3 |
+| net_migration_rate | -15..15 → **-6..9** | 9,3 | 18,4 |
+| mobile_connectivity | 0..200 → **70..190** | 13,5 | 22,4 |
+| net_exports | -15..15 → **-8..12** | 11,1 | 16,9 |
+| consumer_spending | 30..85 → **40..75** | 15,1 | 22,0 |
+| gdp_per_capita | 1k..120k → **2k..95k** | 20,1 | 25,9 |
+| investment | 15..45 → **12..35** | 19,0 | 21,5 |
+| worldbank_inflation | 0..20 → **0..12** | 6,0 * | 9,9 * |
+
+\* sólo los 22 países fuera de crisis. Argentina (142%) y Turquía (49%) siguen **saturando en 0**, que es la decisión
+del 24/07/2026: un extremo satura en el peor score en vez de estirar la regla para todos.
+
+**Fuera de esta recalibración, a propósito:** `trend_score`, `growth_score` y `demand_stability_score` (vienen de
+Google Ads y dependen del producto, no del país), `population_scale`, `urbanization` e `internet_penetration` (ya
+ocupan bien su escala o son passthrough), `trade_openness` (la saturación de Holanda es deliberada, migration 024) y
+`real_estate_growth` (las dos colas son extremos reales).
+
+**Lo que esta recalibración NO arregla, y quedó medido:** la franja del MOS casi no se mueve (36-43 sigue siendo
+36-43), porque la comprime la dimensión Demand Volume — 38,6% del peso, con sub-score 100 en el país-techo y debajo
+de 10 en 16 de 24 países. No es un artefacto de un producto de nicho: pasa igual con productos de masa (impresora
+3D: EUA 100, segundo lugar 18,7). Es la regla por-producto del Google Ads, no una regla de país, y sigue abierta
+como el ítem 17 de los known gaps.
 
 ## 3. Agregación en 2 etapas + pesos por Rank Order Centroid (no Entropy Weight)
 
