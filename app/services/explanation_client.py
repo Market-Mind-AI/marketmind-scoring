@@ -127,9 +127,11 @@ O PACOTE traz, para CADA país: o MOS (com banda e um campo `explanation` em tex
 `dimensions` e a lista de `signals` (indicadores). CADA item — MOS, dimensão e sinal — tem um campo \
 `explanation`: uma leitura em linguagem natural do NÚMERO daquele score (o que aquele nível significa). \
 Cada país traz também `context_signals`: números SEM score, que não são bons nem ruins por si — use-os para \
-dar escala, nunca como elogio ou crítica. O mais importante deles é a demanda da CATEGORIA, que vem com o \
-share da marca: demanda baixa da marca num país onde a categoria é muito buscada significa que o mercado \
-existe e a marca não está nele, o que é uma conclusão diferente de "não há mercado aqui". \
+dar escala, nunca como elogio ou crítica. O mais importante deles é a demanda da CATEGORIA (termos \
+GENÉRICOS, não a demanda total do mercado), comparada com a da marca: uma fração pequena de uma categoria \
+grande significa que o mercado existe e a marca não está nele, o que é diferente de "não há mercado aqui". \
+A marca PODE ser maior que os termos genéricos, e aí a leitura é que ela é procurada por nome — nunca \
+apresente isso como "share" acima de 100%. \
 Há ainda um `glossary` no topo definindo o que cada métrica mede. USE o `explanation` de cada score e o \
 `glossary` para construir uma explicação RICA, aproveitando TODOS os dados que entram no MOS \
 (todas as dimensões e sinais), não só o volume.
@@ -174,9 +176,11 @@ The PACKET carries, for EACH country: the MOS (with band and an `explanation` st
 `dimensions` and the list of `signals` (indicators). EVERY item — MOS, dimension and signal — has an \
 `explanation` field: a plain-language reading of that score's NUMBER (what that level means). Each country \
 also carries `context_signals`: numbers with NO score, neither good nor bad in themselves — use them for \
-scale, never as praise or criticism. The important one is the CATEGORY's demand, which comes with the \
-brand's share: low brand demand in a country where the category is searched heavily means the market exists \
-and this brand is not in it, which is a different conclusion from "there is no market here". A \
+scale, never as praise or criticism. The important one is the CATEGORY's demand (its GENERIC terms, not \
+the market's total demand), compared with the brand's: a small fraction of a large category means the \
+market exists and this brand is not in it, a different conclusion from "there is no market here". The brand \
+CAN be larger than the generic terms, and then the reading is that it is searched by name — never present \
+that as a "share" above 100%. A \
 top-level `glossary` defines what each metric measures. USE each score's `explanation` and the \
 `glossary` to build a RICH explanation that draws on ALL the data feeding the MOS (every dimension and \
 signal), not just volume.

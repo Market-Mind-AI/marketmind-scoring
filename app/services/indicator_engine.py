@@ -70,15 +70,27 @@ def _com_share_da_marca(categoria: RawIndicatorResult, *, brand_raw: RawIndicato
     ):
         return categoria
     volume_marca, volume_categoria = float(brand_raw.raw_value), float(categoria.raw_value)
-    share = volume_marca / volume_categoria * 100
+    razao = volume_marca / volume_categoria
+    # NÃO é "share da categoria", e a diferença não é cosmética: o denominador
+    # são os termos GENÉRICOS da categoria, não a demanda total do mercado
+    # (que incluiria as outras marcas e ninguém mede). Medido ao vivo em 27/08,
+    # a Cardhu na Espanha tem 9.630 buscas contra 3.140 dos termos genéricos —
+    # chamar isso de "share de 306%" seria uma frase falsa saindo de um número
+    # correto. A marca simplesmente é procurada mais que a categoria em abstrato.
+    if razao < 1:
+        comparacao = f"the brand is {razao * 100:.0f}% of that ({volume_marca:,.0f} vs {volume_categoria:,.0f})"
+    else:
+        comparacao = (
+            f"the brand is searched {razao:.1f}x MORE than the generic category terms "
+            f"({volume_marca:,.0f} vs {volume_categoria:,.0f})"
+        )
     return RawIndicatorResult(
         categoria.raw_value,
         categoria.direction,
         categoria.calculation_window,
         categoria.availability_status,
-        f"{categoria.notes}; brand share {share:.1f}% of the category's generic searches "
-        f"({volume_marca:,.0f} of {volume_categoria:,.0f}) — low share with high category volume means the "
-        f"market exists and this brand is not in it, not that demand is absent",
+        f"{categoria.notes} for the category's GENERIC terms; {comparacao} — a small fraction of a large "
+        f"category means the market exists and this brand is not in it, not that demand is absent",
     )
 
 

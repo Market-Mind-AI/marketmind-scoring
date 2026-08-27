@@ -204,8 +204,7 @@ async def test_categoria_e_medida_como_contexto_ao_lado_da_marca(db_session: Asy
     assert categoria.normalized_score is None, "contexto puro: não tem régua, não tem score"
     assert IndicatorCode.CATEGORY_VOLUME_SCORE not in DIMENSION_BY_INDICATOR, "não entra em dimensão nenhuma"
     # O share vem calculado aqui, determinístico, com os dois números à vista.
-    assert "brand share 2.0%" in categoria.notes
-    assert "1,000 of 50,000" in categoria.notes
+    assert "the brand is 2% of that (1,000 vs 50,000)" in categoria.notes
     # A marca segue pontuada normalmente, sem contaminação.
     assert float(by_code[IndicatorCode.TREND_SCORE.value].raw_value) == 1_000.0
     assert by_code[IndicatorCode.TREND_SCORE.value].normalized_score is not None
@@ -233,3 +232,45 @@ async def test_produto_sem_marca_nao_mede_categoria(db_session: AsyncSession) ->
         )
 
     assert IndicatorCode.CATEGORY_VOLUME_SCORE.value not in {r.indicator_code for r in results}
+
+
+async def test_marca_maior_que_a_categoria_e_dita_como_razao(db_session: AsyncSession) -> None:
+    """Medido ao vivo em 27/08: a Cardhu na Espanha tem 9.630 buscas contra 3.140
+    dos termos genéricos da categoria. O denominador são os termos GENÉRICOS, não
+    a demanda total do mercado — que incluiria as outras marcas e ninguém mede —
+    então "share de 306%" seria uma frase falsa saindo de um número correto."""
+    from app.domain.enums import IndicatorCode
+    from app.repositories.product_repository import ProductRepository
+
+    sufixo = uuid.uuid4().hex[:8]
+    repo = ProductRepository(db_session)
+    familia = await repo.create_entity(
+        canonical_title=f"single malt whisky {sufixo}",
+        localized_markets={"USA": {"primary_name": "single malt whisky", "search_terms": ["single malt whisky"]}},
+    )
+    marca = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
+    entidade = await repo.create_entity(
+        canonical_title=f"Cardhu single malt whisky {sufixo}",
+        localized_markets={"USA": {"primary_name": "cardhu", "search_terms": ["cardhu"]}},
+        brand_key=marca.brand_key,
+        generic_entity_key=familia.entity_key,
+    )
+    await db_session.commit()
+
+    volume_marca = RawIndicatorResult(
+        9_630.0, IndicatorDirection.DIRECT, "2026-08", AvailabilityStatus.AVAILABLE, "9,630 total monthly searches"
+    )
+    volume_categoria = RawIndicatorResult(
+        3_140.0, IndicatorDirection.DIRECT, "2026-08", AvailabilityStatus.AVAILABLE, "3,140 total monthly searches"
+    )
+    engine = IndicatorEngine(db_session)
+    with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria]):
+        results = await engine.compute_all(
+            country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=9_630.0
+        )
+
+    notas = {r.indicator_code: r.notes for r in results if r.entity_key is not None}
+    categoria = notas[IndicatorCode.CATEGORY_VOLUME_SCORE.value]
+    assert "3.1x MORE than the generic category terms" in categoria
+    assert "9,630 vs 3,140" in categoria
+    assert "share" not in categoria.lower(), "share implica parte-de-um-todo que o denominador não é"
