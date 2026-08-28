@@ -10,6 +10,8 @@ from app.schemas.admin import (
     BrandSplitRequest,
     BrandSplitResponse,
     EnrichmentReportResponse,
+    MacroPrewarmRequest,
+    MacroPrewarmResponse,
     MergeReportResponse,
     ReconciliationReportResponse,
     RefreshWeightsResponse,
@@ -17,6 +19,7 @@ from app.schemas.admin import (
 from app.services.brand_split_service import BrandSplitService
 from app.services.catalog_service import CatalogService
 from app.services.enrichment_service import EnrichmentService
+from app.services.macro_coverage import MacroPrewarmService
 from app.services.merge_service import MergeService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.weight_calibration_service import WeightCalibrationService
@@ -119,6 +122,27 @@ async def split_brand(request: BrandSplitRequest, session: AsyncSession = Depend
     except MarketMindCoreError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return BrandSplitResponse(**asdict(report))
+
+
+@router.post(
+    "/coverage/prewarm-macro",
+    response_model=MacroPrewarmResponse,
+    summary="Mantém o dado macro dos países quente, fora de qualquer análise",
+    description=(
+        "Coleta o que estiver vencido de World Bank, OECD e UN Data para os países suportados. Os "
+        "indicadores macro são anuais, lidos como último valor conhecido e válidos por 90 dias — não têm "
+        "relação com o produto analisado nem com o instante da consulta —, mas eram coletados DENTRO da "
+        "análise, o que amarrava o resultado do usuário à fonte estar de pé naquele minuto. Em 25/08/2026 "
+        "a API do UN Data ficou 29 minutos fora e 9 de 24 países saíram do ranking. Sem agendador em "
+        "processo: feito para um cron. Não substitui o retry da análise, reduz a frequência com que ele "
+        "precisa agir."
+    ),
+)
+async def prewarm_macro(
+    request: MacroPrewarmRequest | None = None, session: AsyncSession = Depends(get_session)
+) -> MacroPrewarmResponse:
+    relatorio = await MacroPrewarmService(session).prewarm(countries=request.countries if request else None)
+    return MacroPrewarmResponse(**relatorio)
 
 
 @router.post(

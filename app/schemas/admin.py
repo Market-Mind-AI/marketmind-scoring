@@ -66,5 +66,19 @@ class ReconciliationReportResponse(BaseModel):
     unmappable: list[ReconciliationDriftItem]
 
 
+class MacroPrewarmRequest(BaseModel):
+    countries: list[str] | None = Field(
+        default=None,
+        description="ISO3 a aquecer. Omitido, aquece todos os países suportados (o caso do cron).",
+    )
+
+
+class MacroPrewarmResponse(BaseModel):
+    paises: int
+    ja_frescos: int
+    coletados: int
+    falhados: int
+
+
 class RefreshWeightsResponse(BaseModel):
     weights: dict[str, float]

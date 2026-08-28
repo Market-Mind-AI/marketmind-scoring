@@ -16,7 +16,7 @@ settings.country_indicator_ttl_days).
 
 import asyncio
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,14 +41,12 @@ from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.explanation_client import ExplanationClient
 from app.services.indicator_engine import IndicatorEngine
 from app.services.indicators import pytrends as pytrends_indicators
-from app.services.indicators.oecd import RAW_INDICATOR_CODES as OECD_RAW_CODES
-from app.services.indicators.undata import RAW_INDICATOR_CODES as UNDATA_RAW_CODES
-from app.services.indicators.worldbank import RAW_INDICATOR_CODES as WORLDBANK_RAW_CODES
+from app.services.macro_coverage import macro_gaps
 from app.services.mos_engine import MosEngine
 from app.services.product_identification_service import _fallback_market, _has_terms, _market_to_dict
 from app.services.reference_market_client import ReferenceMarketClient, ReferenceMarketError
 from app.services.weight_calibration_service import WeightCalibrationService
-from app.utils.period import COUNTRY_LEVEL_PERIOD_KEY, current_month_period_key
+from app.utils.period import current_month_period_key
 from app.utils.text import as_term_list
 from app.utils.time import utc_now
 
@@ -124,12 +122,6 @@ def _champion_candidates(entity: Any, requested: list[str]) -> list[dict[str, An
     return out
 
 
-# How much history to ASK each annual/quarterly source for (WorldBank/OECD/
-# UNData) — generous on purpose so formulas needing several years (GDP Growth,
-# Real Estate Growth, ...) have enough data. Unrelated to coverage freshness,
-# which is a separate question answered by country_indicator_ttl_days: this one
-# is "how far back to fetch", that one is "when to fetch again".
-_ANNUAL_LOOKBACK_YEARS = 10
 
 # Raw PyTrends collection -> the computed demand indicators it feeds (Cap. 4
 # §4.2). Coverage is tracked per raw collection, but "covered" must mean "the
@@ -814,62 +806,11 @@ class AnalysisService:
                         )
                     )
 
-        current_year = datetime.now(UTC).year
-        start_year, end_year = current_year - _ANNUAL_LOOKBACK_YEARS, current_year
-
-        # One coverage row per (country, indicator), not one per month.
-        #
-        # This used to loop over the last 6 calendar months, producing 6 × 12
-        # WorldBank gaps per country. Because the coverage lookup matches on
-        # period_key exactly, the first analysis of a new month found no row for
-        # it and re-collected every macro indicator for every country — the TTL
-        # never got a say. It is the reason one measured analysis of two
-        # countries took 61 minutes, 91% of it re-downloading World Bank figures
-        # that were identical to the ones already stored.
-        #
-        # These indicators are annual and read as "latest known value" (see
-        # COUNTRY_LEVEL_PERIOD_KEY), so a single row with a 90-day TTL expresses
-        # the real rule: don't re-download anything fetched in the last three
-        # months, and when something does age out, re-download only that one.
-        for codes in WORLDBANK_RAW_CODES.values():
-            for code in codes:
-                gaps.append(
-                    CoverageGap(
-                        source=DataSource.WORLDBANK,
-                        entity_key=None,
-                        country=country_iso3,
-                        indicator_code=code,
-                        period_key=COUNTRY_LEVEL_PERIOD_KEY,
-                        ttl_days=settings.country_indicator_ttl_days,
-                        collection_params={"start_year": start_year, "end_year": end_year},
-                    )
-                )
-        for codes in OECD_RAW_CODES.values():
-            for code in codes:
-                gaps.append(
-                    CoverageGap(
-                        source=DataSource.OECD,
-                        entity_key=None,
-                        country=country_iso3,
-                        indicator_code=code,
-                        period_key=COUNTRY_LEVEL_PERIOD_KEY,
-                        ttl_days=settings.country_indicator_ttl_days,
-                        collection_params={"start_period": str(start_year), "end_period": str(end_year)},
-                    )
-                )
-        for codes in UNDATA_RAW_CODES.values():
-            for code in codes:
-                gaps.append(
-                    CoverageGap(
-                        source=DataSource.UNDATA,
-                        entity_key=None,
-                        country=country_iso3,
-                        indicator_code=code,
-                        period_key=COUNTRY_LEVEL_PERIOD_KEY,
-                        ttl_days=settings.country_indicator_ttl_days,
-                        collection_params={"start_year": start_year, "end_year": end_year},
-                    )
-                )
+        # Os gaps macro vêm do construtor ÚNICO (app/services/macro_coverage.py):
+        # quem coleta durante a análise e quem pré-aquece fora dela precisam
+        # produzir exatamente a mesma lista, senão o pré-aquecimento esquenta
+        # uma coisa e a análise pede outra.
+        gaps.extend(macro_gaps(country_iso3))
 
         if not gaps:
             return []
