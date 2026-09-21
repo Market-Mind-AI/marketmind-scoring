@@ -4,7 +4,9 @@ The orchestrator decides; the model calls that decision causes happen here. So
 its trace can say which step ran but not what a model was asked, what it
 answered, or what that cost — unless this service reports them into the same
 trace. The orchestrator sends the W3C `traceparent` of its run with every
-request; adopting it makes each model call a child of the step that caused it.
+request; adopting it puts each model call inside the run's trace, under its
+`analysis` span — LangChain makes no node span current in node code, so a
+generation nests under the run, not under the individual step or node.
 
 Unconfigured means untraced, and that is allowed: a missing trace loses an
 explanation, it does not corrupt an answer.
@@ -21,7 +23,7 @@ from opentelemetry.propagate import extract
 
 from app.core.config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("marketmind-scoring.observability")
 
 
 @lru_cache(maxsize=1)

@@ -99,8 +99,8 @@ async def adopt_request_trace(request: Request, call_next) -> Response:
     """Make the caller's trace the current one for this request.
 
     The orchestrator sends its run's W3C `traceparent`; adopting it puts every
-    model call this request makes inside that run's trace, under the step that
-    asked. A request without one — the browser's identify-image — starts its own.
+    model call this request makes inside that run's trace, under its `analysis`
+    span. A request without one — the browser's identify-image — starts its own.
     """
     with observability.adopt_trace_context(request.headers):
         return await call_next(request)

@@ -222,6 +222,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
+
     # There is no anthropic_vision_model here: the vision model is chosen by
     # vision_llm_model above, like every other call site. A separate setting
     # existed until 2026-08-13 and was read by nothing — it predates the

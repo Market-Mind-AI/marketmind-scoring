@@ -1,5 +1,6 @@
 """Each model call becomes one Langfuse generation, named after its call site."""
 
+import asyncio
 import json
 import uuid
 from types import SimpleNamespace
@@ -24,14 +25,23 @@ class FakeProvider(LLMProvider):
     """Stands in for Claude/GPT/Ollama: the only thing that is faked, since the
     real ones spend money."""
 
-    def __init__(self, reply: object = "ok", error: Exception | None = None, tokens: tuple[int, int] = (0, 0)):
+    def __init__(
+        self,
+        reply: object = "ok",
+        error: Exception | None = None,
+        tokens: tuple[int, int] = (0, 0),
+        no_usage: bool = False,
+    ):
         super().__init__("fake-model")
-        self.reply, self.error, self.tokens = reply, error, tokens
+        self.reply, self.error, self.tokens, self.no_usage = reply, error, tokens, no_usage
         self.calls: list[dict] = []
 
     async def complete(self, *, system=None, user, image=None, response_model=None):
         self.calls.append({"system": system, "user": user, "image": image, "response_model": response_model})
-        usage.record(self.model, SimpleNamespace(input_tokens=self.tokens[0], output_tokens=self.tokens[1]))
+        if self.no_usage:
+            usage.record(self.model, None)
+        else:
+            usage.record(self.model, SimpleNamespace(input_tokens=self.tokens[0], output_tokens=self.tokens[1]))
         if self.error:
             raise self.error
         return self.reply
@@ -128,6 +138,42 @@ async def test_a_failed_call_is_marked_and_the_error_is_unchanged(spans) -> None
     assert _attr(gen, "status_message") == "provider down"
 
 
+async def test_a_failed_calls_tokens_still_reach_its_generation(spans) -> None:
+    """The most expensive failures — an unparseable structured answer — still
+    spent the tokens the provider reports before it raises. Losing them from
+    the generation made the priciest errors look free."""
+    provider = TracedProvider(FakeProvider(error=RuntimeError("unparseable"), tokens=(900, 16000)), site="enrichment")
+
+    with usage.collect():
+        with pytest.raises(RuntimeError):
+            await provider.complete(user="x")
+
+    gen = spans()["enrichment"]
+    assert json.loads(_attr(gen, "usage_details")) == {"input": 900, "output": 16000}
+    assert _attr(gen, "level") == "ERROR"
+
+
+async def test_a_cancelled_call_still_ends_its_generation(spans) -> None:
+    """A bare `except Exception` around the provider call would let a
+    CancelledError skip _finish entirely, leaving the generation open forever."""
+    provider = TracedProvider(FakeProvider(error=asyncio.CancelledError()), site="enrichment")
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.complete(user="x")
+
+    gen = spans()["enrichment"]
+    assert _attr(gen, "level") == "ERROR"
+
+
+async def test_a_call_with_no_reported_usage_is_not_recorded_as_free(spans) -> None:
+    provider = TracedProvider(FakeProvider(no_usage=True), site="enrichment")
+
+    with usage.collect():
+        await provider.complete(user="x")
+
+    assert _attr(spans()["enrichment"], "usage_details") is None
+
+
 async def test_a_tracing_failure_does_not_fail_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
     class Broken:
         def start_observation(self, **_: object) -> None:
@@ -138,9 +184,7 @@ async def test_a_tracing_failure_does_not_fail_the_call(monkeypatch: pytest.Monk
     assert await TracedProvider(FakeProvider(reply="fine"), site="enrichment").complete(user="x") == "fine"
 
 
-async def test_a_failed_image_description_does_not_fail_the_call(monkeypatch: pytest.MonkeyPatch, spans) -> None:
-    from unittest.mock import patch
-
+async def test_a_failed_image_description_does_not_fail_the_call(spans) -> None:
     with patch("app.services.llm.traced.describe_image", side_effect=RuntimeError("describe failed")):
         result = await TracedProvider(FakeProvider(reply="fine"), site="vision").complete(
             user="x", image=ImageInput(base64_data="AA", media_type="image/png")
