@@ -188,6 +188,12 @@ class Settings(BaseSettings):
     # product_identification_service.py). Anthropic tem endpoint de visão
     # nativo (ao contrário de embeddings) — usa o SDK oficial, não um stopgap.
     anthropic_api_key: str = ""
+    # Only needed for an ORGANISATION-scoped key. Anthropic rejects those
+    # without it: "This API key is not scoped to a workspace, so this request
+    # must include the anthropic-workspace-id header." A workspace-scoped key
+    # carries the workspace in the key itself and needs nothing here, so this
+    # stays empty for most setups.
+    anthropic_workspace_id: str = ""
     # There is no anthropic_vision_model here: the vision model is chosen by
     # vision_llm_model above, like every other call site. A separate setting
     # existed until 2026-08-13 and was read by nothing — it predates the

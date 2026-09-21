@@ -13,11 +13,16 @@ from app.services.llm.base import ImageInput, LLMError, LLMProvider
 
 
 class ClaudeProvider(LLMProvider):
-    def __init__(self, model: str, api_key: str) -> None:
+    def __init__(self, model: str, api_key: str, workspace_id: str | None = None) -> None:
         super().__init__(model)
         if not api_key:
             raise LLMError("ANTHROPIC_API_KEY is not configured (required for the 'claude' LLM provider)")
-        self._client = AsyncAnthropic(api_key=api_key)
+        # An organisation-scoped key has to say which workspace to bill and
+        # scope to; a workspace-scoped key carries that in the key and needs
+        # nothing. Sending an empty header would be worse than sending none, so
+        # it only goes on when there is a value.
+        headers = {"anthropic-workspace-id": workspace_id} if workspace_id else None
+        self._client = AsyncAnthropic(api_key=api_key, default_headers=headers)
 
     async def complete(
         self,

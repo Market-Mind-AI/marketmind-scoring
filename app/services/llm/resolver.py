@@ -11,7 +11,7 @@ from app.services.llm.providers import ClaudeProvider, GptProvider, OllamaProvid
 def resolve_llm(*, provider: str, model: str) -> LLMProvider:
     code = provider.strip().lower()
     if code == "claude":
-        return ClaudeProvider(model, settings.anthropic_api_key)
+        return ClaudeProvider(model, settings.anthropic_api_key, settings.anthropic_workspace_id)
     if code == "gpt":
         return GptProvider(model, settings.openai_api_key)
     if code == "ollama":
