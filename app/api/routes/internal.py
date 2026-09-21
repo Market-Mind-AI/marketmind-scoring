@@ -29,6 +29,7 @@ from app.db.session import get_session
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
+from app.schemas.analyze import AnalysisStatusResponse
 from app.schemas.internal import (
     AnalysisDetailResponse,
     AnalysisStateResponse,
@@ -141,6 +142,34 @@ async def mark_running(request_id: uuid.UUID, session: AsyncSession = Depends(ge
     analysis_request.heartbeat_at = utc_now()
     await session.commit()
     return AnalysisStateResponse(request_id=analysis_request.id, status=analysis_request.status)
+
+
+@router.get(
+    "/analyses/{request_id}/report",
+    response_model=AnalysisStatusResponse,
+    summary="The whole answer, shaped for a reader",
+    description=(
+        "Everything a report needs in one call: the scored markets, the "
+        "narrative, the full evidence packet, and the brand/category split of "
+        "the product's identity.\n\n"
+        "Distinct from GET /analyses/{request_id}, which is what a RESUMING RUN "
+        "needs — what was already decided, and nothing that has to be assembled. "
+        "This one assembles: it rebuilds the evidence packet for analyses stored "
+        "before that column existed and reads the identity back off the entity. "
+        "Two callers, two shapes, one row."
+    ),
+)
+async def read_report(
+    request_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> AnalysisStatusResponse:
+    # Imported here rather than at module load: app.api.routes.analyze imports
+    # the analysis service, and that imports back into this module's world.
+    from app.api.routes.analyze import _identidade, _load_breakdown, _status_payload
+
+    analysis_request = await _load(session, request_id)
+    breakdown = await _load_breakdown(session, analysis_request)
+    brand, category_title = await _identidade(session, analysis_request)
+    return _status_payload(analysis_request, breakdown, brand, category_title)
 
 
 @router.patch(
