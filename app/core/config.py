@@ -199,6 +199,13 @@ class Settings(BaseSettings):
     # carries the workspace in the key itself and needs nothing here, so this
     # stays empty for most setups.
     anthropic_workspace_id: str = ""
+
+    # Langfuse tracing of the model calls (app/observability.py). Both keys or
+    # nothing: unset means untraced, which is allowed — a missing trace loses an
+    # explanation, it does not corrupt an answer.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
     # There is no anthropic_vision_model here: the vision model is chosen by
     # vision_llm_model above, like every other call site. A separate setting
     # existed until 2026-08-13 and was read by nothing — it predates the
