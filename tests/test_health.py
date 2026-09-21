@@ -1,24 +1,11 @@
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from app.db.session import get_session
 from app.main import app
-
-
-def _mock_engine() -> MagicMock:
-    engine = MagicMock()
-    mock_connection = AsyncMock()
-    mock_connection.execute = AsyncMock()
-
-    @asynccontextmanager
-    async def _connect() -> AsyncGenerator[AsyncMock, None]:
-        yield mock_connection
-
-    engine.connect = _connect
-    return engine
 
 
 async def _override_get_session() -> AsyncGenerator[AsyncMock, None]:
@@ -27,16 +14,22 @@ async def _override_get_session() -> AsyncGenerator[AsyncMock, None]:
     yield session
 
 
-def test_health_endpoint_all_connected() -> None:
+def _client() -> TestClient:
     # `Depends(get_session)` binds the callable at route-definition time, so
     # patching the module attribute afterward would not intercept it — the
     # correct way to swap a FastAPI dependency in tests is
     # `app.dependency_overrides`, not `unittest.mock.patch`.
     app.dependency_overrides[get_session] = _override_get_session
+    return TestClient(app)
+
+
+def test_health_endpoint_all_connected() -> None:
+    reachable = AsyncMock(
+        return_value=httpx.Response(200, json={"status": "ok"}, request=httpx.Request("GET", "http://x/health"))
+    )
     try:
-        with patch("app.api.routes.health.get_external_engine", return_value=_mock_engine()):
-            client = TestClient(app)
-            response = client.get("/health")
+        with patch("httpx.AsyncClient.get", reachable):
+            response = _client().get("/health")
 
             assert response.status_code == 200
             data = response.json()
@@ -50,17 +43,28 @@ def test_health_endpoint_all_connected() -> None:
 
 
 def test_health_endpoint_external_source_down() -> None:
-    def _raise_engine(_source: object) -> MagicMock:
-        raise ConnectionError("could not connect")
-
-    app.dependency_overrides[get_session] = _override_get_session
     try:
-        with patch("app.api.routes.health.get_external_engine", side_effect=_raise_engine):
-            client = TestClient(app)
-            response = client.get("/health")
+        with patch("httpx.AsyncClient.get", AsyncMock(side_effect=httpx.ConnectError("refused"))):
+            response = _client().get("/health")
 
             assert response.status_code == 200
-            data = response.json()
-            assert all(s["status"] == "disconnected" for s in data["external_sources"])
+            assert all(s["status"] == "disconnected" for s in response.json()["external_sources"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_a_collection_service_that_answers_an_error_is_not_connected() -> None:
+    """The probe used to open a SQL connection to each service's database, which
+    reported "connected" for a reachable database behind an application that was
+    down — and once for a database that was reachable but was the wrong one,
+    because two services had their ports swapped."""
+    broken = AsyncMock(
+        return_value=httpx.Response(500, request=httpx.Request("GET", "http://x/health"))
+    )
+    try:
+        with patch("httpx.AsyncClient.get", broken):
+            response = _client().get("/health")
+
+            assert all(s["status"] == "disconnected" for s in response.json()["external_sources"])
     finally:
         app.dependency_overrides.clear()

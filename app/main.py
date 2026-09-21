@@ -15,7 +15,6 @@ from app.api.routes.indicators import router as indicators_router
 from app.api.routes.mos import router as mos_router
 from app.core.config import settings
 from app.core.logging import logger
-from app.db.external import dispose_all_external_engines
 from app.db.session import engine
 from app.services.analysis_resume_service import AnalysisResumeService
 
@@ -33,7 +32,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     with suppress(asyncio.CancelledError):
         await varredura
     await engine.dispose()
-    await dispose_all_external_engines()
     logger.info(f"Shutting down {settings.app_name}")
 
 

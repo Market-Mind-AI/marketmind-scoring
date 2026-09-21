@@ -37,28 +37,25 @@ flowchart LR
         UN_API --- UN_PG
     end
 
-    API -->|"HTTP: dispara la recolección<br/>(POST /indicators/collect etc.)"| PT_API
-    API -->|"HTTP: dispara la recolección"| WB_API
-    API -->|"HTTP: dispara la recolección"| OE_API
-    API -->|"HTTP: dispara la recolección"| UN_API
-
-    API -.->|"SQL read-only directo<br/>(sin pasar por la API)"| PT_PG
-    API -.->|"SQL read-only directo"| WB_PG
-    API -.->|"SQL read-only directo"| OE_PG
-    API -.->|"SQL read-only directo"| UN_PG
+    API -->|"HTTP: recoge, lee, pregunta<br/>por el frescor"| PT_API
+    API -->|HTTP| WB_API
+    API -->|HTTP| OE_API
+    API -->|HTTP| UN_API
 
     LLM[["LLM (Claude)<br/>visión, enriquecimiento,<br/>match de catálogo, narrativa"]]
     API -->|"HTTPS"| LLM
 ```
 
-**Dos formas diferentes de comunicación con los 4 microservicios, a propósito:**
-- **HTTP (línea continua):** solo para *disparar la recolección* de dato nuevo (`POST /indicators/collect`, `/interest-over-time`,
-  etc.) y consultar el estado de la ejecución (`GET /runs/{id}`).
-- **SQL directo, read-only (línea discontinua):** para *leer* el dato ya recolectado a la hora de calcular indicadores —
-  usuario Postgres `marketmind_readonly`, creado una vez en cada una de las 4 bases de datos
-  (`scripts/create_readonly_roles.sql`), sin permiso de escritura. Decisión de simplicidad (evita reimplementar
-  endpoints de lectura que los 4 servicios ya exponen vía tabla) — el costo es acoplamiento de esquema (ver
-  `docs/marketmind-transparencia-tecnica.md` para el detalle del riesgo).
+**Toda la comunicación con los 4 microservicios es HTTP.** Tres cosas pasan por ahí:
+- *Disparar la recolección* de dato nuevo (`POST /indicators/collect`) y consultar el estado de la ejecución
+  (`GET /runs/{id}`).
+- *Leer* el dato ya recolectado a la hora de calcular indicadores (`GET /observations/series`, y en el servicio de
+  demanda `POST /stored/search-volume` / `GET /stored/related`).
+- *Preguntar qué tiene y desde cuándo* (`GET /freshness`), que es lo que decide si hace falta recolectar.
+
+Hasta 2026-09 el Core leía directamente las 4 bases de datos por SQL read-only. Funcionaba, y el costo era
+acoplamiento de esquema: un cambio de columna allí rompía un cálculo aquí, en silencio y sin que ninguna suite de
+tests lo detectara. Cada servicio sirve ahora lo que guarda, y la forma en que lo sirve es un contrato.
 
 ## Stack por capa
 

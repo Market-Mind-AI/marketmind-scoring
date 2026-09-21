@@ -2,7 +2,7 @@
 services and polling their ingestion runs to completion.
 
 Connectivity: each service is reached over its host-exposed HTTP port via
-``host.docker.internal`` — same rationale as app/db/external.py (the 4
+``host.docker.internal`` — same rationale as the read paths (the 4
 services' docker networks are not actually shared despite the common name).
 See README "Conectividade entre serviços" and memory marketmind_core_architecture.
 

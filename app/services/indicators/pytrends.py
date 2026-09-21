@@ -1,7 +1,7 @@
 """Cap. 4 §4.2 — raw value computation for the Demand indicators, now sourced
 from Google Ads keyword data (ABSOLUTE monthly search volume via DataForSEO),
 NOT Google Trends. Reads read-only from the collector service's own database
-(app/db/external.py, DataSource.PYTRENDS) — the `keyword_search_volume` and
+over its read API — the stored search-volume and
 `keyword_related` tables.
 
 Why the switch (2026-07-15): Google Trends is structurally RELATIVE (values
@@ -30,13 +30,10 @@ from collections.abc import Iterable
 from difflib import SequenceMatcher
 from typing import Any
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
-
-from app.db.external import get_external_engine
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorDirection
+from app.domain.enums import AvailabilityStatus, IndicatorDirection
 from app.services.indicators.intent_lexicon import INTENT_LEXICON
 from app.services.indicators.results import RawIndicatorResult
+from app.services.indicators.sources import pytrends_stored_related, pytrends_stored_volume
 
 # Absolute-volume noise guards (Google Ads monthly counts, not the old 0-100
 # Trends scale): below these a growth ratio / CV is noise, not signal.
@@ -172,63 +169,56 @@ def _monthly_volumes(monthly_searches: Any) -> list[tuple[int, int, float]]:
 
 
 async def _fetch_volume_rows(
-    connection: AsyncConnection, search_terms: list[str], location: str
+    search_terms: list[str], location: str
 ) -> list[tuple[float, list[tuple[int, int, float]]]]:
     """Freshest row per approved term for this country → the distinct terms to
     SUM, after dropping ~zero-volume terms and collapsing Google's duplicate
     reports of the same query (see _dedup_volume_rows). Growth/Stability use this
     (approved terms only); the demand VOLUME additionally folds in expansion
     (see compute_trend_score). Returns (volume, monthly_series)."""
-    return _dedup_volume_rows(await _fetch_approved_raw(connection, search_terms, location))
+    return _dedup_volume_rows(await _fetch_approved_raw(search_terms, location))
 
 
 async def _fetch_approved_raw(
-    connection: AsyncConnection, search_terms: list[str], location: str
+    search_terms: list[str], location: str
 ) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
     """Freshest (keyword, volume, monthly_series) per approved term — RAW, before
-    the drop-zero/dedup pass (so callers can merge it with expansion rows first)."""
+    the drop-zero/dedup pass (so callers can merge it with expansion rows first).
+
+    The case-insensitive match lives in the collection service now. It matters:
+    that source stores keywords lowercased ("ninja air fryer") while curated
+    terms are mixed-case ("Ninja air fryer"), and an exact match silently
+    dropped every brand and variant term from the volume sum."""
     if not search_terms:
         return []
-    # Case-INSENSITIVE match: DataForSEO stores keywords lowercased (e.g.
-    # "ninja air fryer"), while curated terms are mixed-case ("Ninja air fryer").
-    # An exact match silently dropped every brand/variant term from the volume
-    # sum (undercount) — lower() on both sides makes the curated terms actually
-    # count. DISTINCT ON the normalized keyword also collapses case duplicates.
-    lowered = [t.strip().lower() for t in search_terms]
-    result = await connection.execute(
-        text(
-            "SELECT DISTINCT ON (lower(keyword)) keyword, search_volume, monthly_searches "
-            "FROM keyword_search_volume WHERE location = :location AND lower(keyword) = ANY(:lowered) "
-            "ORDER BY lower(keyword), created_at DESC"
-        ),
-        {"location": location, "lowered": lowered},
-    )
-    return [(row[0], 0.0 if row[1] is None else float(row[1]), _monthly_volumes(row[2])) for row in result.all()]
+    stored = await pytrends_stored_volume(location, search_terms)
+    return [
+        (
+            item["keyword"],
+            0.0 if item.get("search_volume") is None else float(item["search_volume"]),
+            _monthly_volumes(item.get("monthly_searches")),
+        )
+        for item in stored["keywords"]
+    ]
 
 
-async def _fetch_related_rows(connection: AsyncConnection, seed_label: str, location: str) -> list[dict[str, Any]]:
+async def _fetch_related_rows(seed_label: str, location: str) -> list[dict[str, Any]]:
     """Freshest related keyword per (keyword) for this country's seed set, with
     volume + monthly series + commercial signals (cpc, competition_index). Shared
     by demand expansion (compute_trend_score) and intent (compute_search_intent_score)."""
-    result = await connection.execute(
-        text(
-            "SELECT DISTINCT ON (keyword) keyword, search_volume, monthly_searches, cpc, competition_index "
-            "FROM keyword_related WHERE location = :location AND seed_keyword = :seed_label "
-            "ORDER BY keyword, created_at DESC"
-        ),
-        {"location": location, "seed_label": seed_label},
-    )
     rows: list[dict[str, Any]] = []
-    for row in result.all():
-        if row[0] is None or row[1] is None:
+    for item in await pytrends_stored_related(location, seed_label):
+        if item.get("keyword") is None or item.get("search_volume") is None:
             continue
         rows.append(
             {
-                "keyword": row[0],
-                "volume": float(row[1]),
-                "monthly": _monthly_volumes(row[2]),
-                "cpc": None if row[3] is None else float(row[3]),
-                "competition_index": None if row[4] is None else int(row[4]),
+                "keyword": item["keyword"],
+                "volume": float(item["search_volume"]),
+                "monthly": _monthly_volumes(item.get("monthly_searches")),
+                "cpc": None if item.get("cpc") is None else float(item["cpc"]),
+                "competition_index": (
+                    None if item.get("competition_index") is None else int(item["competition_index"])
+                ),
             }
         )
     return rows
@@ -237,7 +227,7 @@ async def _fetch_related_rows(connection: AsyncConnection, seed_label: str, loca
 async def related_rows_exist(seed_terms: list[str], location: str) -> bool:
     """True when the collector already holds related keywords (with volume) for
     this EXACT seed set + location — the precondition compute_search_intent_score
-    needs (it matches keyword_related on the joined seed label). Used to force a
+    needs (it matches the stored rows on the joined seed label). Used to force a
     keywords_for_keywords re-collection when the seed set changed (e.g. a new
     identify-image overwrote localized_markets with different/longer terms): the
     old related rows no longer match the new label, which would otherwise leave
@@ -245,41 +235,24 @@ async def related_rows_exist(seed_terms: list[str], location: str) -> bool:
     if not seed_terms:
         return False
     seed_label = ", ".join(seed_terms)
-    engine = get_external_engine(DataSource.PYTRENDS)
-    async with engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT 1 FROM keyword_related "
-                "WHERE location = :location AND seed_keyword = :seed_label AND search_volume > 0 LIMIT 1"
-            ),
-            {"location": location, "seed_label": seed_label},
-        )
-        return result.first() is not None
+    return any(
+        (item.get("search_volume") or 0) > 0 for item in await pytrends_stored_related(location, seed_label)
+    )
 
 
 async def missing_volume_terms(terms: list[str], location: str) -> list[str]:
-    """The subset of `terms` with NO keyword_search_volume row yet for this
-    location — i.e. exactly what a collection still needs. Enables
-    term-incremental demand: only genuinely new terms are downloaded, already
-    cached ones are skipped ("só baixa se um termo novo aparece"). Matches on the
-    exact keyword string, the same key compute_trend_score reads by."""
+    """The terms with nothing stored for this location yet — exactly what a
+    collection still needs. Enables term-incremental demand: only genuinely new
+    terms are downloaded, already cached ones are skipped.
+
+    The answer comes from the collection service rather than being worked out
+    here. The match has to be case-insensitive, because that source lowercases
+    what it stores, and a mixed-case curated term would otherwise look missing
+    forever and be re-downloaded every run at real cost per call."""
     if not terms:
         return []
-    # Case-insensitive, matching how the trend lookup reads (DataForSEO stores
-    # keywords lowercased) — otherwise mixed-case curated terms would look
-    # "missing" forever and re-download every run.
-    lowered = [t.strip().lower() for t in terms]
-    engine = get_external_engine(DataSource.PYTRENDS)
-    async with engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT DISTINCT lower(keyword) FROM keyword_search_volume "
-                "WHERE location = :location AND lower(keyword) = ANY(:lowered)"
-            ),
-            {"location": location, "lowered": lowered},
-        )
-        have = {row[0] for row in result.all()}
-    return [t for t, lt in zip(terms, lowered, strict=True) if lt not in have]
+    stored = await pytrends_stored_volume(location, terms)
+    return list(stored["missing"])
 
 
 def _select_expansion(
@@ -376,7 +349,6 @@ def _summed_monthly_series(rows: list[tuple[str, float, list[tuple[int, int, flo
 
 
 async def _demand_rows(
-    connection: AsyncConnection,
     search_terms: list[str],
     location: str,
     *,
@@ -409,11 +381,11 @@ async def _demand_rows(
     Ou seja, série vazia sempre significa "estes termos não têm volume aqui",
     nunca "o dado veio truncado".
     """
-    approved = await _fetch_approved_raw(connection, search_terms, location)
+    approved = await _fetch_approved_raw(search_terms, location)
     if not search_terms or not expandir:
         return _dedup_volume_rows(approved), 0
     seed_label = ", ".join(seed_terms or search_terms[:20])
-    related = await _fetch_related_rows(connection, seed_label, location)
+    related = await _fetch_related_rows(seed_label, location)
     tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
     expansao = _select_expansion(related, search_terms, tiers, outras_marcas)
     return _dedup_volume_rows(approved + expansao), len(expansao)
@@ -439,17 +411,14 @@ async def compute_trend_score(
     volume downstream. Same pipeline for every country AND the reference-market
     candidates, so the ruler stays comparable. Penetration vs population is
     added by the indicator engine as decision context."""
-    engine = get_external_engine(DataSource.PYTRENDS)
-    async with engine.connect() as connection:
-        rows, expansion_count = await _demand_rows(
-            connection,
-            search_terms,
-            location,
-            seed_terms=seed_terms,
-            language=language,
-            outras_marcas=outras_marcas,
-            expandir=expandir,
-        )
+    rows, expansion_count = await _demand_rows(
+        search_terms,
+        location,
+        seed_terms=seed_terms,
+        language=language,
+        outras_marcas=outras_marcas,
+        expandir=expandir,
+    )
 
     if not rows:
         return RawIndicatorResult(
@@ -491,11 +460,9 @@ async def compute_growth_score(
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.2 — GrowthRaw = (final_avg - initial_avg)/max(initial_avg,1)*100
     over the SUMMED monthly_searches series (trailing 12 months), k = n//3."""
-    engine = get_external_engine(DataSource.PYTRENDS)
-    async with engine.connect() as connection:
-        rows, _ = await _demand_rows(
-            connection, search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
-        )
+    rows, _ = await _demand_rows(
+        search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+    )
     series = _summed_monthly_series(rows)
 
     n = len(series)
@@ -544,11 +511,9 @@ async def compute_demand_stability_score(
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev/mean (population stddev) of the
     SUMMED monthly_searches series."""
-    engine = get_external_engine(DataSource.PYTRENDS)
-    async with engine.connect() as connection:
-        rows, _ = await _demand_rows(
-            connection, search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
-        )
+    rows, _ = await _demand_rows(
+        search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+    )
     series = _summed_monthly_series(rows)
 
     if len(series) < 2:
@@ -630,9 +595,7 @@ async def compute_search_intent_score(
     # SET, since the related keywords are for the set, not per individual seed.
     # Match that exact label (analysis_service sends the same search_terms[:20]).
     seed_label = ", ".join(seed_terms)
-    engine = get_external_engine(DataSource.PYTRENDS)
-    async with engine.connect() as connection:
-        related = await _fetch_related_rows(connection, seed_label, location)
+    related = await _fetch_related_rows(seed_label, location)
     # Mesmo veto da expansão: a intenção de compra desta marca não pode ser
     # composta pelas keywords de outra. Sem isto, um comparativo de alto volume
     # da concorrente pesaria na intenção deste produto.

@@ -1,16 +1,14 @@
 """Cap. 4 §4.3 — raw value computation for the 7 World-Bank-derived MOS
 indicators (docs/marketmind-capitulo4-metricas.md). Filters by
-``country_iso2`` (not the WB-native ``country`` column) — the same choice
-reconciliation_service already made, since ISO2 is the one code we
-seed/know precisely for every reference country."""
+``country_iso2`` rather than the World Bank's own country code: ISO2 is the
+one code the Core knows precisely for every reference country, so it needs no
+mapping table of its own."""
 
 import math
 
-from sqlalchemy import text
-
-from app.db.external import get_external_engine
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, IndicatorDirection
+from app.domain.enums import AvailabilityStatus, IndicatorCode, IndicatorDirection
 from app.services.indicators.results import RawIndicatorResult
+from app.services.indicators.sources import worldbank_series
 
 _GDP_PER_CAPITA = "NY.GDP.PCAP.CD"
 _INFLATION = "FP.CPI.TOTL.ZG"
@@ -52,32 +50,13 @@ RAW_INDICATOR_CODES: dict[IndicatorCode, list[str]] = {
 
 
 async def _latest_value(country_iso2: str, indicator_code: str) -> float | None:
-    engine = get_external_engine(DataSource.WORLDBANK)
-    async with engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT value FROM worldbank_observations "
-                "WHERE country_iso2 = :iso2 AND indicator_code = :code AND value IS NOT NULL "
-                "ORDER BY year DESC LIMIT 1"
-            ),
-            {"iso2": country_iso2, "code": indicator_code},
-        )
-        row = result.first()
-    return None if row is None else float(row[0])
+    points = await worldbank_series(country_iso2, indicator_code, limit=1)
+    return points[0][1] if points else None
 
 
 async def _recent_average(country_iso2: str, indicator_code: str, k: int) -> tuple[float | None, int]:
-    engine = get_external_engine(DataSource.WORLDBANK)
-    async with engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT value FROM worldbank_observations "
-                "WHERE country_iso2 = :iso2 AND indicator_code = :code AND value IS NOT NULL "
-                "ORDER BY year DESC LIMIT :k"
-            ),
-            {"iso2": country_iso2, "code": indicator_code, "k": k},
-        )
-        values = [float(row[0]) for row in result.all()]
+    points = await worldbank_series(country_iso2, indicator_code, limit=k)
+    values = [value for _year, value in points]
     if not values:
         return None, 0
     return sum(values) / len(values), len(values)

@@ -33,39 +33,12 @@ class Settings(BaseSettings):
     # (`require_secure_transport = ON`). See app/db/ssl_config.py.
     database_ssl_mode: str = "disable"
 
-    # Read-only connections to the 4 collection microservices.
-    # These are separate Postgres instances (each service owns its own database).
-    # See README "Conectividade entre serviços" for why explicit host/port are required
-    # instead of relying on a shared Docker network.
-    pytrends_db_host: str = "localhost"
-    pytrends_db_port: int = 5432
-    pytrends_db_name: str = "marketmind_pytrends"
-    pytrends_db_user: str = "marketmind_readonly"
-    pytrends_db_password: str = "marketmind_readonly_password"
-
-    worldbank_db_host: str = "localhost"
-    worldbank_db_port: int = 5434
-    worldbank_db_name: str = "marketmind_worldbank"
-    worldbank_db_user: str = "marketmind_readonly"
-    worldbank_db_password: str = "marketmind_readonly_password"
-
-    oecd_db_host: str = "localhost"
-    oecd_db_port: int = 5433
-    oecd_db_name: str = "marketmind_oecd"
-    oecd_db_user: str = "marketmind_readonly"
-    oecd_db_password: str = "marketmind_readonly_password"
-
-    undata_db_host: str = "localhost"
-    undata_db_port: int = 5435
-    undata_db_name: str = "marketmind_united_nations_data"
-    undata_db_user: str = "marketmind_readonly"
-    undata_db_password: str = "marketmind_readonly_password"
-
-    # HTTP APIs of the 4 collection services (used to dispatch on-demand
-    # collection and poll ingestion runs — see app/services/collection_client.py).
-    # Same host.docker.internal strategy as the DB connections above; ports
-    # match each service's own .env (already made distinct there to run
-    # simultaneously): pytrends=8000, oecd=8001, undata=8002, worldbank=8003.
+    # HTTP APIs of the 4 collection services. Everything goes through these
+    # now: dispatching a collection, polling an ingestion run, AND reading the
+    # data they hold. Reading their tables directly used to be the shortcut, and
+    # it coupled this service to four schemas it does not own.
+    # Ports match each service's own .env (made distinct there so all four can
+    # run at once): pytrends=8000, oecd=8001, undata=8002, worldbank=8003.
     pytrends_api_base_url: str = "http://host.docker.internal:8000"
     worldbank_api_base_url: str = "http://host.docker.internal:8003"
     oecd_api_base_url: str = "http://host.docker.internal:8001"
@@ -265,34 +238,6 @@ class Settings(BaseSettings):
         if raw == "*":
             return ["*"]
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
-
-    @property
-    def pytrends_database_url(self) -> str:
-        return (
-            f"postgresql+asyncpg://{self.pytrends_db_user}:{quote(self.pytrends_db_password, safe='')}"
-            f"@{self.pytrends_db_host}:{self.pytrends_db_port}/{self.pytrends_db_name}"
-        )
-
-    @property
-    def worldbank_database_url(self) -> str:
-        return (
-            f"postgresql+asyncpg://{self.worldbank_db_user}:{quote(self.worldbank_db_password, safe='')}"
-            f"@{self.worldbank_db_host}:{self.worldbank_db_port}/{self.worldbank_db_name}"
-        )
-
-    @property
-    def oecd_database_url(self) -> str:
-        return (
-            f"postgresql+asyncpg://{self.oecd_db_user}:{quote(self.oecd_db_password, safe='')}"
-            f"@{self.oecd_db_host}:{self.oecd_db_port}/{self.oecd_db_name}"
-        )
-
-    @property
-    def undata_database_url(self) -> str:
-        return (
-            f"postgresql+asyncpg://{self.undata_db_user}:{quote(self.undata_db_password, safe='')}"
-            f"@{self.undata_db_host}:{self.undata_db_port}/{self.undata_db_name}"
-        )
 
 
 settings = Settings()

@@ -11,38 +11,15 @@ from app.schemas.admin import (
     BrandSplitResponse,
     MacroPrewarmRequest,
     MacroPrewarmResponse,
-    ReconciliationReportResponse,
     RefreshWeightsResponse,
 )
 from app.services.brand_split_service import BrandSplitService
 from app.services.catalog_service import CatalogService
 from app.services.macro_coverage import MacroPrewarmService
-from app.services.reconciliation_service import ReconciliationService
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
-
-
-@router.post(
-    "/reconciliation/run",
-    response_model=ReconciliationReportResponse,
-    summary="Run coverage reconciliation",
-    description=(
-        "Compares coverage_index against the 4 services' raw observation "
-        "tables to catch drift. Low-priority/diagnostic — meant to be "
-        "invoked periodically by an external cron/systemd timer, no "
-        "in-process scheduler exists yet. See app/services/reconciliation_service.py "
-        "for the exact scope (WorldBank/OECD/UNData only for Fase 1)."
-    ),
-)
-async def run_reconciliation(session: AsyncSession = Depends(get_session)) -> ReconciliationReportResponse:
-    report = await ReconciliationService(session).reconcile()
-    return ReconciliationReportResponse(
-        checked=report.checked,
-        drift=[asdict(d) for d in report.drift],
-        unmappable=[asdict(d) for d in report.unmappable],
-    )
 
 
 @router.post(

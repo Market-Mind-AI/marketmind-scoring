@@ -39,22 +39,6 @@ class BrandSplitResponse(BaseModel):
     mercados_movidos: list[str]
 
 
-class ReconciliationDriftItem(BaseModel):
-    coverage_index_id: str
-    source: str
-    entity_key: str | None
-    country: str
-    indicator_code: str
-    period_key: str
-    reason: str
-
-
-class ReconciliationReportResponse(BaseModel):
-    checked: int
-    drift: list[ReconciliationDriftItem]
-    unmappable: list[ReconciliationDriftItem]
-
-
 class MacroPrewarmRequest(BaseModel):
     countries: list[str] | None = Field(
         default=None,

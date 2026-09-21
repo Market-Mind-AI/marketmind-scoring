@@ -12,11 +12,9 @@ see worldbank.py::compute_inflation. Reinstate here only if marketmind-oecd
 starts persisting the full SDMX series key.
 """
 
-from sqlalchemy import text
-
-from app.db.external import get_external_engine
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode, IndicatorDirection
+from app.domain.enums import AvailabilityStatus, IndicatorCode, IndicatorDirection
 from app.services.indicators.results import RawIndicatorResult
+from app.services.indicators.sources import oecd_series
 
 _HOUSE_PRICE_WINDOW_QUARTERS = 12  # 3 years of quarterly RHP observations
 
@@ -30,35 +28,27 @@ RAW_INDICATOR_CODES: dict[IndicatorCode, list[str]] = {
 
 
 async def _recent_real_house_price_series(country_code: str) -> list[float]:
-    """RHP (Real House Prices) — descending by time_period, most recent
-    first. Level is NOT comparable across countries (rebased to 100 per
-    country at BASE_PER, confirmed live: ESP and USA both =100.00 in
-    2015 — see marketmind_mos_engine); only a growth rate computed within
-    the same series is meaningful, same principle as GDP Growth Score.
+    """RHP (Real House Prices) — most recent quarter first.
 
-    Two guards confirmed necessary against live data (2026-07-10):
-      - frequency='Q': RHP is published both quarterly and annually under
-        the same measure; mixing them would break the 12-quarter window.
-      - DISTINCT time_period: marketmind-oecd stores each observation
-        duplicated ~18x (re-collection inserts without dedup), so a plain
-        LIMIT 12 returned 12 copies of the SAME latest quarter, making the
-        recent and old windows identical -> a spurious 0% growth (which
-        then normalized to a constant 33.3 for every country). Deduping to
-        one value per quarter restores the real ~41-quarter series. Values
-        are identical within a quarter, so MAX(value) just picks that one."""
-    engine = get_external_engine(DataSource.OECD)
-    async with engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT value FROM ("
-                "  SELECT time_period, MAX(value) AS value FROM oecd_observations "
-                "  WHERE country = :country AND measure = 'RHP' AND value IS NOT NULL AND frequency = 'Q' "
-                "  GROUP BY time_period"
-                ") q ORDER BY time_period DESC LIMIT :limit"
-            ),
-            {"country": country_code, "limit": _HOUSE_PRICE_WINDOW_QUARTERS},
-        )
-        return [float(row[0]) for row in result.all()]
+    The level is NOT comparable across countries (each series is rebased to 100
+    at its own base period; confirmed live, ESP and USA both read 100.00 in
+    2015 — see marketmind_mos_engine). Only a growth rate computed within one
+    series means anything, same principle as GDP Growth Score.
+
+    frequency='Q' is a real guard, not a formality: RHP is published both
+    quarterly and annually under the same measure, and mixing them breaks a
+    window counted in quarters.
+
+    The other guard that used to live here — one value per period — is the OECD
+    service's now. It stores each observation many times over, and a plain limit
+    of 12 returned twelve copies of the same quarter, which made the recent and
+    older windows identical and produced a growth rate of exactly zero for every
+    country. That belongs with the data, not with whoever reads it.
+    """
+    points = await oecd_series(
+        country_code, measure="RHP", frequency="Q", limit=_HOUSE_PRICE_WINDOW_QUARTERS
+    )
+    return [value for _period, value in points]
 
 
 async def compute_real_estate_growth(country_code: str) -> RawIndicatorResult:

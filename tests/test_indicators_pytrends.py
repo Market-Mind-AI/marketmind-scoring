@@ -7,13 +7,12 @@ monthly series; SEARCH INTENT from volume-weighted related-keyword classificatio
 
 import json
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
 from app.domain.enums import AvailabilityStatus, IndicatorDirection
 from app.services.indicators import pytrends as pytrends_indicators
-from tests._external_db_mock import make_mock_engine, result_with_all
+from tests._source_mock import patch_pytrends
 
 
 def _months(volumes: list[float], *, year: int = 2025, start_month: int = 1) -> list[dict[str, Any]]:
@@ -41,8 +40,7 @@ async def test_trend_score_sums_volume_linear() -> None:
         ("air fryer", 1000.0, _months([100.0] * 12)),
         ("freidora de aire", 500.0, _months([50.0] * 12)),
     ]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_trend_score(["air fryer", "freidora de aire"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -59,8 +57,7 @@ async def test_trend_score_dedups_identical_rows() -> None:
         ("air fryer", 1000.0, monthly),
         ("airfryer", 1000.0, monthly),  # identical numbers -> deduped away
     ]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_trend_score(["air fryer", "airfryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -79,8 +76,7 @@ async def test_trend_score_expands_with_product_related_drops_informational() ->
         ("what is an air fryer", 5000.0, _months([500.0] * 12), 0.1, 5),  # curiosity -> dropped
         ("blender", 8000.0, _months([800.0] * 12), 1.0, 100),  # not the product -> dropped
     ]
-    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(approved, related):
         result = await pytrends_indicators.compute_trend_score(["air fryer"], "US", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -100,8 +96,7 @@ async def test_trend_score_collapses_google_variant_duplicates() -> None:
         ("airfryert", 301000.0, _months([25000.0] * 12), 0.8, 100),  # typo close-variant
         ("cosori airfryer", 50000.0, _months([4000.0] * 12), 0.9, 100),  # distinct product -> summed
     ]
-    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(approved, related):
         result = await pytrends_indicators.compute_trend_score(["Airfryer"], "DE", "2026-07", language="de")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -112,8 +107,7 @@ async def test_trend_score_collapses_google_variant_duplicates() -> None:
 async def test_trend_score_accepts_json_string_monthly_searches() -> None:
     # monthly_searches may arrive as a JSON string (raw JSONB) — parsed the same.
     rows = [("air fryer", 200.0, json.dumps(_months([20.0] * 12)))]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_trend_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -121,8 +115,7 @@ async def test_trend_score_accepts_json_string_monthly_searches() -> None:
 
 
 async def test_trend_score_unavailable_when_no_rows() -> None:
-    engine = make_mock_engine([result_with_all([]), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], []):
         result = await pytrends_indicators.compute_trend_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
@@ -136,8 +129,7 @@ async def test_growth_score_computes_expected_raw() -> None:
     # One term's monthly series [10,10,10,20,20,20,40,40,40]: n=9, k=3,
     # initial_avg=10, final_avg=40 -> ((40-10)/10)*100 = 300.
     rows = [("air fryer", 200.0, _months([10, 10, 10, 20, 20, 20, 40, 40, 40]))]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_growth_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -153,8 +145,7 @@ async def test_growth_score_sums_series_across_distinct_terms() -> None:
         ("air fryer", 120.0, _months([20, 20, 20, 20, 20, 20])),
         ("freidora de aire", 90.0, _months([0, 0, 0, 30, 30, 30])),
     ]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_growth_score(["air fryer", "freidora de aire"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -163,8 +154,7 @@ async def test_growth_score_sums_series_across_distinct_terms() -> None:
 
 async def test_growth_score_unavailable_with_fewer_than_six_months() -> None:
     rows = [("air fryer", 60.0, _months([10, 20, 30]))]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_growth_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
@@ -175,8 +165,7 @@ async def test_growth_score_flat_zero_on_near_zero_baseline() -> None:
     # Low-base noise guard: a near-zero initial window makes the ratio explode.
     # Must return a flat 0% (AVAILABLE), not a spurious extreme nor UNAVAILABLE.
     rows = [("air fryer", 153.0, _months([0, 0, 1, 0, 0, 2, 40, 50, 60]))]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_growth_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -188,8 +177,7 @@ async def test_growth_score_flat_zero_on_near_zero_baseline() -> None:
 
 async def test_demand_stability_score_computes_cv() -> None:
     rows = [("air fryer", 60.0, _months([10, 20, 30]))]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_demand_stability_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -203,8 +191,7 @@ async def test_demand_stability_neutral_on_low_volume_series() -> None:
     # reliable CV, so return a NEUTRAL score instead of a spurious extreme.
     # (volume 15 clears the term-drop floor; the SERIES mean is what's near-zero.)
     rows = [("presunto pata negra", 15.0, _months([0, 0, 2, 0, 0, 1]))]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_demand_stability_score(["presunto pata negra"], "PT", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -214,8 +201,7 @@ async def test_demand_stability_neutral_on_low_volume_series() -> None:
 
 async def test_demand_stability_unavailable_with_fewer_than_two_months() -> None:
     rows = [("air fryer", 10.0, _months([10]))]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(rows, []):
         result = await pytrends_indicators.compute_demand_stability_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
@@ -248,8 +234,7 @@ async def test_search_intent_uses_language_lexicon() -> None:
     # what is -> curiosity 0.2), weighted by real volume. cpc/competition NULL,
     # so no commercial signal -> pure lexical (backward-compatible path).
     rows = [("buy iberico ham", 80.0, None, None, None), ("what is iberico ham", 20.0, None, None, None)]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], rows):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -263,8 +248,7 @@ async def test_search_intent_blends_commercial_signal() -> None:
     # DEFAULT 0.6; competition_index 100 (=1.0), no cpc -> commercial 1.0.
     # intent = 0.6*0.6 + 0.4*1.0 = 0.76 -> 76.0.
     rows = [("air fryer", 500.0, None, None, 100)]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], rows):
         result = await pytrends_indicators.compute_search_intent_score(["air fryer"], "US", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
@@ -274,8 +258,7 @@ async def test_search_intent_blends_commercial_signal() -> None:
 async def test_search_intent_curiosity_scores_low() -> None:
     # A market only browsing ("what is / vs") scores low.
     rows = [("what is iberico ham", 100.0, None, None, None), ("iberico ham vs prosciutto", 100.0, None, None, None)]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], rows):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
 
     assert result.raw_value == pytest.approx(20.0)
@@ -283,17 +266,15 @@ async def test_search_intent_curiosity_scores_low() -> None:
 
 async def test_search_intent_unknown_language_falls_back_to_english() -> None:
     rows = [("buy iberico ham", 100.0, None, None, None)]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], rows):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="xx")
 
     assert result.raw_value == pytest.approx(100.0)  # "buy" still transactional via EN fallback
 
 
 async def test_search_intent_unavailable_when_no_seed_terms() -> None:
-    # Empty seeds -> UNAVAILABLE without ever hitting the DB.
-    engine = make_mock_engine([])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    # Empty seeds -> UNAVAILABLE without ever asking the collection service.
+    with patch_pytrends([], []):
         result = await pytrends_indicators.compute_search_intent_score([], "ES", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
@@ -301,8 +282,7 @@ async def test_search_intent_unavailable_when_no_seed_terms() -> None:
 
 
 async def test_search_intent_unavailable_when_no_related_keywords() -> None:
-    engine = make_mock_engine([result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], []):
         result = await pytrends_indicators.compute_search_intent_score(["air fryer"], "ES", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
@@ -312,8 +292,7 @@ async def test_search_intent_unavailable_when_no_related_keywords() -> None:
 async def test_search_intent_unavailable_when_total_weight_zero() -> None:
     # Related keywords present but all volumes are 0 -> filtered out -> UNAVAILABLE.
     rows = [("buy iberico ham", 0.0, None, None, None), ("what is iberico ham", 0.0, None, None, None)]
-    engine = make_mock_engine([result_with_all(rows), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], rows):
         result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
@@ -338,8 +317,7 @@ async def test_growth_uses_the_related_expansion_like_demand_volume() -> None:
     # e a série mensal fica vazia — foi o que aconteceu em produção.
     aprovados = [("filamento 3d", 0.0, _months([0.0] * 12))]
     relacionados = [("filamento 3d pla", 4800.0, _months([400.0] * 6 + [600.0] * 6), 0.9, 100)]
-    engine = make_mock_engine([result_with_all(aprovados), result_with_all(relacionados)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(aprovados, relacionados):
         resultado = await pytrends_indicators.compute_growth_score(
             ["filamento 3d"], "Brazil", "2026-08", seed_terms=["filamento 3d"], language="pt"
         )
@@ -351,8 +329,7 @@ async def test_growth_uses_the_related_expansion_like_demand_volume() -> None:
 async def test_stability_uses_the_related_expansion_like_demand_volume() -> None:
     aprovados = [("filamento 3d", 0.0, _months([0.0] * 12))]
     relacionados = [("filamento 3d pla", 4800.0, _months([400.0] * 12), 0.9, 100)]
-    engine = make_mock_engine([result_with_all(aprovados), result_with_all(relacionados)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(aprovados, relacionados):
         resultado = await pytrends_indicators.compute_demand_stability_score(
             ["filamento 3d"], "Brazil", "2026-08", seed_terms=["filamento 3d"], language="pt"
         )
@@ -365,8 +342,7 @@ async def test_sem_dado_nenhum_continua_indisponivel() -> None:
     """Resiliência não é inventar dado. Se não há volume em lugar nenhum — nem
     curado nem relacionado — o indicador segue UNAVAILABLE e o país é excluído
     com motivo, que é a regra do Cap. 5 §5.3."""
-    engine = make_mock_engine([result_with_all([]), result_with_all([])])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], []):
         resultado = await pytrends_indicators.compute_growth_score(
             ["termo sem volume"], "Brazil", "2026-08", seed_terms=["termo sem volume"], language="pt"
         )
@@ -391,8 +367,7 @@ async def test_demanda_nao_soma_keyword_de_outra_marca() -> None:
         ("glenfiddich 12 vs cardhu 12", 9000.0, _months([900.0] * 12), 1.5, 90),  # outra marca -> vetada
         ("macallan 12 price", 8000.0, _months([800.0] * 12), 1.4, 95),  # outra marca -> vetada
     ]
-    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(approved, related):
         result = await pytrends_indicators.compute_trend_score(
             ["cardhu 12"], "GB", "2026-08", language="en", outras_marcas=["glenfiddich", "macallan"]
         )
@@ -408,8 +383,7 @@ async def test_sem_marca_a_categoria_soma_as_marcas() -> None:
     e é por isso que ele é uma lista vinda de fora e não uma regra fixa."""
     approved = [("single malt whisky", 1000.0, _months([100.0] * 12))]
     related = [("cardhu single malt whisky", 2000.0, _months([200.0] * 12), 1.2, 100)]
-    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(approved, related):
         result = await pytrends_indicators.compute_trend_score(
             ["single malt whisky"], "GB", "2026-08", language="en", outras_marcas=[]
         )
@@ -426,14 +400,12 @@ async def test_intencao_de_compra_ignora_keyword_de_outra_marca() -> None:
         ("what is cardhu", 100.0, _months([10.0] * 12), 0.1, 5),
         ("buy glenfiddich 12 online", 10_000.0, _months([1000.0] * 12), 2.0, 100),
     ]
-    engine = make_mock_engine([result_with_all(related_com_veto)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], related_com_veto):
         vetado = await pytrends_indicators.compute_search_intent_score(
             ["cardhu"], "GB", "2026-08", "en", outras_marcas=["glenfiddich"]
         )
 
-    engine = make_mock_engine([result_with_all(related_com_veto)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], related_com_veto):
         sem_veto = await pytrends_indicators.compute_search_intent_score(["cardhu"], "GB", "2026-08", "en")
 
     assert vetado.raw_value is not None and sem_veto.raw_value is not None
@@ -496,14 +468,12 @@ async def test_intencao_da_marca_ignora_related_da_categoria() -> None:
         ("cardhu 12 where to buy", 100.0, _months([10.0] * 12), 2.0, 100),  # da marca
         ("what is single malt whisky", 20_000.0, _months([2000.0] * 12), 0.1, 5),  # da categoria
     ]
-    engine = make_mock_engine([result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], related):
         com_portao = await pytrends_indicators.compute_search_intent_score(
             ["cardhu 12", "single malt whisky"], "GB", "2026-08", "en", relevant_terms=["cardhu 12"]
         )
 
-    engine = make_mock_engine([result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends([], related):
         sem_portao = await pytrends_indicators.compute_search_intent_score(
             ["cardhu 12", "single malt whisky"], "GB", "2026-08", "en"
         )
@@ -523,8 +493,7 @@ async def test_categoria_sem_expansao_soma_apenas_os_termos_curados() -> None:
     o rótulo promete."""
     approved = [("scotch whisky", 590.0, _months([50.0] * 12))]
     related = [("grant's scotch whisky", 720.0, _months([60.0] * 12), 1.5, 90)]
-    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(approved, related):
         sem_expansao = await pytrends_indicators.compute_trend_score(
             ["scotch whisky"], "ES", "2026-08", language="es", expandir=False
         )
@@ -532,7 +501,6 @@ async def test_categoria_sem_expansao_soma_apenas_os_termos_curados() -> None:
     assert "folded" not in (sem_expansao.notes or "")
 
     # Com expansão (o caminho da MARCA), a concorrente desconhecida entraria.
-    engine = make_mock_engine([result_with_all(approved), result_with_all(related)])
-    with patch("app.services.indicators.pytrends.get_external_engine", return_value=engine):
+    with patch_pytrends(approved, related):
         com_expansao = await pytrends_indicators.compute_trend_score(["scotch whisky"], "ES", "2026-08", language="es")
     assert float(com_expansao.raw_value) > 590.0

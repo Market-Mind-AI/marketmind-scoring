@@ -10,7 +10,7 @@ import uuid
 import pytest
 from pydantic import BaseModel
 
-from app.services.catalog_matcher import CatalogMatcher, CatalogMatchDecision
+from app.services.catalog_matcher import CatalogMatchDecision, CatalogMatcher
 from app.services.llm.base import LLMError
 
 
