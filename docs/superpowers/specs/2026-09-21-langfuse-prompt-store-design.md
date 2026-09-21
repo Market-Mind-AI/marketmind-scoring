@@ -83,9 +83,19 @@ Each replaces its constant with `prompt_text(<name>, <constant>, **vars)`:
 - `vision_client`: `instructions = prompt_text("vision-instructions", _INSTRUCTIONS, subject=subject, country_list=country_list)`.
 - `explanation_client._system_prompt`: the base comes from `prompt_text("explanation-system-pt" | "-en", _SYSTEM_PROMPT_PT | _EN, structure=…, scope_intro=…, country_rule=…, ruler_scope=…)`. The rest of the assembly (language line, rules, user-question block) is unchanged.
 
+### `app/prompt_registry.py` (new) and the startup warm-up
+
+`PROMPTS: dict[str, str]` maps each of the six names to its default constant, imported from the service modules. It lives in its own module so that `app/prompts.py` never imports the service modules, which avoids an import cycle. The sync script and the warm-up both use it.
+
+`get_prompt` is a synchronous HTTP call, and core is async, so a cold fetch inside a request would block the event loop, for up to about 3 s when Langfuse is slow. To keep it out of requests:
+- `prompts.warm(registry)` fetches every prompt once.
+- When tracing is enabled, the lifespan starts it as a background task via `asyncio.to_thread`, keeping a reference to the task like the existing sweep task.
+- Startup is never delayed. A request that arrives before the warm-up finishes just fetches for itself.
+- After warm-up, fetches are cache hits, and the SDK refreshes stale entries on its own background threads.
+
 ### `scripts/sync_prompts.py` (new, makes no LLM calls)
 
-It seeds and syncs Langfuse from the code defaults. The registry of names and default constants lives in the script, which imports the constants, so `app/prompts.py` never imports the service modules and there's no import cycle.
+It seeds and syncs Langfuse from the code defaults in `app/prompt_registry.PROMPTS`. It follows the existing scripts' pattern of adding the repo root to `sys.path`.
 
 - **Default mode:** for each prompt, if Langfuse has no `production` version, it runs `create_prompt(name, prompt=default, labels=["production"], type="text", commit_message="Seeded from code")`. Otherwise it leaves the prompt alone. It prints one line per prompt: created, or exists with its version.
 - **`--update`:** where the `production` text differs from the code default, it creates a new version labelled `production` (`commit_message="Synced from code"`). Older versions stay in Langfuse, and any UI edit that is overwritten can be re-promoted from there.
@@ -127,4 +137,4 @@ A `feat/langfuse-prompt-store` branch and PR in core, stacked on `feat/langfuse-
 ## Risks
 
 - **Prompt drift:** UI edits and the code defaults diverge over time. `sync_prompts.py --update` realigns Langfuse to code, and the PR description tells the team that Langfuse `production` is authoritative.
-- **Cold-start latency:** up to about 3 s once per prompt per process when Langfuse is slow. This is bounded by `fetch_timeout_seconds`.
+- **Cold-start latency:** a fetch can take up to about 3 s when Langfuse is slow, bounded by `fetch_timeout_seconds`. The startup warm-up takes that cost off the request path. Only a request that lands in the first seconds after a restart, before the warm-up finishes, can still pay it.
