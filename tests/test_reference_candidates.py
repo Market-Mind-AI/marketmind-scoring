@@ -91,8 +91,8 @@ def test_coverage_and_scoring_read_the_same_helper() -> None:
 
     Comparing the two functions' outputs would be tautological — they call the
     same helper, so of course they agree. What actually broke was a call SITE:
-    _score_reference_candidates iterated the unbounded list while
-    _ensure_candidates_coverage iterated a bounded one. So this asserts on the
+    score_reference_candidates iterated the unbounded list while
+    ensure_candidates_coverage iterated a bounded one. So this asserts on the
     source: every loop over candidates in those two methods must go through
     _champion_candidates, and the ceiling's must go through the raw helper.
     """
@@ -103,9 +103,9 @@ def test_coverage_and_scoring_read_the_same_helper() -> None:
 
     src = inspect.getsource(analysis_service)
     expected = {
-        "_ensure_candidates_coverage": "_champion_candidates",
-        "_score_reference_candidates": "_champion_candidates",
-        "_resolve_demand_ceiling": "_top_reference_candidates",
+        "ensure_candidates_coverage": "_champion_candidates",
+        "score_reference_candidates": "_champion_candidates",
+        "resolve_demand_ceiling": "_top_reference_candidates",
     }
     # Split the module into method bodies so a loop can be attributed to one.
     bodies = re.split(r"\n    (?:async )?def ", src)

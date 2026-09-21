@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.schemas.coverage import JobTaskResult
+
 
 class RegisterAnalysisRequest(BaseModel):
     entity_key: uuid.UUID | None = None
@@ -110,3 +112,102 @@ class NarrateResponse(BaseModel):
     # answer, the prose is a reading of them, and a missing reading never
     # invalidates the answer.
     narrative: str | None = None
+
+
+class EnrichTermsRequest(BaseModel):
+    entity_key: uuid.UUID
+    countries: list[str] = Field(..., min_length=1)
+    # The generic family behind a branded product is enriched WITHOUT reference
+    # candidates: the demand ruler belongs to the brand, and the category is
+    # context that is never scored.
+    with_candidates: bool = True
+
+
+class EnrichTermsResponse(BaseModel):
+    entity_key: uuid.UUID
+    # Which countries now carry curated search terms. Enrichment only fills what
+    # is missing, so an entity that already had everything reports the same
+    # countries without any model having been called.
+    countries_with_terms: list[str]
+    reference_candidates: int
+
+
+class EnsureCoverageRequest(BaseModel):
+    country_iso3: str = Field(..., min_length=3, max_length=3)
+    entity_key: uuid.UUID | None = None
+
+
+class EnsureCoverageResponse(BaseModel):
+    country: str
+    # The dispatched collection tasks, empty when nothing needed collecting.
+    #
+    # This list is how the two reasons a country can still lack an indicator are
+    # told apart, and the distinction decides whether to insist or to declare.
+    # A FAILED task is a source that is down, and it is worth retrying. A task
+    # that finished without failing and still left the indicator missing is a
+    # source that does not have that datum, and no amount of retrying will
+    # change it.
+    tasks: list[JobTaskResult]
+
+
+class CandidatesCoverageRequest(BaseModel):
+    entity_key: uuid.UUID
+    requested_countries: list[str] = Field(..., min_length=1)
+    period_key: str = Field(..., min_length=1)
+
+
+class CandidatesCoverageResponse(BaseModel):
+    entity_key: uuid.UUID
+    # Whether a champion computed for this period already exists. When it does,
+    # candidate collection is the slowest work in the system and it produces the
+    # same answer, so the caller should skip it: three consecutive analyses of
+    # one product took 594s, 203s and 396s, and nearly all of the repeat cost
+    # was candidate work redone.
+    champion_cached: bool
+
+
+class DemandCeilingRequest(BaseModel):
+    entity_key: uuid.UUID
+    countries: list[str] = Field(..., min_length=1)
+    period_key: str = Field(..., min_length=1)
+
+
+class DemandCeilingResponse(BaseModel):
+    # The largest real search volume among the product's reference markets, or
+    # null when none could be read. It only READS collected demand and never
+    # collects, so it is stable across repeats rather than drifting.
+    demand_ceiling: float | None = None
+    # Which ruler was used, carried into the narrative so the text can say so
+    # rather than presenting a normalised figure as if it were absolute.
+    demand_ruler: dict[str, Any] | None = None
+
+
+class ScoreCandidatesRequest(BaseModel):
+    entity_key: uuid.UUID
+    requested_countries: list[str] = Field(..., min_length=1)
+    period_key: str = Field(..., min_length=1)
+    demand_ceiling: float | None = None
+
+
+class ScoredCandidate(BaseModel):
+    country: str
+    mos: float | None = None
+    availability_status: str
+    excluded_reason: str | None = None
+
+
+class ScoreCandidatesResponse(BaseModel):
+    # The product's reference markets, scored. The MOS uses fixed anchors, so
+    # scoring these never changes what a requested country scores -- which is
+    # what makes it safe to surface the best one as a benchmark.
+    candidates: list[ScoredCandidate]
+
+
+class SetChampionRequest(BaseModel):
+    entity_key: uuid.UUID
+    period_key: str = Field(..., min_length=1)
+    # Null records "nothing scorable this period", which is a real outcome and
+    # has to be stored: without it the same fruitless candidate work is
+    # attempted again on every later analysis.
+    country: str | None = None
+    mos: float | None = None

@@ -49,7 +49,7 @@ async def test_enrichment_called_only_for_missing_country() -> None:
             {"USA": {"primary_name": "air fryer", "search_terms": ["air fryer"], "excluded_terms": [], "confidence": 0.9}},
             candidates=[{"country": "BRA", "primary_name": "fritadeira", "search_terms": ["fritadeira"]}],
         )
-        await svc._ensure_product_enrichment(entity, ["USA", "JPN"])
+        await svc.ensure_product_enrichment(entity, ["USA", "JPN"])
     finally:
         for p in patchers:
             p.stop()
@@ -72,7 +72,7 @@ async def test_no_llm_call_when_base_already_complete() -> None:
             {"USA": {"primary_name": "air fryer", "search_terms": ["air fryer"], "excluded_terms": [], "confidence": 0.9}},
             candidates=[{"country": "BRA", "search_terms": ["fritadeira"]}],
         )
-        await svc._ensure_product_enrichment(entity, ["USA"])
+        await svc.ensure_product_enrichment(entity, ["USA"])
     finally:
         for p in patchers:
             p.stop()
@@ -93,7 +93,7 @@ async def test_reference_candidates_outside_basket_dropped() -> None:
             {"USA": {"primary_name": "air fryer", "search_terms": ["air fryer"], "excluded_terms": [], "confidence": 0.9}},
             candidates=None,  # empty → candidates call runs
         )
-        await svc._ensure_product_enrichment(entity, ["USA"])
+        await svc.ensure_product_enrichment(entity, ["USA"])
     finally:
         for p in patchers:
             p.stop()

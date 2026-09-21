@@ -17,6 +17,7 @@ same answer.
 """
 
 import uuid
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,12 +27,21 @@ from app.core.logging import logger
 from app.db.session import get_session
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.mos_repository import MosRepository
+from app.repositories.product_repository import ProductRepository
 from app.schemas.internal import (
     AnalysisDetailResponse,
     AnalysisStateResponse,
     CalibrateWeightsRequest,
     CalibrateWeightsResponse,
+    CandidatesCoverageRequest,
+    CandidatesCoverageResponse,
     CompleteAnalysisRequest,
+    DemandCeilingRequest,
+    DemandCeilingResponse,
+    EnrichTermsRequest,
+    EnrichTermsResponse,
+    EnsureCoverageRequest,
+    EnsureCoverageResponse,
     EvidenceRequest,
     EvidenceResponse,
     FailAnalysisRequest,
@@ -41,7 +51,12 @@ from app.schemas.internal import (
     ProgressResponse,
     RegisterAnalysisRequest,
     RegisteredAnalysisResponse,
+    ScoreCandidatesRequest,
+    ScoreCandidatesResponse,
+    ScoredCandidate,
+    SetChampionRequest,
 )
+from app.services.analysis_service import AnalysisService
 from app.services.explanation_client import ExplanationClient
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.time import utc_now
@@ -295,3 +310,192 @@ async def narrate(request: NarrateRequest, session: AsyncSession = Depends(get_s
         user_prompt=request.user_prompt,
     )
     return NarrateResponse(narrative=narrative)
+
+
+# --- The steps that carry the analysis's own judgement ---
+
+
+async def _entity(session: AsyncSession, entity_key: uuid.UUID):  # noqa: ANN202
+    entity = await ProductRepository(session).get_by_entity_key(entity_key)
+    if entity is None:
+        raise HTTPException(status_code=404, detail=f"Entity {entity_key} not found")
+    return entity
+
+
+@router.post(
+    "/enrich-terms",
+    response_model=EnrichTermsResponse,
+    summary="Make sure the product has a search vocabulary in each country",
+    description=(
+        "Generates the per-country search terms and the reference-market "
+        "candidates, and only for what is missing. A country that already has "
+        "terms triggers nothing, and an entity that has everything costs no "
+        "model call at all — reuse is what makes a repeated analysis fast and "
+        "cheap.\n\n"
+        "Must run before coverage, which reads these terms to know what to "
+        "collect.\n\n"
+        "For the generic family behind a branded product, pass "
+        "with_candidates=false: the demand ruler belongs to the brand, and the "
+        "category is context that is never scored."
+    ),
+)
+async def enrich_terms(
+    request: EnrichTermsRequest, session: AsyncSession = Depends(get_session)
+) -> EnrichTermsResponse:
+    entity = await _entity(session, request.entity_key)
+    await AnalysisService(session).ensure_product_enrichment(
+        entity, request.countries, com_candidatos=request.with_candidates
+    )
+    await session.commit()
+    markets = entity.localized_markets or {}
+    return EnrichTermsResponse(
+        entity_key=request.entity_key,
+        countries_with_terms=sorted(markets.keys()),
+        reference_candidates=len(entity.reference_candidates or []),
+    )
+
+
+@router.post(
+    "/coverage/ensure",
+    response_model=EnsureCoverageResponse,
+    summary="Collect what this country is missing, and report what was tried",
+    description=(
+        "Checks what this country and product still need and dispatches "
+        "collection only for the gaps. Already-fresh data is never "
+        "re-collected, and for demand only genuinely new terms are downloaded.\n\n"
+        "The dispatched tasks come back, and that list is the point. It is how "
+        "the two reasons a country can still lack an indicator are told apart: "
+        "a FAILED task is a source that is down and worth insisting on, while a "
+        "task that finished without failing and still left the indicator "
+        "missing is a source that does not have that datum. Insisting on the "
+        "second never ends; declaring the first throws away a market over a "
+        "thirty-minute outage."
+    ),
+)
+async def ensure_coverage(
+    request: EnsureCoverageRequest, session: AsyncSession = Depends(get_session)
+) -> EnsureCoverageResponse:
+    tasks = await AnalysisService(session).ensure_coverage(
+        country_iso3=request.country_iso3, entity_key=request.entity_key
+    )
+    await session.commit()
+    return EnsureCoverageResponse(country=request.country_iso3, tasks=tasks)
+
+
+@router.post(
+    "/candidates/coverage",
+    response_model=CandidatesCoverageResponse,
+    summary="Collect demand for the product's reference markets",
+    description=(
+        "The demand ruler is the largest real search volume among the product's "
+        "reference-market candidates, so those have to be collected regardless "
+        "of which countries were asked about — that is what keeps the ruler "
+        "stable instead of moving with each query.\n\n"
+        "Skip this when champion_cached is already true. Candidate demand is "
+        "the slowest collection in the system and re-running it produces the "
+        "same answer: three consecutive analyses of one product took 594s, 203s "
+        "and 396s, and nearly all of the repeat cost was this work redone."
+    ),
+)
+async def candidates_coverage(
+    request: CandidatesCoverageRequest, session: AsyncSession = Depends(get_session)
+) -> CandidatesCoverageResponse:
+    entity = await _entity(session, request.entity_key)
+    cached = entity.champion_period_key == request.period_key
+    if not cached:
+        await AnalysisService(session).ensure_candidates_coverage(
+            entity, request.requested_countries, period_key=request.period_key
+        )
+        await session.commit()
+    return CandidatesCoverageResponse(entity_key=request.entity_key, champion_cached=cached)
+
+
+@router.post(
+    "/demand-ceiling",
+    response_model=DemandCeilingResponse,
+    summary="Resolve the ruler the country's demand is measured against",
+    description=(
+        "Reads the largest real search volume among the product's reference "
+        "markets. It only reads — it never collects — so it returns whatever "
+        "the last candidate collection left behind, which is what makes the "
+        "ruler stable across repeats rather than drifting.\n\n"
+        "Falls back to the largest requested-country volume, then to a fixed "
+        "bound. Which one was used comes back in demand_ruler and belongs in "
+        "the narrative: a normalised figure presented as an absolute one is a "
+        "false claim, not a rounding."
+    ),
+)
+async def demand_ceiling(
+    request: DemandCeilingRequest, session: AsyncSession = Depends(get_session)
+) -> DemandCeilingResponse:
+    entity = await _entity(session, request.entity_key)
+    ceiling, ruler = await AnalysisService(session).resolve_demand_ceiling(
+        entity, request.countries, request.period_key
+    )
+    return DemandCeilingResponse(demand_ceiling=ceiling, demand_ruler=ruler)
+
+
+@router.post(
+    "/candidates/score",
+    response_model=ScoreCandidatesResponse,
+    summary="Score the product's reference markets",
+    description=(
+        "Scores the reference-market candidates the caller did not ask about. "
+        "The MOS uses fixed anchors, so this never changes what a requested "
+        "country scores — which is what makes it safe to surface the best of "
+        "them as a benchmark.\n\n"
+        "Their demand is already collected by then, so this adds only free "
+        "macro data and arithmetic."
+    ),
+)
+async def score_candidates(
+    request: ScoreCandidatesRequest, session: AsyncSession = Depends(get_session)
+) -> ScoreCandidatesResponse:
+    entity = await _entity(session, request.entity_key)
+    results = await AnalysisService(session).score_reference_candidates(
+        entity=entity,
+        requested=request.requested_countries,
+        period_key=request.period_key,
+        demand_ceiling=request.demand_ceiling,
+    )
+    await session.commit()
+    return ScoreCandidatesResponse(
+        candidates=[
+            ScoredCandidate(
+                country=row.country,
+                mos=None if row.mos is None else float(row.mos),
+                availability_status=row.availability_status,
+                excluded_reason=row.excluded_reason,
+            )
+            for row in results
+        ]
+    )
+
+
+@router.post(
+    "/champion",
+    response_model=AnalysisStateResponse,
+    summary="Record the product's best known market for a period",
+    description=(
+        "Stores which market this product scores highest in, so a later "
+        "analysis reuses it instead of recollecting the candidates.\n\n"
+        "A null country is a real outcome and must be recorded: it means "
+        "nothing was scorable this period, and without storing that the same "
+        "fruitless work is attempted again on every later analysis.\n\n"
+        "Store the best REQUESTED market when it beats the stored champion. "
+        "The stored value means 'this product's best known market', so leaving "
+        "a beaten one in place keeps it wrong for every analysis after."
+    ),
+)
+async def set_champion(
+    request: SetChampionRequest, session: AsyncSession = Depends(get_session)
+) -> AnalysisStateResponse:
+    entity = await _entity(session, request.entity_key)
+    await ProductRepository(session).set_champion(
+        entity,
+        country=request.country,
+        mos=None if request.mos is None else Decimal(str(request.mos)),
+        period_key=request.period_key,
+    )
+    await session.commit()
+    return AnalysisStateResponse(request_id=request.entity_key, status="stored")

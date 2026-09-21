@@ -59,11 +59,11 @@ from app.utils.time import utc_now
 #
 # Three consumers read this list, and they do NOT all want the same set:
 #
-#   _resolve_demand_ceiling      the raw ranked top-N, requested countries
+#   resolve_demand_ceiling       the raw ranked top-N, requested countries
 #                                included, because the ruler must not depend on
 #                                what was asked for.
-#   _ensure_candidates_coverage  the top-N the caller did not request — what
-#   _score_reference_candidates  actually gets collected and scored.
+#   ensure_candidates_coverage   the top-N the caller did not request — what
+#   score_reference_candidates   actually gets collected and scored.
 #
 # Those last two must agree exactly. When they did not — one capped, one not —
 # scoring reached candidates whose demand had never been collected, and each
@@ -193,7 +193,7 @@ class AnalysisService:
             if entity_key is not None:
                 entity_to_enrich = await self._product_repo.get_by_entity_key(entity_key)
                 if entity_to_enrich is not None:
-                    await self._ensure_product_enrichment(entity_to_enrich, countries)
+                    await self.ensure_product_enrichment(entity_to_enrich, countries)
                     # A CATEGORIA do produto também precisa de vocabulário: é ela
                     # que dá a escala contra a qual a demanda da marca é lida
                     # (decisão D4). Roda com `brand=None`, então produz termos
@@ -205,11 +205,11 @@ class AnalysisService:
                     if familia_key is not None:
                         familia = await self._product_repo.get_by_entity_key(familia_key)
                         if familia is not None:
-                            await self._ensure_product_enrichment(familia, countries, com_candidatos=False)
+                            await self.ensure_product_enrichment(familia, countries, com_candidatos=False)
                     await self._session.commit()
 
             for country_iso3 in countries:
-                await self._ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
+                await self.ensure_coverage(country_iso3=country_iso3, entity_key=entity_key)
                 # Sinal de vida por país: é o passo mais longo entre dois
                 # batimentos, e é o que a varredura usa para distinguir uma
                 # análise ocupada de uma que morreu com o pod.
@@ -240,12 +240,12 @@ class AnalysisService:
 
             if entity is not None:
                 if not champion_is_cached:
-                    await self._ensure_candidates_coverage(entity, countries, period_key=period_key)
+                    await self.ensure_candidates_coverage(entity, countries, period_key=period_key)
                 # The ceiling only READS candidate demand, it never collects. So
                 # skipping the collection above leaves it reading exactly the
                 # data the run that computed the champion left behind — the
                 # ruler is therefore stable across repeats rather than drifting.
-                demand_ceiling, demand_ruler = await self._resolve_demand_ceiling(entity, countries, period_key)
+                demand_ceiling, demand_ruler = await self.resolve_demand_ceiling(entity, countries, period_key)
 
             for country_iso3 in countries:
                 await self._indicator_engine.compute_all(
@@ -392,7 +392,7 @@ class AnalysisService:
                             await self._session.commit()
 
                 if not champion_is_cached:
-                    candidate_results = await self._score_reference_candidates(
+                    candidate_results = await self.score_reference_candidates(
                         entity=entity, requested=countries, period_key=period_key, demand_ceiling=demand_ceiling
                     )
                     scored_all = [r for r in [*mos_results, *candidate_results] if r.mos is not None]
@@ -575,7 +575,7 @@ class AnalysisService:
         country = await self._country_repo.get_by_iso3(iso3)
         return country.search_language if country is not None else None
 
-    async def _ensure_product_enrichment(
+    async def ensure_product_enrichment(
         self, entity: Any, countries: list[str], *, com_candidatos: bool = True
     ) -> None:
         """Fill the entity's per-country search vocabulary + reference candidates,
@@ -658,7 +658,7 @@ class AnalysisService:
                         para este país. Insistir não muda nada — é a exceção
                         que a decisão D7 abriu.
 
-        A distinção é observável de dentro do Core porque `_ensure_coverage`
+        A distinção é observável de dentro do Core porque `ensure_coverage`
         agora devolve o resultado das tasks. Não precisa que os coletores
         passem a separar `no_data` de `unavailable` na resposta deles, o que
         seria mudança nos quatro repositórios ao mesmo tempo.
@@ -685,7 +685,7 @@ class AnalysisService:
             tentativa += 1
             transitorios: list[str] = []
             for pais, _motivo in pendentes.items():
-                resultados = await self._ensure_coverage(country_iso3=pais, entity_key=entity_key)
+                resultados = await self.ensure_coverage(country_iso3=pais, entity_key=entity_key)
                 await self._indicator_engine.compute_all(
                     country_iso3=pais,
                     entity_key=entity_key,
@@ -747,7 +747,7 @@ class AnalysisService:
         if mensagem:
             logger.info(f"AnalysisRequest {analysis_request.id}: {mensagem}")
 
-    async def _ensure_coverage(self, *, country_iso3: str, entity_key: uuid.UUID | None) -> list[JobTaskResult]:
+    async def ensure_coverage(self, *, country_iso3: str, entity_key: uuid.UUID | None) -> list[JobTaskResult]:
         """Checks (read-only) the last 6 monthly period_keys for every gap
         this country/product needs, and only dispatches collection
         (check_or_collect) for the ones actually missing.
@@ -869,7 +869,7 @@ class AnalysisService:
         outputs = _DEMAND_COLLECTION_OUTPUTS.get(collection_code, ())
         return any(not _is_available(current, code) for code in outputs)
 
-    async def _ensure_candidates_coverage(self, entity: Any, requested: list[str], *, period_key: str) -> None:
+    async def ensure_candidates_coverage(self, entity: Any, requested: list[str], *, period_key: str) -> None:
         """Collect each reference-market candidate's FULL demand — search_volume
         AND keywords_for_keywords — exactly like a requested country, so its
         volume is measured through the identical pipeline (including the related-
@@ -925,7 +925,7 @@ class AnalysisService:
         if missing:
             await self._coverage_service.check_or_collect(missing, requested_by="analysis_service:reference_candidates")
 
-    async def _resolve_demand_ceiling(
+    async def resolve_demand_ceiling(
         self, entity: Any, countries: list[str], period_key: str
     ) -> tuple[float | None, dict[str, Any]]:
         """The Demand Volume ruler ceiling + mode, for narration:
@@ -975,7 +975,7 @@ class AnalysisService:
             }
         return None, {"mode": "fixed"}
 
-    async def _score_reference_candidates(
+    async def score_reference_candidates(
         self, *, entity: Any, requested: list[str], period_key: str, demand_ceiling: float | None
     ) -> list[MosResult]:
         """Best-effort MOS for the product's reference-candidate markets the user
@@ -1001,7 +1001,7 @@ class AnalysisService:
             if country is None or country.iso2 is None:
                 continue
             try:
-                await self._ensure_coverage(country_iso3=iso3, entity_key=entity_key)
+                await self.ensure_coverage(country_iso3=iso3, entity_key=entity_key)
                 await self._indicator_engine.compute_all(
                     country_iso3=iso3,
                     entity_key=entity_key,

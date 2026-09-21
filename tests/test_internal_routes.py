@@ -236,3 +236,177 @@ def test_reading_an_analysis_back_gives_a_resumed_run_what_it_needs(client: Test
     assert stored["canonical_title"] == "air fryer"
     assert stored["user_prompt"] == "vale a pena?"
     assert stored["status"] == "pending"
+
+
+# --- the steps that carry the analysis's own judgement ---
+
+
+def _resolve(client: TestClient, name: str) -> str:
+    response = client.post("/catalog/resolve", json={"text": name, "source": "test"})
+    assert response.status_code == 200, response.text
+    return response.json()["entity_key"]
+
+
+def test_enrich_terms_needs_a_real_entity(client: TestClient) -> None:
+    response = client.post(
+        "/internal/enrich-terms",
+        json={"entity_key": str(uuid.uuid4()), "countries": ["ESP"]},
+        headers=_HEADERS,
+    )
+    assert response.status_code == 404
+
+
+def test_enrich_terms_reports_which_countries_have_vocabulary(client: TestClient) -> None:
+    """Only what is missing is generated, so an entity that already has terms
+    costs no model call — reuse is what makes a repeated analysis cheap."""
+    entity_key = _resolve(client, f"air fryer {uuid.uuid4().hex[:6]}")
+    with patch(
+        "app.services.analysis_service.AnalysisService.ensure_product_enrichment", AsyncMock(return_value=None)
+    ):
+        response = client.post(
+            "/internal/enrich-terms",
+            json={"entity_key": entity_key, "countries": ["ESP", "PRT"]},
+            headers=_HEADERS,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["entity_key"] == entity_key
+
+
+def test_ensure_coverage_returns_the_tasks_it_dispatched(client: TestClient) -> None:
+    """The task list is the point: it is how "the source is down, insist" is
+    told apart from "the source has no such datum, declare it"."""
+    with patch(
+        "app.services.analysis_service.AnalysisService.ensure_coverage", AsyncMock(return_value=[])
+    ):
+        response = client.post(
+            "/internal/coverage/ensure", json={"country_iso3": "ESP"}, headers=_HEADERS
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["country"] == "ESP"
+    assert body["tasks"] == []
+
+
+def test_ensure_coverage_rejects_a_country_that_is_not_iso3(client: TestClient) -> None:
+    response = client.post("/internal/coverage/ensure", json={"country_iso3": "ES"}, headers=_HEADERS)
+    assert response.status_code == 422
+
+
+def test_candidate_collection_is_skipped_when_the_champion_is_cached(client: TestClient) -> None:
+    """Candidate demand is the slowest collection in the system and re-running
+    it produces the same answer."""
+    entity_key = _resolve(client, f"cached champion {uuid.uuid4().hex[:6]}")
+    period = "2026-09"
+    client.post(
+        "/internal/champion",
+        json={"entity_key": entity_key, "period_key": period, "country": "BRA", "mos": 66.4},
+        headers=_HEADERS,
+    )
+
+    collected = AsyncMock(return_value=None)
+    with patch("app.services.analysis_service.AnalysisService.ensure_candidates_coverage", collected):
+        response = client.post(
+            "/internal/candidates/coverage",
+            json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": period},
+            headers=_HEADERS,
+        )
+
+    assert response.json()["champion_cached"] is True
+    collected.assert_not_awaited()
+
+
+def test_candidate_collection_runs_when_there_is_no_cached_champion(client: TestClient) -> None:
+    entity_key = _resolve(client, f"fresh champion {uuid.uuid4().hex[:6]}")
+
+    collected = AsyncMock(return_value=None)
+    with patch("app.services.analysis_service.AnalysisService.ensure_candidates_coverage", collected):
+        response = client.post(
+            "/internal/candidates/coverage",
+            json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": "2026-09"},
+            headers=_HEADERS,
+        )
+
+    assert response.json()["champion_cached"] is False
+    collected.assert_awaited_once()
+
+
+def test_a_champion_can_be_stored_as_nothing_scorable(client: TestClient) -> None:
+    """A real outcome that has to be recorded: without it, the same fruitless
+    candidate work is attempted again on every later analysis."""
+    entity_key = _resolve(client, f"nothing scorable {uuid.uuid4().hex[:6]}")
+
+    response = client.post(
+        "/internal/champion",
+        json={"entity_key": entity_key, "period_key": "2026-09", "country": None, "mos": None},
+        headers=_HEADERS,
+    )
+
+    assert response.status_code == 200
+    cached = client.post(
+        "/internal/candidates/coverage",
+        json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": "2026-09"},
+        headers=_HEADERS,
+    )
+    assert cached.json()["champion_cached"] is True
+
+
+def test_the_demand_ceiling_reports_which_ruler_was_used(client: TestClient) -> None:
+    """A normalised figure presented as an absolute one is a false claim, so
+    the narrative has to be able to say which ruler it is reading."""
+    entity_key = _resolve(client, f"ruler {uuid.uuid4().hex[:6]}")
+    with patch(
+        "app.services.analysis_service.AnalysisService.resolve_demand_ceiling",
+        AsyncMock(return_value=(1_500_000.0, {"mode": "reference_candidate", "country": "BRA"})),
+    ):
+        response = client.post(
+            "/internal/demand-ceiling",
+            json={"entity_key": entity_key, "countries": ["ESP"], "period_key": "2026-09"},
+            headers=_HEADERS,
+        )
+
+    body = response.json()
+    assert body["demand_ceiling"] == 1_500_000.0
+    assert body["demand_ruler"]["mode"] == "reference_candidate"
+
+
+def test_scoring_candidates_reports_the_ones_it_could_not_score(client: TestClient) -> None:
+    """Excluded is reported with its reason, never omitted — a country missing
+    from the answer is indistinguishable from one that was never tried."""
+    entity_key = _resolve(client, f"candidates {uuid.uuid4().hex[:6]}")
+    from types import SimpleNamespace
+
+    rows = [
+        SimpleNamespace(country="BRA", mos=66.4, availability_status="available", excluded_reason=None),
+        SimpleNamespace(
+            country="PER",
+            mos=None,
+            availability_status="unavailable",
+            excluded_reason="Missing mandatory indicator(s): trend_score",
+        ),
+    ]
+    with patch(
+        "app.services.analysis_service.AnalysisService.score_reference_candidates",
+        AsyncMock(return_value=rows),
+    ):
+        response = client.post(
+            "/internal/candidates/score",
+            json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": "2026-09"},
+            headers=_HEADERS,
+        )
+
+    candidates = response.json()["candidates"]
+    assert [c["country"] for c in candidates] == ["BRA", "PER"]
+    assert candidates[1]["mos"] is None
+    assert "trend_score" in candidates[1]["excluded_reason"]
+
+
+def test_every_judgement_tool_needs_the_token(client: TestClient) -> None:
+    for path, payload in [
+        ("/internal/enrich-terms", {"entity_key": str(uuid.uuid4()), "countries": ["ESP"]}),
+        ("/internal/coverage/ensure", {"country_iso3": "ESP"}),
+        ("/internal/demand-ceiling", {"entity_key": str(uuid.uuid4()), "countries": ["ESP"], "period_key": "x"}),
+        ("/internal/champion", {"entity_key": str(uuid.uuid4()), "period_key": "x"}),
+    ]:
+        assert client.post(path, json=payload).status_code == 401, path
