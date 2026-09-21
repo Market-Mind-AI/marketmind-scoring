@@ -30,13 +30,17 @@ def client() -> Any | None:
     if not settings.langfuse_public_key or not settings.langfuse_secret_key:
         return None
 
-    from langfuse import Langfuse
+    try:
+        from langfuse import Langfuse
 
-    return Langfuse(
-        public_key=settings.langfuse_public_key,
-        secret_key=settings.langfuse_secret_key,
-        host=settings.langfuse_host,
-    )
+        return Langfuse(
+            public_key=settings.langfuse_public_key,
+            secret_key=settings.langfuse_secret_key,
+            host=settings.langfuse_host,
+        )
+    except Exception:  # noqa: BLE001 — tracing setup never fails a call
+        logger.warning("Langfuse could not be configured; model calls will not be traced.", exc_info=True)
+        return None
 
 
 def tracing_enabled() -> bool:

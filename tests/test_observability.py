@@ -37,6 +37,16 @@ def test_with_both_keys_there_is_a_client() -> None:
         assert observability.tracing_enabled() is True
 
 
+def test_langfuse_constructor_failure_does_not_fail_the_service() -> None:
+    with (
+        patch.object(settings, "langfuse_public_key", "pk-test-core"),
+        patch.object(settings, "langfuse_secret_key", "sk-test"),
+        patch("langfuse.Langfuse", side_effect=ValueError("bad sample rate")),
+    ):
+        assert observability.client() is None
+        assert observability.tracing_enabled() is False
+
+
 def test_adopting_a_callers_traceparent_makes_it_the_current_trace() -> None:
     from opentelemetry import trace
 

@@ -68,7 +68,7 @@ async def test_a_call_becomes_a_generation_named_after_its_site(spans) -> None:
     assert _attr(gen, "type") == "generation"
     assert _attr(gen, "model.name") == "fake-model"
     assert json.loads(_attr(gen, "input")) == {"system": "You localise.", "user": "Café colombiano 500 g"}
-    assert json.loads(_attr(gen, "output")) == "café colombiano"
+    assert _attr(gen, "output") == "café colombiano"
     assert _attr(gen, "metadata.provider") == "FakeProvider"
 
 
@@ -131,6 +131,17 @@ async def test_a_tracing_failure_does_not_fail_the_call(monkeypatch: pytest.Monk
     monkeypatch.setattr(observability, "client", lambda: Broken())
 
     assert await TracedProvider(FakeProvider(reply="fine"), site="enrichment").complete(user="x") == "fine"
+
+
+async def test_a_failed_image_description_does_not_fail_the_call(monkeypatch: pytest.MonkeyPatch, spans) -> None:
+    from unittest.mock import patch
+
+    with patch("app.services.llm.traced.describe_image", side_effect=RuntimeError("describe failed")):
+        result = await TracedProvider(FakeProvider(reply="fine"), site="vision").complete(
+            user="x", image=ImageInput(base64_data="AA", media_type="image/png")
+        )
+
+    assert result == "fine"
 
 
 def test_the_placeholder_reads_in_megabytes_for_a_large_photo() -> None:
