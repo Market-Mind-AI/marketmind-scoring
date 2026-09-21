@@ -748,3 +748,31 @@ def test_the_expansion_keeps_everything_that_qualifies() -> None:
     picked = _select_expansion(related, ["picanha"], None, [])
 
     assert len(picked) == 40
+
+
+def test_grouping_two_thousand_keywords_stays_quick() -> None:
+    """The only CPU-bound stretch in this service, and it runs three times per
+    country. It was O(n squared) over SequenceMatcher, which was fine while the
+    expansion was capped at fifteen keywords and stopped being fine the moment
+    the cap came off — 1.1 seconds of blocked event loop per call, on a
+    container limited to one CPU, which is how Kubernetes ended up restarting
+    the pod mid-analysis.
+
+    Two changes keep it quick and neither moves a single row: grouping by the
+    reported volume first (rows at different volumes could never merge anyway),
+    and using SequenceMatcher's own cheap upper bounds before the real ratio.
+    """
+    import time
+
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    # Shaped like the real thing: many keywords sharing the product's name, a
+    # handful of coarse volume buckets, so the buckets are genuinely large.
+    rows = _rows(*[(f"picanha {n} {'wagyu' if n % 3 else 'angus'}", 100.0 * (n % 12 + 1)) for n in range(2000)])
+
+    started = time.perf_counter()
+    out = _dedup_volume_rows(rows, _vocabulary("picanha"))
+    elapsed = time.perf_counter() - started
+
+    assert out, "sanity: the grouping produced something"
+    assert elapsed < 1.0, f"grouping took {elapsed:.2f}s; it used to block the event loop for longer than this"

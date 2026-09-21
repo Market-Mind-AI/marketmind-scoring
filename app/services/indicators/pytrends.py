@@ -24,6 +24,7 @@ The four Demand signals, all per country, from the country's approved terms
 Growth/Stability/Intent form the Demand Quality dimension (size-independent).
 """
 
+import asyncio
 import json
 import re
 import unicodedata
@@ -178,7 +179,8 @@ async def _fetch_volume_rows(
     (approved terms only); the demand VOLUME additionally folds in expansion
     (see compute_trend_score). Returns (volume, monthly_series)."""
     product_tokens = frozenset().union(*(_tokens(t) for t in search_terms)) if search_terms else frozenset()
-    return _dedup_volume_rows(await _fetch_approved_raw(search_terms, location), product_tokens)
+    approved = await _fetch_approved_raw(search_terms, location)
+    return await asyncio.to_thread(_dedup_volume_rows, approved, product_tokens)
 
 
 async def _fetch_approved_raw(
@@ -341,7 +343,18 @@ def _same_query(
             return True
         if (tokens & seen_tokens) - product_tokens:
             return True
-        if SequenceMatcher(None, norm, seen_norm).ratio() >= _NEAR_VARIANT_RATIO:
+        # real_quick_ratio and quick_ratio are cheap upper bounds on ratio, and
+        # this is the expensive comparison in the whole pipeline: it runs for
+        # every pair the set rules did not already settle. Filtering on the
+        # bounds first is the documented way to use SequenceMatcher and it costs
+        # nothing in accuracy — an upper bound below the threshold cannot become
+        # a real ratio above it.
+        matcher = SequenceMatcher(None, norm, seen_norm)
+        if (
+            matcher.real_quick_ratio() >= _NEAR_VARIANT_RATIO
+            and matcher.quick_ratio() >= _NEAR_VARIANT_RATIO
+            and matcher.ratio() >= _NEAR_VARIANT_RATIO
+        ):
             return True
     return False
 
@@ -401,15 +414,25 @@ def _dedup_volume_rows(
     `product_tokens` is the vocabulary those keywords were selected FOR — the
     words that carry no information here.
     """
+    # Bucketed by the reported volume, because an identical volume is the first
+    # thing every rule below requires. Scanning every group for every keyword was
+    # O(n squared) over SequenceMatcher, which was tolerable while an expansion
+    # was capped at 15 keywords and stopped being tolerable the moment the cap
+    # came off: 2,084 keywords for picanha in Brazil took 1.1 seconds of blocked
+    # event loop, three times per country, on a container limited to one CPU.
+    # Nothing could be served meanwhile — including the liveness probe, which
+    # times out at five seconds, so Kubernetes restarted the pod mid-analysis.
+    #
+    # Same grouping, same output: rows at different volumes could never have
+    # merged anyway.
+    buckets: dict[float, list[dict[str, Any]]] = {}
     groups: list[dict[str, Any]] = []
     for keyword, volume, monthly in raw:
         if volume < _VOLUME_FLOOR:
             continue
         norm, tokens = _norm_term(keyword), _tokens(keyword)
 
-        for group in groups:
-            if group["volume"] != volume:
-                continue
+        for group in buckets.setdefault(volume, []):
             # A group is a SET of spellings, and the keyword is compared against
             # each of them rather than against whichever one is on display or
             # against their union. Both shortcuts were tried and both lose
@@ -430,9 +453,9 @@ def _dedup_volume_rows(
                     group["monthly"] = monthly
                 break
         else:
-            groups.append(
-                {"keyword": keyword, "members": [(norm, tokens)], "volume": volume, "monthly": monthly}
-            )
+            novo = {"keyword": keyword, "members": [(norm, tokens)], "volume": volume, "monthly": monthly}
+            buckets[volume].append(novo)
+            groups.append(novo)
 
     return [(g["keyword"], g["volume"], g["monthly"]) for g in groups]
 
@@ -488,11 +511,18 @@ async def _demand_rows(
     # keywords being the same search — see _dedup_volume_rows.
     product_tokens = frozenset().union(*(_tokens(t) for t in search_terms)) if search_terms else frozenset()
     if not search_terms or not expandir:
-        return _dedup_volume_rows(approved, product_tokens), 0
+        return await asyncio.to_thread(_dedup_volume_rows, approved, product_tokens), 0
     seed_label = ", ".join(seed_terms or search_terms[:20])
     related = await _fetch_related_rows(seed_label, location)
     expansao = _select_expansion(related, search_terms, outras_marcas, excluded_terms)
-    return _dedup_volume_rows(approved + expansao, product_tokens), len(expansao)
+    # Off the event loop. Grouping two thousand keywords is the only CPU-bound
+    # stretch in this service, it runs three times per country, and while it
+    # ran nothing else could be served — including the liveness probe, which
+    # times out at five seconds and had Kubernetes restarting the pod
+    # mid-analysis. A thread does not make it parallel (the GIL is still there),
+    # it makes it INTERRUPTIBLE, which is the property that was missing.
+    rows = await asyncio.to_thread(_dedup_volume_rows, approved + expansao, product_tokens)
+    return rows, len(expansao)
 
 
 async def compute_trend_score(
