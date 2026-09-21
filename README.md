@@ -100,7 +100,7 @@ uvicorn app.main:app --reload --port 8004
 ```bash
 cp .env.example .env
 docker compose up --build
-docker compose exec marketmind-core-api alembic upgrade head
+docker compose exec marketmind-scoring-api alembic upgrade head
 ```
 
 API en `http://localhost:8004`, Swagger en `http://localhost:8004/docs`.

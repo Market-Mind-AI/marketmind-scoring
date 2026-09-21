@@ -5,7 +5,7 @@ from app.core.config import settings
 
 
 def setup_logging() -> logging.Logger:
-    logger = logging.getLogger("marketmind-core")
+    logger = logging.getLogger("marketmind-scoring")
     logger.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
 
     if not logger.handlers:

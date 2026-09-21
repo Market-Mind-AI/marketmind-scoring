@@ -1,9 +1,9 @@
 services:
-  marketmind-core-api:
+  marketmind-scoring-api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: marketmind-core-api
+    container_name: marketmind-scoring-api
     ports:
       - "${APP_PORT:-8004}:8000"
     env_file:
@@ -28,7 +28,7 @@ services:
     # ganho e exigiria uma janela de manutenção no volume existente.
     # O que o pipeline realmente usa é `pg_trgm`, presente nas duas.
     image: pgvector/pgvector:pg16
-    container_name: marketmind-core-postgres
+    container_name: marketmind-scoring-postgres
     environment:
       POSTGRES_DB: ${DATABASE_NAME:-marketmind_core}
       POSTGRES_USER: ${DATABASE_USER:-marketmind}
@@ -53,7 +53,7 @@ services:
   # serviços"). Os outros 4 docker-compose.yml não têm mais pgAdmin.
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: marketmind-core-pgadmin
+    container_name: marketmind-scoring-pgadmin
     user: root
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@marketmind.dev}

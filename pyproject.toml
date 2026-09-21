@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "marketmind-core"
+name = "marketmind-scoring"
 version = "0.1.0"
 description = "Orchestration service for MarketMind: coverage detection, product catalog, deterministic indicators (Cap. 4) and MOS calculation (Cap. 5)"
 authors = ["MarketMind"]

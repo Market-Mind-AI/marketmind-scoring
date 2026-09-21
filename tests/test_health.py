@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.db.session import get_session
 from app.main import app
 
@@ -35,7 +36,10 @@ def test_health_endpoint_all_connected() -> None:
             data = response.json()
             assert data["status"] == "ok"
             assert data["database"] == "connected"
-            assert data["app_name"] == "marketmind-core"
+            # Whatever this service is configured to be called, echoed back —
+            # not a literal. APP_NAME comes from the environment, so asserting a
+            # name here makes the test pass or fail on the developer's own .env.
+            assert data["app_name"] == settings.app_name
             assert len(data["external_sources"]) == 4
             assert all(s["status"] == "connected" for s in data["external_sources"])
     finally:

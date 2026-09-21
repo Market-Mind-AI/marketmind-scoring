@@ -6,7 +6,7 @@ from app.db.ssl_config import sslmode_query_suffix
 
 
 class Settings(BaseSettings):
-    app_name: str = "marketmind-core"
+    app_name: str = "marketmind-scoring"
     app_env: str = "local"
     app_port: int = 8000
 

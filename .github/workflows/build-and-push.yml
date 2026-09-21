@@ -13,7 +13,7 @@ name: Build and Push
 #      Contents: write on equifina/beprofit-infra-manifests.
 #
 # Modelled on beprofit-quota-management's workflow so both orgs deploy the same
-# way. Full runbook: marketmind-core/docs/marketmind-deploy-azure-beprofit.md
+# way. Full runbook: marketmind-scoring/docs/marketmind-deploy-azure-beprofit.md
 
 on:
   push:
@@ -37,9 +37,9 @@ env:
   # renders as "Market-Mind-AI". GHCR normalises the path to lowercase on push,
   # so the pushed name would not match the mixed-case string written into the
   # values file — the pull would then 404 at rollout time.
-  IMAGE: ghcr.io/market-mind-ai/marketmind-core
+  IMAGE: ghcr.io/market-mind-ai/marketmind-scoring
   ENV_TAG: marketmind-dev
-  VALUES_FILE: env/marketmind-dev/core-values.yaml
+  VALUES_FILE: env/marketmind-dev/scoring-values.yaml
 
 jobs:
   build-and-push:
@@ -146,7 +146,7 @@ jobs:
           git config user.name  "marketmind-ci[bot]"
           git config user.email "marketmind-ci[bot]@users.noreply.github.com"
           git add "$VALUES_FILE"
-          git commit -m "chore(core): update ${ENV_TAG} image to ${IMAGE_TAG}"
+          git commit -m "chore(scoring): update ${ENV_TAG} image to ${IMAGE_TAG}"
           # Six MarketMind repos push into this same repo, and BeProfit's own
           # services push into it too. A rejected push here means someone else
           # landed first, not that anything is broken.
