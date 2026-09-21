@@ -139,6 +139,14 @@ class EnsureCoverageRequest(BaseModel):
 
 class EnsureCoverageResponse(BaseModel):
     country: str
+    # The vocabulary this country was searched for. The one part of the
+    # pipeline a model wrote, and nothing downstream reveals it: a wrong native
+    # term produces a perfectly formed analysis of the wrong words, with no
+    # symptom anywhere else.
+    location: str | None = None
+    language: str | None = None
+    search_terms: list[str] = []
+    category_terms: list[str] = []
     # The dispatched collection tasks, empty when nothing needed collecting.
     #
     # This list is how the two reasons a country can still lack an indicator are

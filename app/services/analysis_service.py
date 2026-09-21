@@ -277,7 +277,9 @@ class AnalysisService:
             except ReferenceMarketError as exc:
                 logger.warning(f"Background reference-market candidates unavailable: {exc}")
 
-    async def ensure_coverage(self, *, country_iso3: str, entity_key: uuid.UUID | None) -> list[JobTaskResult]:
+    async def ensure_coverage(
+        self, *, country_iso3: str, entity_key: uuid.UUID | None, terms_used: dict[str, Any] | None = None
+    ) -> list[JobTaskResult]:
         """Checks (read-only) the last 6 monthly period_keys for every gap
         this country/product needs, and only dispatches collection
         (check_or_collect) for the ones actually missing.
@@ -319,6 +321,20 @@ class AnalysisService:
                     )
             location = country.iso2 if country is not None else None
             language = (country.search_language if country is not None else None) or "en"
+            # What this country is actually searched for, recorded for the
+            # caller. It is the one part of the pipeline a model wrote, and
+            # nothing downstream reveals it: a wrong native term produces a
+            # perfectly formed analysis of the wrong words.
+            if terms_used is not None:
+                terms_used.update(
+                    {
+                        "country": country_iso3,
+                        "location": location,
+                        "language": language,
+                        "search_terms": list(search_terms),
+                        "category_terms": list(category_terms),
+                    }
+                )
             if search_terms and location is not None:
                 # Term-incremental demand ("só baixa se um termo novo aparece"):
                 # collect ONLY the search terms that don't yet have volume data —

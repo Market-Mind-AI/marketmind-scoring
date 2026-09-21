@@ -18,6 +18,7 @@ same answer.
 
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -375,11 +376,19 @@ async def enrich_terms(
 async def ensure_coverage(
     request: EnsureCoverageRequest, session: AsyncSession = Depends(get_session)
 ) -> EnsureCoverageResponse:
+    terms: dict[str, Any] = {}
     tasks = await AnalysisService(session).ensure_coverage(
-        country_iso3=request.country_iso3, entity_key=request.entity_key
+        country_iso3=request.country_iso3, entity_key=request.entity_key, terms_used=terms
     )
     await session.commit()
-    return EnsureCoverageResponse(country=request.country_iso3, tasks=tasks)
+    return EnsureCoverageResponse(
+        country=request.country_iso3,
+        tasks=tasks,
+        location=terms.get("location"),
+        language=terms.get("language"),
+        search_terms=terms.get("search_terms", []),
+        category_terms=terms.get("category_terms", []),
+    )
 
 
 @router.post(
