@@ -27,6 +27,13 @@ if "test" not in settings.database_name.lower():
         "The suite truncates tables. Run with DATABASE_NAME=marketmind_test (see conftest.py)."
     )
 
+# Keep the developer's Langfuse keys out of the tests: with them, the app's
+# lifespan builds a real client pointed at Langfuse Cloud, and any test that
+# fakes below the resolver would export its spans there. Tests that need
+# tracing patch settings or replace observability.client themselves.
+settings.langfuse_public_key = ""
+settings.langfuse_secret_key = ""
+
 # Reference/seed data that migrations own and tests must never wipe:
 #  - countries: migration 003's ~27-country basket.
 #  - normalization_reference: the fixed absolute bounds seeded by migrations

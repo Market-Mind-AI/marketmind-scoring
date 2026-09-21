@@ -18,7 +18,7 @@ from app import observability
 from app.services.llm import usage
 from app.services.llm.base import ImageInput, LLMProvider
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("marketmind-scoring.llm_tracing")
 
 
 def describe_image(image: ImageInput) -> str:
@@ -46,10 +46,10 @@ class TracedProvider(LLMProvider):
         before = _tokens(usage.current())
         try:
             result = await self.inner.complete(system=system, user=user, image=image, response_model=response_model)
-        except Exception as exc:
-            _finish(generation, level="ERROR", status_message=str(exc))
+        except BaseException as exc:
+            _finish(generation, level="ERROR", status_message=str(exc), usage_details=_spent_since(before))
             raise
-        _finish(generation, output=_as_output(result), usage_details=_spent_since(before))
+        _finish(generation, output=result, usage_details=_spent_since(before))
         return result
 
     def _start(self, system: str | None, user: str, image: ImageInput | None) -> Any | None:
@@ -76,13 +76,20 @@ def _as_output(result: str | BaseModel) -> Any:
     return result.model_dump(mode="json") if isinstance(result, BaseModel) else result
 
 
-def _tokens(tally: usage.Usage | None) -> tuple[int, int] | None:
-    return (tally.input_tokens, tally.output_tokens) if tally is not None else None
+def _tokens(tally: usage.Usage | None) -> tuple[int, int, int] | None:
+    return (tally.input_tokens, tally.output_tokens, tally.calls_without_usage) if tally is not None else None
 
 
-def _spent_since(before: tuple[int, int] | None) -> dict[str, int] | None:
+def _spent_since(before: tuple[int, int, int] | None) -> dict[str, int] | None:
+    """The token delta since ``before``, or None when there is nothing to report.
+
+    That is either because no tally is open, or because the call that just ran
+    added to ``calls_without_usage`` — the provider reported no usage figures at
+    all, which is not the same as spending zero tokens and must not be recorded
+    as a free call.
+    """
     after = _tokens(usage.current())
-    if before is None or after is None:
+    if before is None or after is None or after[2] > before[2]:
         return None
     return {"input": after[0] - before[0], "output": after[1] - before[1]}
 
@@ -91,6 +98,8 @@ def _finish(generation: Any | None, **update: Any) -> None:
     if generation is None:
         return
     try:
+        if "output" in update:
+            update["output"] = _as_output(update["output"])
         generation.update(**{k: v for k, v in update.items() if v is not None})
         generation.end()
     except Exception:  # noqa: BLE001 — tracing never fails a call
