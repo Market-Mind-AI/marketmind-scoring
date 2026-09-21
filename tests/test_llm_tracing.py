@@ -3,15 +3,20 @@
 import json
 import uuid
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from langfuse import Langfuse
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 
 from app import observability
-from app.services.llm import usage
+from app.core.config import settings
+from app.services.llm import resolver, usage
 from app.services.llm.base import ImageInput, LLMProvider
+from app.services.llm.providers import OllamaProvider
 from app.services.llm.traced import TracedProvider, describe_image
 
 
@@ -153,3 +158,43 @@ def test_current_is_the_open_tally_or_none() -> None:
     with usage.collect() as spend:
         assert usage.current() is spend
     assert usage.current() is None
+
+
+def test_the_resolver_names_each_site(spans) -> None:
+    sites = {
+        resolver.resolve_vision_llm: "vision",
+        resolver.resolve_enrichment_llm: "enrichment",
+        resolver.resolve_reference_market_llm: "reference_market",
+        resolver.resolve_explanation_llm: "explanation",
+        resolver.resolve_catalog_match_llm: "catalog_match",
+    }
+    with patch.object(settings, "anthropic_api_key", "test-key"), patch.object(settings, "openai_api_key", "test-key"):
+        for resolve, site in sites.items():
+            provider = resolve()
+            assert isinstance(provider, TracedProvider), resolve.__name__
+            assert provider.site == site
+
+
+def test_without_tracing_the_resolver_returns_the_bare_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(observability, "client", lambda: None)
+
+    provider = resolver.resolve_llm(provider="ollama", model="gemma4:12b", site="enrichment")
+
+    assert isinstance(provider, OllamaProvider)
+
+
+def test_a_request_carrying_traceparent_puts_its_calls_in_that_trace(spans) -> None:
+    from app.main import adopt_request_trace
+
+    app = FastAPI()
+    app.middleware("http")(adopt_request_trace)
+
+    @app.post("/probe")
+    async def probe() -> dict:
+        await TracedProvider(FakeProvider(), site="enrichment").complete(user="x")
+        return {}
+
+    trace_id = "99eadfa97c641404b5c53a5958a11f14"
+    TestClient(app).post("/probe", headers={"traceparent": f"00-{trace_id}-b88f74cfd738d647-01"})
+
+    assert spans()["enrichment"]["trace_id"] == trace_id
