@@ -229,9 +229,17 @@ class IndicatorEngine:
         language = country.search_language
         if terms_override:
             search_terms = as_term_list(terms_override)
+            excluded_terms: list[str] = []
         else:
             market = (entity.localized_markets or {}).get(country.iso3) or {}
             search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
+            # The look-alikes the curation ruled out for this market: terms that
+            # mean something ELSE here. They were only ever used to decide
+            # product identity, never to measure demand — so "picanha suína"
+            # (pork, a different cut of a different animal) was vetoed at the
+            # front door and walked in through the expansion at 14,800 searches
+            # a month, because it contains an approved term.
+            excluded_terms = as_term_list(market.get("excluded_terms"))
         # A CATEGORIA do produto, medida ao lado da marca (decisão D4). Os termos
         # genéricos vêm da entidade-família (`generic_entity_key`), que o
         # enriquecimento preenche com `brand=None` — nenhum deles carrega marca.
@@ -265,7 +273,13 @@ class IndicatorEngine:
         outras_marcas = await self._product_repo.list_other_brand_names(entity.brand_key)
 
         trend = await pytrends_indicators.compute_trend_score(
-            search_terms, location, period_key, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+            search_terms,
+            location,
+            period_key,
+            seed_terms=seed_terms,
+            language=language,
+            outras_marcas=outras_marcas,
+            excluded_terms=excluded_terms,
         )
         # Decision context for the LLM narrative (not scored): pair the absolute
         # demand VOLUME with population so it can say WHETHER the volume comes

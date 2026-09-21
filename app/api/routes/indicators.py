@@ -17,7 +17,11 @@ router = APIRouter()
         "Computes every applicable indicator for a country (and, if "
         "entity_key is given, the 5 product-specific PyTrends indicators "
         "plus the conditional Median Age Fit too), normalizes each against "
-        "normalization_reference, and upserts into indicator_values."
+        "normalization_reference, and upserts into indicator_values.\n\n"
+        "Pass demand_ceiling. Without it Demand Volume is read against a fixed "
+        "2,000,000 bound instead of the product's own reference market, which "
+        "makes every real product look like it has almost no demand — and the "
+        "macro dimensions then decide the ranking on their own."
     ),
 )
 async def compute_indicators(
@@ -26,7 +30,10 @@ async def compute_indicators(
     engine = IndicatorEngine(session)
     try:
         results = await engine.compute_all(
-            country_iso3=request.country, entity_key=request.entity_key, period_key=request.period_key
+            country_iso3=request.country,
+            entity_key=request.entity_key,
+            period_key=request.period_key,
+            demand_ceiling=request.demand_ceiling,
         )
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

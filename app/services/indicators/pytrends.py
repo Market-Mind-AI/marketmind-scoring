@@ -25,6 +25,7 @@ Growth/Stability/Intent form the Demand Quality dimension (size-independent).
 """
 
 import json
+import re
 import unicodedata
 from collections.abc import Iterable
 from difflib import SequenceMatcher
@@ -260,6 +261,7 @@ def _select_expansion(
     approved_terms: list[str],
     tiers: dict[str, list[str]],
     outras_marcas: list[str] | None = None,
+    excluded_terms: list[str] | None = None,
 ) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
     """Conservatively pick related keywords to FOLD into the demand sum, WITHOUT
     any per-product exclusion list (that doesn't scale). A keyword qualifies when:
@@ -276,6 +278,11 @@ def _select_expansion(
     real buyers type.) Literal duplicates vs the approved terms are removed later
     by _dedup_volume_rows on the merged set. Top N by volume."""
     approved_norms = [n for n in (_norm_term(t) for t in approved_terms) if n]
+    # The curation's own veto list, which the expansion never consulted. These
+    # are terms that LOOK like the product and mean something else in this
+    # market, so a keyword carrying one is not this product's demand however
+    # many approved words it also carries: "picanha suína" is pork.
+    excluded_norms = [n for n in (_norm_term(t) for t in (excluded_terms or [])) if n]
     qualifying: list[tuple[str, float, list[tuple[int, int, float]]]] = []
     for r in related:
         if r["volume"] < _VOLUME_FLOOR:
@@ -283,6 +290,8 @@ def _select_expansion(
         if _de_outra_marca(r["keyword"], outras_marcas):
             continue
         kw_norm = _norm_term(r["keyword"])
+        if any(x in kw_norm for x in excluded_norms):  # ruled out for this market
+            continue
         if not any(a in kw_norm for a in approved_norms):  # relevance: contains a product term
             continue
         if _classify_query_intent(r["keyword"], tiers) < _DEFAULT_INTENT:  # drop usage/curiosity (not new demand)
@@ -292,49 +301,84 @@ def _select_expansion(
     return qualifying[:_EXPANSION_TOP_N]
 
 
+def _tokens(term: str) -> frozenset[str]:
+    """The words a query is made of, accent-folded. Order is not meaning: for
+    Google Ads, "beef picanha steak" and "picanha beef steak" are the same
+    search written twice."""
+    folded = unicodedata.normalize("NFKD", term).encode("ascii", "ignore").decode("ascii").lower()
+    return frozenset(w for w in re.split(r"[^a-z0-9]+", folded) if w)
+
+
 def _dedup_volume_rows(
     raw: Iterable[tuple[str, float, list[tuple[int, int, float]]]],
 ) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
-    """Drop ~zero-volume rows and collapse Google's duplicate reports of the SAME
-    query so its volume is counted once. Two passes:
+    """Drop ~zero-volume rows and count each real query once.
 
-    1. (normalized string, volume) — same normalized term at the same reported
-       volume is one query, whether it differs only in case/accent/spacing OR
-       arrives from both the approved and related tables (series is deliberately
-       NOT in the key, since the two tables report slightly different series for
-       the same term). Distinct real queries with DIFFERENT volumes ('air fryer'
-       550k vs 'airfryer' 74k) keep separate keys and are summed.
-    2. Within an IDENTICAL volume, collapse near-identical strings — Google's
-       close-variant grouping reports the same number under typo variants
-       ('airfryer'/'airfryert'). Never merges different volumes or genuinely
-       different words ('best air fryer'), so real distinct demand is preserved.
+    Google Ads reports a close-variant GROUP — one search, written many ways —
+    by repeating the identical volume under every spelling it recognises. For
+    picanha in the US it returned:
 
-    Input rows are (keyword, volume, monthly_series); output keeps the keyword:
-    (keyword, volume, series) — the keyword is needed for the per-term demand
-    breakdown surfaced in the evidence packet / narrative."""
-    # Keep the ORIGINAL keyword for display (the per-term breakdown must read as
-    # real words, e.g. "fritadeira eletrica", not the space-stripped norm), while
-    # using the normalized form only for dedup keys / near-variant matching.
-    seen: set[tuple[str, float]] = set()
-    deduped: list[tuple[str, str, float, list[tuple[int, int, float]]]] = []
+        picanha steak / picaña steak / picanha beef steak / beef picanha steak
+            ... all at exactly 90,500
+        coulotte beef / coulotte steak / sirloin coulotte / ... (nine of them)
+            ... all at exactly 18,100
+
+    Summed, those nine coulotte spellings become 162,900 searches that do not
+    exist. The rule that stood here only merged strings that LOOKED alike at
+    the same volume, so it caught "airfryer"/"airfryert" and missed every case
+    above — and the damage is not a rounding error. It inflated one country's
+    demand by whatever number of spellings its expansion happened to return,
+    which is different per country and per run, and that figure is the ruler
+    every other country's demand is measured against. Picanha read as a weak
+    product in Brazil because of it.
+
+    So: an identical reported volume plus at least one shared word is one
+    query, counted once. An identical volume alone is not enough — Google
+    rounds to coarse buckets and two unrelated searches can land in the same
+    one.
+
+    The cost is a real undercount when two genuinely different searches for the
+    same product share a bucket ("picanha kg" and "picanha wagyu", both 3,600,
+    become 3,600). That is bounded and small. The alternative was unbounded and
+    varied by country, which is worse in a number whose whole purpose is
+    comparing countries.
+
+    Input rows are (keyword, volume, monthly_series); the keyword survives,
+    because the per-term breakdown in the evidence has to read as real words.
+    """
+    groups: list[dict[str, Any]] = []
     for keyword, volume, monthly in raw:
         if volume < _VOLUME_FLOOR:
             continue
-        norm = _norm_term(keyword)
-        key = (norm, volume)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append((keyword, norm, volume, monthly))
+        norm, tokens = _norm_term(keyword), _tokens(keyword)
 
-    kept: list[tuple[str, str, float, list[tuple[int, int, float]]]] = []
-    for keyword, norm, volume, monthly in deduped:
-        if any(
-            volume == kv and SequenceMatcher(None, norm, kn).ratio() >= _NEAR_VARIANT_RATIO for _k, kn, kv, _m in kept
-        ):
-            continue
-        kept.append((keyword, norm, volume, monthly))
-    return [(keyword, volume, monthly) for keyword, _norm, volume, monthly in kept]
+        for group in groups:
+            if group["volume"] != volume:
+                continue
+            # Same query written differently: an exact word-set match is the
+            # clearest case, a shared word plus the identical volume the
+            # general one, and the old look-alike rule still catches typo
+            # variants that share no whole word ("airfryer"/"airfryert").
+            same_words = tokens and tokens == group["tokens"]
+            shares_a_word = bool(tokens & group["tokens"])
+            looks_alike = SequenceMatcher(None, norm, group["norm"]).ratio() >= _NEAR_VARIANT_RATIO
+            if same_words or shares_a_word or looks_alike:
+                # The shortest spelling is the one a person reading the
+                # breakdown recognises: "picanha steak", not "beef picanha
+                # steak roast".
+                if len(keyword) < len(group["keyword"]):
+                    group["keyword"], group["norm"], group["tokens"] = keyword, norm, tokens
+                # And the longest monthly series, since the variants report
+                # slightly different ones for the same search.
+                if len(monthly) > len(group["monthly"]):
+                    group["monthly"] = monthly
+                break
+        else:
+            groups.append(
+                {"keyword": keyword, "norm": norm, "tokens": tokens, "volume": volume, "monthly": monthly}
+            )
+
+    return [(g["keyword"], g["volume"], g["monthly"]) for g in groups]
 
 
 def _summed_monthly_series(rows: list[tuple[str, float, list[tuple[int, int, float]]]]) -> list[float]:
@@ -355,6 +399,7 @@ async def _demand_rows(
     seed_terms: list[str] | None = None,
     language: str | None = None,
     outras_marcas: list[str] | None = None,
+    excluded_terms: list[str] | None = None,
     expandir: bool = True,
 ) -> tuple[list[tuple[str, float, list[tuple[int, int, float]]]], int]:
     """As linhas de demanda do produto neste país: termos aprovados MAIS a
@@ -387,7 +432,7 @@ async def _demand_rows(
     seed_label = ", ".join(seed_terms or search_terms[:20])
     related = await _fetch_related_rows(seed_label, location)
     tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
-    expansao = _select_expansion(related, search_terms, tiers, outras_marcas)
+    expansao = _select_expansion(related, search_terms, tiers, outras_marcas, excluded_terms)
     return _dedup_volume_rows(approved + expansao), len(expansao)
 
 
@@ -399,6 +444,7 @@ async def compute_trend_score(
     seed_terms: list[str] | None = None,
     language: str | None = None,
     outras_marcas: list[str] | None = None,
+    excluded_terms: list[str] | None = None,
     expandir: bool = True,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.1 — DEMAND VOLUME (market potential): SUM of the absolute
@@ -417,6 +463,7 @@ async def compute_trend_score(
         seed_terms=seed_terms,
         language=language,
         outras_marcas=outras_marcas,
+        excluded_terms=excluded_terms,
         expandir=expandir,
     )
 

@@ -47,7 +47,13 @@ INTENT_LEXICON: dict[str, dict[str, list[str]]] = {
             "wikipedia",
         ],
         "evaluation": ["best", "review", "opinions", "ranking", "top"],
-        "usage": ["how to", "recipe", "how to cook", "how to cut", "how to serve"],
+        "usage": [
+            "how to", "recipe", "how to cook", "how to cut", "how to serve",
+            # Naming the method is the same signal as asking how: whoever
+            # searches it already has the thing.
+            "in air fryer", "in the oven", "on the grill", "grilled", "roasted",
+            "smoked", "sous vide", "pan seared", "leftover", "restaurant near",
+        ],
     },
     "es": {
         "transactional": [
@@ -80,7 +86,13 @@ INTENT_LEXICON: dict[str, dict[str, list[str]]] = {
             "wikipedia",
         ],
         "evaluation": ["mejor", "reseña", "opiniones", "ranking", "top"],
-        "usage": ["cómo", "receta", "cómo cocinar", "cómo cortar", "cómo servir"],
+        "usage": [
+            "cómo", "receta", "cómo cocinar", "cómo cortar", "cómo servir",
+            "como", "receta de",
+            # El método nombrado directamente, que es como se escribe de verdad.
+            "a la parrilla", "al horno", "en freidora", "freidora de aire",
+            "a la brasa", "asado", "ahumado", "a la plancha", "restaurante",
+        ],
     },
     "pt": {
         "transactional": [
@@ -113,7 +125,17 @@ INTENT_LEXICON: dict[str, dict[str, list[str]]] = {
             "wikipedia",
         ],
         "evaluation": ["melhor", "avaliação", "opiniões", "ranking", "top"],
-        "usage": ["como", "receita", "como cozinhar", "como cortar", "como servir"],
+        "usage": [
+            "como", "receita", "como cozinhar", "como cortar", "como servir",
+            # O método nomeado direto. É assim que se pesquisa em português, e
+            # o dicionário só reconhecia a forma de pergunta: "picanha na
+            # airfryer" (9.900/mês) e "picanha na brasa" (8.100) entravam na
+            # demanda como se fossem intenção de compra, quando quem busca já
+            # tem a carne.
+            "na airfryer", "na air fryer", "no forno", "na brasa", "na grelha",
+            "grelhada", "grelhado", "assada", "assado", "no espeto", "espetinho",
+            "churrasco", "churrascaria", "defumada", "defumado", "na panela",
+        ],
     },
     "de": {
         "transactional": [

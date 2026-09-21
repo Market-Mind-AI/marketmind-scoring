@@ -504,3 +504,162 @@ async def test_categoria_sem_expansao_soma_apenas_os_termos_curados() -> None:
     with patch_pytrends(approved, related):
         com_expansao = await pytrends_indicators.compute_trend_score(["scotch whisky"], "ES", "2026-08", language="es")
     assert float(com_expansao.raw_value) > 590.0
+
+
+# --- Google's close-variant groups are one search, not many ---
+
+
+def _rows(*pairs: tuple[str, float]) -> list:
+    return [(k, v, _months([v / 12] * 12)) for k, v in pairs]
+
+
+def test_the_same_search_written_many_ways_counts_once() -> None:
+    """Real data, picanha in the US. Google returned one search under four
+    spellings, all at exactly 90,500 — summed, that is 271,500 searches that
+    do not exist."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(
+        _rows(
+            ("picanha steak", 90_500),
+            ("picaña steak", 90_500),
+            ("picanha beef steak", 90_500),
+            ("beef picanha steak", 90_500),
+        )
+    )
+
+    assert len(out) == 1
+    assert sum(v for _k, v, _m in out) == 90_500
+
+
+def test_a_nine_spelling_group_counts_once() -> None:
+    """The coulotte group in the same response. The old rule compared how alike
+    the strings looked, so "coulotte beef" and "coulotte steak" stayed apart
+    and 18,100 became 162,900."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(
+        _rows(
+            ("coulotte beef", 18_100),
+            ("coulotte steak", 18_100),
+            ("coulotte sirloin", 18_100),
+            ("top sirloin coulotte", 18_100),
+            ("sirloin coulotte", 18_100),
+            ("sirloin coulotte steak", 18_100),
+            ("steak coulotte", 18_100),
+            ("beef coulotte", 18_100),
+            ("beef coulotte steak", 18_100),
+        )
+    )
+
+    assert sum(v for _k, v, _m in out) == 18_100
+
+
+def test_different_volumes_are_different_searches_and_are_summed() -> None:
+    """The check that keeps this from eating real demand: 'air fryer' at 550k
+    and 'airfryer' at 74k are two searches, however alike they read."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(_rows(("air fryer", 550_000), ("airfryer", 74_000)))
+
+    assert sum(v for _k, v, _m in out) == 624_000
+
+
+def test_an_identical_volume_with_nothing_in_common_stays_separate() -> None:
+    """Google rounds to coarse buckets, so two unrelated searches can land in
+    the same one. Sharing a bucket is not evidence on its own."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(_rows(("picanha", 18_100), ("wagyu brisket", 18_100)))
+
+    assert sum(v for _k, v, _m in out) == 36_200
+
+
+def test_the_shortest_spelling_is_the_one_reported() -> None:
+    """The per-term breakdown has to read as words a person recognises."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(_rows(("beef picanha steak roast", 90_500), ("picanha steak", 90_500)))
+
+    assert [k for k, _v, _m in out] == ["picanha steak"]
+
+
+# --- the curation's veto list applies to the expansion too ---
+
+
+def _related(*pairs: tuple[str, float]) -> list:
+    return [{"keyword": k, "volume": v, "monthly": [], "cpc": None, "competition_index": None} for k, v in pairs]
+
+
+def test_a_term_the_curation_ruled_out_does_not_return_through_the_expansion() -> None:
+    """Real data, picanha in Brazil. "picanha suína" is pork — a different cut
+    of a different animal — and the curation listed it as excluded. It came
+    back anyway at 14,800 searches a month, because it contains an approved
+    term and the expansion never consulted the veto list."""
+    from app.services.indicators.pytrends import _select_expansion
+
+    picked = _select_expansion(
+        _related(("picanha suína", 14_800), ("picanha suina", 14_800), ("preço da picanha", 8_100)),
+        ["picanha"],
+        {},
+        None,
+        ["picanha suína", "picanha de porco"],
+    )
+
+    assert [k for k, _v, _m in picked] == ["preço da picanha"]
+
+
+def test_the_veto_ignores_accents_and_case() -> None:
+    """The curation writes "picanha suína"; Google returns "PICANHA SUINA"."""
+    from app.services.indicators.pytrends import _select_expansion
+
+    picked = _select_expansion(
+        _related(("PICANHA SUINA", 14_800)), ["picanha"], {}, None, ["picanha suína"]
+    )
+
+    assert picked == []
+
+
+def test_with_nothing_vetoed_the_expansion_is_unchanged() -> None:
+    from app.services.indicators.pytrends import _select_expansion
+
+    picked = _select_expansion(_related(("preço da picanha", 8_100)), ["picanha"], {}, None, [])
+
+    assert [k for k, _v, _m in picked] == ["preço da picanha"]
+
+
+# --- naming the cooking method is the same signal as asking how ---
+
+
+def test_a_query_naming_the_cooking_method_is_not_new_demand() -> None:
+    """Whoever searches "picanha na airfryer" already has the meat. The tier
+    existed and only recognised the question form ("como cozinhar"), so the
+    commoner Portuguese form — naming the method — counted as demand to buy:
+    9,900 searches a month for the air fryer alone, 8,100 for the grill."""
+    from app.services.indicators.intent_lexicon import INTENT_LEXICON
+    from app.services.indicators.pytrends import _DEFAULT_INTENT, _classify_query_intent
+
+    pt = INTENT_LEXICON["pt"]
+    for query in ("picanha na airfryer", "picanha na brasa", "picanha no forno", "picanha no espetinho"):
+        assert _classify_query_intent(query, pt) < _DEFAULT_INTENT, query
+
+
+def test_buying_and_pricing_still_count() -> None:
+    """The check that keeps this from eating real demand."""
+    from app.services.indicators.intent_lexicon import INTENT_LEXICON
+    from app.services.indicators.pytrends import _DEFAULT_INTENT, _classify_query_intent
+
+    pt = INTENT_LEXICON["pt"]
+    for query in ("preço da picanha", "comprar picanha", "picanha angus", "picanha kg"):
+        assert _classify_query_intent(query, pt) >= _DEFAULT_INTENT, query
+
+
+def test_the_same_holds_in_spanish_and_english() -> None:
+    """The gap was not Portuguese-specific — every language's tier was built
+    around the question form."""
+    from app.services.indicators.intent_lexicon import INTENT_LEXICON
+    from app.services.indicators.pytrends import _DEFAULT_INTENT, _classify_query_intent
+
+    assert _classify_query_intent("picaña a la parrilla", INTENT_LEXICON["es"]) < _DEFAULT_INTENT
+    assert _classify_query_intent("picanha on the grill", INTENT_LEXICON["en"]) < _DEFAULT_INTENT
+    assert _classify_query_intent("comprar picaña", INTENT_LEXICON["es"]) >= _DEFAULT_INTENT

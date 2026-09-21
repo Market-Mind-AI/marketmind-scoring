@@ -9,6 +9,16 @@ class ComputeIndicatorsRequest(BaseModel):
     country: str = Field(..., min_length=3, max_length=3, description="ISO3 country code")
     entity_key: uuid.UUID | None = None
     period_key: str | None = Field(None, description="'YYYY-MM'; defaults to the current month")
+    demand_ceiling: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "The product's reference-market search volume, which Demand Volume is read against "
+            "(score = volume / ceiling x 100). Omit it and the score falls back to a fixed 2,000,000 "
+            "bound, which makes every real product look like almost no demand: a market with 182,540 "
+            "monthly searches scores 9 instead of 34, and the macro dimensions then decide the ranking."
+        ),
+    )
 
 
 class IndicatorValueResponse(BaseModel):
