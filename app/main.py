@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
+from app import observability
 from app.api.routes.admin import router as admin_router
 from app.api.routes.analyze import router as analyze_router
 from app.api.routes.catalog import router as catalog_router
@@ -25,6 +26,8 @@ from app.services.llm import usage as llm_usage
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
+    if not observability.tracing_enabled():
+        logger.warning("Langfuse is not configured; model calls will not be traced.")
     # Análise que morreu com o processo anterior fica em `running` para sempre,
     # e com a regra de "nada parcial sai" (D3) isso deixou de ser um registro
     # feio para virar um pedido pago que nunca entrega. A varredura retoma o que
@@ -89,6 +92,18 @@ async def report_llm_usage(request: Request, call_next) -> Response:
             # provider" rather than as "free".
             response.headers["X-LLM-Calls-Without-Usage"] = str(spend.calls_without_usage)
     return response
+
+
+@app.middleware("http")
+async def adopt_request_trace(request: Request, call_next) -> Response:
+    """Make the caller's trace the current one for this request.
+
+    The orchestrator sends its run's W3C `traceparent`; adopting it puts every
+    model call this request makes inside that run's trace, under the step that
+    asked. A request without one — the browser's identify-image — starts its own.
+    """
+    with observability.adopt_trace_context(request.headers):
+        return await call_next(request)
 
 
 # The browser frontend (marketmind-ai) calls this API directly, so its origin
