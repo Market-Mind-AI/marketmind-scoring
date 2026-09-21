@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     # it to collect again. The check, not the datum: World Bank and UN Data
     # publish yearly, so a rule written against the data's own date would
     # re-fetch every indicator every day forever.
+    # Quanto tempo uma reivindicação de execução vale sem ser renovada. Curto de
+    # propósito: ela é renovada a cada progresso, então parada por mais que isso
+    # é processo morto. É o que permite a um agente que acabou de subir retomar
+    # órfãs na hora, em vez de esperar os 15 minutos da varredura.
+    analysis_claim_stale_after_seconds: int = 120
     coverage_stale_after_days: int = 30
     default_coverage_ttl_days: int = 30
 

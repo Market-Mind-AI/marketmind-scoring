@@ -61,6 +61,17 @@ class AnalysisRequest(Base):
     # Até quando vale insistir (decisão D5). Persistido, não só em memória,
     # porque quem retoma depois de um restart precisa saber se ainda está
     # dentro do orçamento ou se o pedido já deveria ter falhado.
+    # Quem está executando esta análise AGORA, e desde quando. O `status` sozinho
+    # não responde isso: uma análise fica `running` por horas legitimamente, e
+    # `running` não distingue "um processo está trabalhando nisso" de "o processo
+    # que trabalhava nisso morreu".
+    #
+    # Sem isso, a retomada só podia ser por silêncio — esperar 15 minutos sem
+    # batimento antes de agir. Com a reivindicação, um agente que acabou de subir
+    # retoma na hora o que ninguém segura, e dois agentes podem rodar lado a lado
+    # sem um roubar a análise do outro.
+    claimed_by: Mapped[str | None] = mapped_column(nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     deadline_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # Último sinal de vida (migration 034). Com D3 uma análise legítima fica
     # horas em `running`, então o status sozinho não distingue quem está

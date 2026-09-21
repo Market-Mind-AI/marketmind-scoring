@@ -1,8 +1,9 @@
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.analysis_request import AnalysisRequest
@@ -42,6 +43,39 @@ class AnalysisRepository:
         stmt = select(AnalysisRequest).where(AnalysisRequest.id == request_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def list_unclaimed_running(self, *, claim_stale_after_seconds: int) -> list[AnalysisRequest]:
+        """Análises em curso que ninguém está executando de verdade.
+
+        Sem reivindicação, ou com uma velha demais para ser de um processo vivo
+        — `claimed_at` é renovado a cada progresso, então reivindicação parada é
+        processo morto.
+        """
+        limite = utc_now() - timedelta(seconds=claim_stale_after_seconds)
+        stmt = select(AnalysisRequest).where(
+            AnalysisRequest.status == "running",
+            or_(AnalysisRequest.claimed_at.is_(None), AnalysisRequest.claimed_at < limite),
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def claim(
+        self, analysis_request: AnalysisRequest, *, runner: str, claim_stale_after_seconds: int
+    ) -> bool:
+        """Tenta assumir a execução. False quando outro processo vivo já a tem.
+
+        É o que permite dois agentes lado a lado: o que perde a disputa
+        simplesmente não roda, em vez de executar a mesma análise em paralelo.
+        """
+        agora = utc_now()
+        dono = analysis_request.claimed_by
+        desde = analysis_request.claimed_at
+        viva = desde is not None and (agora - desde).total_seconds() < claim_stale_after_seconds
+        if viva and dono != runner:
+            return False
+        analysis_request.claimed_by = runner
+        analysis_request.claimed_at = agora
+        await self._session.flush()
+        return True
 
     async def mark_running(self, analysis_request: AnalysisRequest) -> None:
         analysis_request.status = "running"

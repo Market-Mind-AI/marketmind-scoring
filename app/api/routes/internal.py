@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import require_internal_token
+from app.core.config import settings
 from app.core.logging import logger
 from app.db.session import get_session
 from app.repositories.analysis_repository import AnalysisRepository
@@ -99,6 +100,50 @@ async def register_analysis(
     )
     await session.commit()
     return RegisteredAnalysisResponse(request_id=analysis_request.id, status=analysis_request.status)
+
+
+@router.get(
+    "/analyses/orphaned",
+    summary="Analyses that are running and nobody is running",
+    description=(
+        "Every analysis in `running` whose execution claim is absent or too old "
+        "to belong to a live process.\n\n"
+        "An agent that has just started asks this and resumes what it finds. It "
+        "knows it restarted; what it could not know is which analyses were "
+        "orphaned by that restart, and without this it had to wait for the "
+        "fifteen-minute sweep to notice — fifteen minutes of a screen saying "
+        "'in progress' with nothing progressing."
+    ),
+)
+async def list_orphaned_analyses(session: AsyncSession = Depends(get_session)) -> list[uuid.UUID]:
+    paradas = await AnalysisRepository(session).list_unclaimed_running(
+        claim_stale_after_seconds=settings.analysis_claim_stale_after_seconds
+    )
+    return [a.id for a in paradas]
+
+
+@router.post(
+    "/analyses/{request_id}/claim",
+    summary="Take over running this analysis",
+    description=(
+        "Answers whether the caller may run it. False when another process "
+        "holds a live claim — the claim is renewed on every progress report, so "
+        "one that has stopped moving belongs to a process that has stopped.\n\n"
+        "This is what lets two agents run side by side: the one that loses the "
+        "race does not run, instead of both executing the same analysis."
+    ),
+)
+async def claim_analysis(
+    request_id: uuid.UUID, runner: str, session: AsyncSession = Depends(get_session)
+) -> dict[str, bool]:
+    analysis_request = await _load(session, request_id)
+    granted = await AnalysisRepository(session).claim(
+        analysis_request,
+        runner=runner,
+        claim_stale_after_seconds=settings.analysis_claim_stale_after_seconds,
+    )
+    await session.commit()
+    return {"granted": granted}
 
 
 @router.get(
@@ -193,6 +238,11 @@ async def record_progress(
     analysis_request = await _load(session, request_id)
     analysis_request.progress = request.message
     analysis_request.heartbeat_at = utc_now()
+    # A reivindicação é renovada aqui e em nenhum outro lugar. É o que a torna
+    # um sinal de vida: quem está trabalhando reporta progresso, quem morreu
+    # para de reportar, e a reivindicação envelhece sozinha.
+    if analysis_request.claimed_by is not None:
+        analysis_request.claimed_at = analysis_request.heartbeat_at
     await session.commit()
     if request.message:
         logger.info(f"AnalysisRequest {request_id}: {request.message}")
