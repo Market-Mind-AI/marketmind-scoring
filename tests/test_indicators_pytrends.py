@@ -65,19 +65,27 @@ async def test_trend_score_dedups_identical_rows() -> None:
     assert result.raw_value == pytest.approx(1000.0)
 
 
-async def test_trend_score_expands_with_product_related_drops_informational() -> None:
-    # Expansion folds high-volume RELATED that are the product (contain a product
-    # term) AND purchase-oriented; it drops usage/curiosity (recipe/what-is =
-    # ownership/browsing, not new demand) and unrelated products. No excluded list.
+async def test_trend_score_expands_with_the_product_and_honours_the_curation_veto() -> None:
+    """The expansion folds high-volume related keywords that are clearly the
+    product, and drops what the curation ruled out for this market. Which words
+    are not purchase intent is the curation's answer, not a list kept here: the
+    same model call that finds the country's term returns `excluded_terms`, and
+    it knows that "recipe" is someone who already owns one."""
     approved = [("air fryer", 1000.0, _months([100.0] * 12))]
     related = [  # (keyword, volume, monthly, cpc, competition_index)
-        ("air fryer ninja", 3000.0, _months([300.0] * 12), 1.2, 100),  # product -> folded
-        ("air fryer recipe", 9000.0, _months([900.0] * 12), 0.1, 20),  # usage -> dropped
-        ("what is an air fryer", 5000.0, _months([500.0] * 12), 0.1, 5),  # curiosity -> dropped
+        ("air fryer ninja", 3000.0, _months([300.0] * 12), 1.2, 100),  # the product -> folded
+        ("air fryer recipe", 9000.0, _months([900.0] * 12), 0.1, 20),  # vetoed by the curation
+        ("what is an air fryer", 5000.0, _months([500.0] * 12), 0.1, 5),  # vetoed by the curation
         ("blender", 8000.0, _months([800.0] * 12), 1.0, 100),  # not the product -> dropped
     ]
     with patch_pytrends(approved, related):
-        result = await pytrends_indicators.compute_trend_score(["air fryer"], "US", "2026-07", language="en")
+        result = await pytrends_indicators.compute_trend_score(
+            ["air fryer"],
+            "US",
+            "2026-07",
+            language="en",
+            excluded_terms=["air fryer recipe", "what is an air fryer"],
+        )
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
     # 1000 (approved) + 3000 (ninja); recipe / what-is / blender all excluded.
@@ -208,74 +216,61 @@ async def test_demand_stability_unavailable_with_fewer_than_two_months() -> None
     assert result.raw_value is None
 
 
-# --- SEARCH INTENT (compute_search_intent_score + _classify_query_intent) ---
+# --- SEARCH INTENT (compute_search_intent_score) ---
+#
+# There is no word list here any more, in any language. Purchase intent is read
+# from what advertisers pay for the query: competition index and CPC. Nobody
+# bids on a search that does not lead to a sale, and how hard they bid says how
+# much it leads to. The word list this replaced knew "como cozinhar" and missed
+# "picanha na airfryer" (9,900/month) — the form people actually type — and
+# keeping it right would have meant maintaining every language times every
+# product category by hand.
 
 
-def test_classify_query_intent_tiers() -> None:
-    # Deterministic unit test with a controlled lexicon (no dependency on the
-    # generated one): each tier returns its weight; unmatched -> default.
-    tiers = {
-        "transactional": ["buy", "amazon"],
-        "curiosity": ["what is", "vs"],
-        "evaluation": ["best", "review"],
-        "usage": ["how to", "recipe"],
-    }
-    classify = pytrends_indicators._classify_query_intent
-    assert classify("buy iberico ham", tiers) == 1.0
-    assert classify("iberico ham vs prosciutto", tiers) == 0.2  # curiosity
-    assert classify("what is iberico ham", tiers) == 0.2
-    assert classify("best iberico ham", tiers) == 0.8
-    assert classify("how to cook iberico ham", tiers) == 0.4
-    assert classify("jamon cebo iberico", tiers) == 0.6  # unmatched variant -> default
-
-
-async def test_search_intent_uses_language_lexicon() -> None:
-    # Integration: classified with the EN lexicon (buy -> transactional 1.0,
-    # what is -> curiosity 0.2), weighted by real volume. cpc/competition NULL,
-    # so no commercial signal -> pure lexical (backward-compatible path).
-    rows = [("buy iberico ham", 80.0, None, None, None), ("what is iberico ham", 20.0, None, None, None)]
+async def test_search_intent_weights_purchase_value_by_volume() -> None:
+    # Competition 100 on the query buyers type, 0 on the one they don't, and the
+    # volume behind each decides the weight: (80*1.0 + 20*0.0) / 100 * 100.
+    rows = [
+        ("comprar picanha", 80.0, None, None, 100),
+        ("picanha na airfryer", 20.0, None, None, 0),
+    ]
     with patch_pytrends([], rows):
-        result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
+        result = await pytrends_indicators.compute_search_intent_score(["picanha"], "BR", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
-    # buy 1.0*80 + what-is 0.2*20 = 84; /100 *100
-    assert result.raw_value == pytest.approx(84.0)
+    assert result.raw_value == pytest.approx(80.0)
 
 
-async def test_search_intent_blends_commercial_signal() -> None:
-    # With cpc/competition present, the commercial signal blends with the lexical
-    # tier (0.6 lexical + 0.4 commercial). Single query "air fryer" -> lexical
-    # DEFAULT 0.6; competition_index 100 (=1.0), no cpc -> commercial 1.0.
-    # intent = 0.6*0.6 + 0.4*1.0 = 0.76 -> 76.0.
-    rows = [("air fryer", 500.0, None, None, 100)]
+async def test_search_intent_reads_cpc_when_competition_is_missing() -> None:
+    # CPC is normalized inside the country's own related set — never across
+    # countries, or the richer market would look more intentional rather than
+    # more expensive. 2.00 is the local top (1.0); 0.50 is a quarter of it.
+    rows = [("comprar picanha", 50.0, None, 2.0, None), ("picanha preco", 50.0, None, 0.5, None)]
     with patch_pytrends([], rows):
-        result = await pytrends_indicators.compute_search_intent_score(["air fryer"], "US", "2026-07", language="en")
+        result = await pytrends_indicators.compute_search_intent_score(["picanha"], "BR", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
-    assert result.raw_value == pytest.approx(76.0)
+    assert result.raw_value == pytest.approx(62.5)  # (50*1.0 + 50*0.25) / 100 * 100
 
 
-async def test_search_intent_curiosity_scores_low() -> None:
-    # A market only browsing ("what is / vs") scores low.
-    rows = [("what is iberico ham", 100.0, None, None, None), ("iberico ham vs prosciutto", 100.0, None, None, None)]
+async def test_search_intent_unavailable_when_nobody_bids_on_anything() -> None:
+    """Volume with no bidding data at all is reported as unavailable, not as low
+    intent: a market nobody advertises in and a market we have no advertising
+    data for look identical from here, and scoring the second one would be an
+    invention that the ranking would then carry as a fact."""
+    rows = [("picanha", 100.0, None, None, None), ("picanha na brasa", 40.0, None, None, None)]
     with patch_pytrends([], rows):
-        result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
+        result = await pytrends_indicators.compute_search_intent_score(["picanha"], "BR", "2026-07")
 
-    assert result.raw_value == pytest.approx(20.0)
-
-
-async def test_search_intent_unknown_language_falls_back_to_english() -> None:
-    rows = [("buy iberico ham", 100.0, None, None, None)]
-    with patch_pytrends([], rows):
-        result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="xx")
-
-    assert result.raw_value == pytest.approx(100.0)  # "buy" still transactional via EN fallback
+    assert result.availability_status == AvailabilityStatus.UNAVAILABLE
+    assert result.raw_value is None
+    assert result.notes is not None and "none with competition or CPC" in result.notes
 
 
 async def test_search_intent_unavailable_when_no_seed_terms() -> None:
     # Empty seeds -> UNAVAILABLE without ever asking the collection service.
     with patch_pytrends([], []):
-        result = await pytrends_indicators.compute_search_intent_score([], "ES", "2026-07", language="en")
+        result = await pytrends_indicators.compute_search_intent_score([], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
     assert result.raw_value is None
@@ -283,7 +278,7 @@ async def test_search_intent_unavailable_when_no_seed_terms() -> None:
 
 async def test_search_intent_unavailable_when_no_related_keywords() -> None:
     with patch_pytrends([], []):
-        result = await pytrends_indicators.compute_search_intent_score(["air fryer"], "ES", "2026-07", language="en")
+        result = await pytrends_indicators.compute_search_intent_score(["air fryer"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
     assert result.raw_value is None
@@ -293,7 +288,7 @@ async def test_search_intent_unavailable_when_total_weight_zero() -> None:
     # Related keywords present but all volumes are 0 -> filtered out -> UNAVAILABLE.
     rows = [("buy iberico ham", 0.0, None, None, None), ("what is iberico ham", 0.0, None, None, None)]
     with patch_pytrends([], rows):
-        result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07", language="en")
+        result = await pytrends_indicators.compute_search_intent_score(["iberico ham"], "ES", "2026-07")
 
     assert result.availability_status == AvailabilityStatus.UNAVAILABLE
     assert result.raw_value is None
@@ -394,19 +389,19 @@ async def test_sem_marca_a_categoria_soma_as_marcas() -> None:
 async def test_intencao_de_compra_ignora_keyword_de_outra_marca() -> None:
     """A intenção é média das relacionadas ponderada por volume, então um
     comparativo de alto volume da concorrente pesaria na intenção deste
-    produto. Aqui a keyword vetada é transacional e a da marca é de curiosidade:
-    se o veto não agisse, o score subiria."""
+    produto. Aqui a keyword vetada é aquela em que os anunciantes brigam e a da
+    marca é a que ninguém disputa: se o veto não agisse, o score subiria."""
     related_com_veto = [
         ("what is cardhu", 100.0, _months([10.0] * 12), 0.1, 5),
         ("buy glenfiddich 12 online", 10_000.0, _months([1000.0] * 12), 2.0, 100),
     ]
     with patch_pytrends([], related_com_veto):
         vetado = await pytrends_indicators.compute_search_intent_score(
-            ["cardhu"], "GB", "2026-08", "en", outras_marcas=["glenfiddich"]
+            ["cardhu"], "GB", "2026-08", outras_marcas=["glenfiddich"]
         )
 
     with patch_pytrends([], related_com_veto):
-        sem_veto = await pytrends_indicators.compute_search_intent_score(["cardhu"], "GB", "2026-08", "en")
+        sem_veto = await pytrends_indicators.compute_search_intent_score(["cardhu"], "GB", "2026-08")
 
     assert vetado.raw_value is not None and sem_veto.raw_value is not None
     assert float(vetado.raw_value) < float(sem_veto.raw_value), "a concorrente inflava a intenção deste produto"
@@ -470,17 +465,17 @@ async def test_intencao_da_marca_ignora_related_da_categoria() -> None:
     ]
     with patch_pytrends([], related):
         com_portao = await pytrends_indicators.compute_search_intent_score(
-            ["cardhu 12", "single malt whisky"], "GB", "2026-08", "en", relevant_terms=["cardhu 12"]
+            ["cardhu 12", "single malt whisky"], "GB", "2026-08", relevant_terms=["cardhu 12"]
         )
 
     with patch_pytrends([], related):
         sem_portao = await pytrends_indicators.compute_search_intent_score(
-            ["cardhu 12", "single malt whisky"], "GB", "2026-08", "en"
+            ["cardhu 12", "single malt whisky"], "GB", "2026-08"
         )
 
     assert com_portao.raw_value is not None and sem_portao.raw_value is not None
-    # A keyword genérica é de curiosidade e tem 200x o volume: sem o portão ela
-    # domina a média ponderada e afunda a intenção da marca.
+    # A keyword genérica não tem lance de anunciante e tem 200x o volume: sem o
+    # portão ela domina a média ponderada e afunda a intenção da marca.
     assert float(com_portao.raw_value) > float(sem_portao.raw_value)
 
 
@@ -601,7 +596,6 @@ def test_a_term_the_curation_ruled_out_does_not_return_through_the_expansion() -
     picked = _select_expansion(
         _related(("picanha suína", 14_800), ("picanha suina", 14_800), ("preço da picanha", 8_100)),
         ["picanha"],
-        {},
         None,
         ["picanha suína", "picanha de porco"],
     )
@@ -613,9 +607,7 @@ def test_the_veto_ignores_accents_and_case() -> None:
     """The curation writes "picanha suína"; Google returns "PICANHA SUINA"."""
     from app.services.indicators.pytrends import _select_expansion
 
-    picked = _select_expansion(
-        _related(("PICANHA SUINA", 14_800)), ["picanha"], {}, None, ["picanha suína"]
-    )
+    picked = _select_expansion(_related(("PICANHA SUINA", 14_800)), ["picanha"], None, ["picanha suína"])
 
     assert picked == []
 
@@ -623,43 +615,57 @@ def test_the_veto_ignores_accents_and_case() -> None:
 def test_with_nothing_vetoed_the_expansion_is_unchanged() -> None:
     from app.services.indicators.pytrends import _select_expansion
 
-    picked = _select_expansion(_related(("preço da picanha", 8_100)), ["picanha"], {}, None, [])
+    picked = _select_expansion(_related(("preço da picanha", 8_100)), ["picanha"], None, [])
 
     assert [k for k, _v, _m in picked] == ["preço da picanha"]
 
 
-# --- naming the cooking method is the same signal as asking how ---
+# --- what a term MEANS is curated; what it is WORTH comes from the market ---
+#
+# The three tests that stood here checked a per-language word list against
+# Portuguese cooking phrases. The list is gone: it had to be right for every
+# language times every product category, and it was wrong in exactly the way
+# that predicts — it knew "como cozinhar" and missed "na airfryer", which is
+# how people actually write it, so 9,900 searches a month from people who
+# already owned the meat counted as demand to buy it.
+#
+# Deciding that "na airfryer" is not demand is now the curation's, one model
+# call per product per market, and it is asserted through the excluded-terms
+# veto above. Scoring how much purchase value a market's demand carries is now
+# advertiser competition and CPC — what someone pays to reach that query —
+# which needs no maintenance and knows no language.
 
 
-def test_a_query_naming_the_cooking_method_is_not_new_demand() -> None:
-    """Whoever searches "picanha na airfryer" already has the meat. The tier
-    existed and only recognised the question form ("como cozinhar"), so the
-    commoner Portuguese form — naming the method — counted as demand to buy:
-    9,900 searches a month for the air fryer alone, 8,100 for the grill."""
-    from app.services.indicators.intent_lexicon import INTENT_LEXICON
-    from app.services.indicators.pytrends import _DEFAULT_INTENT, _classify_query_intent
+async def test_the_curation_veto_reaches_every_demand_signal() -> None:
+    """The four demand signals have to read the SAME set of terms — the engine
+    depends on it. The veto used to be wired into the volume only, so a keyword
+    the curation ruled out still shaped growth, stability and intent: "picanha
+    suína" is pork, and pork's seasonality and pork's advertisers were being
+    read as this product's."""
+    approved = [("picanha", 100_000.0, _months([8_000.0] * 12))]
+    pork = ("picanha suina", 50_000.0, _months([1_000.0 * m for m in range(1, 13)]), 3.0, 100)
+    related = [pork]
 
-    pt = INTENT_LEXICON["pt"]
-    for query in ("picanha na airfryer", "picanha na brasa", "picanha no forno", "picanha no espetinho"):
-        assert _classify_query_intent(query, pt) < _DEFAULT_INTENT, query
+    with patch_pytrends(approved, related):
+        volume = await pytrends_indicators.compute_trend_score(
+            ["picanha"], "BR", "2026-07", excluded_terms=["picanha suína"]
+        )
+    with patch_pytrends(approved, related):
+        growth = await pytrends_indicators.compute_growth_score(
+            ["picanha"], "BR", "2026-07", excluded_terms=["picanha suína"]
+        )
+    with patch_pytrends(approved, related):
+        stability = await pytrends_indicators.compute_demand_stability_score(
+            ["picanha"], "BR", "2026-07", excluded_terms=["picanha suína"]
+        )
+    with patch_pytrends([], related):
+        intent = await pytrends_indicators.compute_search_intent_score(
+            ["picanha"], "BR", "2026-07", excluded_terms=["picanha suína"]
+        )
 
-
-def test_buying_and_pricing_still_count() -> None:
-    """The check that keeps this from eating real demand."""
-    from app.services.indicators.intent_lexicon import INTENT_LEXICON
-    from app.services.indicators.pytrends import _DEFAULT_INTENT, _classify_query_intent
-
-    pt = INTENT_LEXICON["pt"]
-    for query in ("preço da picanha", "comprar picanha", "picanha angus", "picanha kg"):
-        assert _classify_query_intent(query, pt) >= _DEFAULT_INTENT, query
-
-
-def test_the_same_holds_in_spanish_and_english() -> None:
-    """The gap was not Portuguese-specific — every language's tier was built
-    around the question form."""
-    from app.services.indicators.intent_lexicon import INTENT_LEXICON
-    from app.services.indicators.pytrends import _DEFAULT_INTENT, _classify_query_intent
-
-    assert _classify_query_intent("picaña a la parrilla", INTENT_LEXICON["es"]) < _DEFAULT_INTENT
-    assert _classify_query_intent("picanha on the grill", INTENT_LEXICON["en"]) < _DEFAULT_INTENT
-    assert _classify_query_intent("comprar picaña", INTENT_LEXICON["es"]) >= _DEFAULT_INTENT
+    # Only the approved term survives: its volume, its flat series (growth 0,
+    # CV 0), and no bidding data left to score intent with.
+    assert volume.raw_value == pytest.approx(100_000.0)
+    assert growth.raw_value == pytest.approx(0.0)
+    assert stability.raw_value == pytest.approx(0.0)
+    assert intent.availability_status == AvailabilityStatus.UNAVAILABLE

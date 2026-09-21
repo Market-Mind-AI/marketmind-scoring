@@ -301,18 +301,30 @@ class IndicatorEngine:
         # têm volume no país perde growth/stability e derruba a análise inteira
         # com o volume de demanda já calculado (ver _demand_rows).
         growth = await pytrends_indicators.compute_growth_score(
-            search_terms, location, period_key, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+            search_terms,
+            location,
+            period_key,
+            seed_terms=seed_terms,
+            language=language,
+            outras_marcas=outras_marcas,
+            excluded_terms=excluded_terms,
         )
         stability = await pytrends_indicators.compute_demand_stability_score(
-            search_terms, location, period_key, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+            search_terms,
+            location,
+            period_key,
+            seed_terms=seed_terms,
+            language=language,
+            outras_marcas=outras_marcas,
+            excluded_terms=excluded_terms,
         )
         intent = await pytrends_indicators.compute_search_intent_score(
             seed_terms,
             location,
             period_key,
-            language,
             outras_marcas=outras_marcas,
             relevant_terms=intent_relevantes,
+            excluded_terms=excluded_terms,
         )
 
         indicator_raws = [

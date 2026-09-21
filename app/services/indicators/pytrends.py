@@ -32,7 +32,6 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from app.domain.enums import AvailabilityStatus, IndicatorDirection
-from app.services.indicators.intent_lexicon import INTENT_LEXICON
 from app.services.indicators.results import RawIndicatorResult
 from app.services.indicators.sources import pytrends_stored_related, pytrends_stored_volume
 
@@ -53,12 +52,6 @@ _EXPANSION_TOP_N = 15
 # Two strings at the SAME reported volume this similar are Google's close-variant
 # grouping of ONE query (e.g. 'airfryer'/'airfryert'), not two searches — merged.
 _NEAR_VARIANT_RATIO = 0.9
-
-# Search Intent blends the lexical buy-vs-curiosity tier with a REAL commercial
-# signal — advertiser competition + CPC (advertisers only pay/compete on queries
-# with genuine purchase value). Weights sum to 1.0.
-_INTENT_LEXICAL_WEIGHT = 0.6
-_INTENT_COMMERCIAL_WEIGHT = 0.4
 
 
 # `keywords_for_keywords` aceita no máximo 20 seeds por task (limite do
@@ -139,15 +132,15 @@ def _de_outra_marca(keyword: str, outras_marcas: list[str] | None) -> bool:
     return any(marca and marca in alvo for marca in outras_marcas)
 
 
-# Search Intent tiers/weights (Cap. 4 §4.2.6). Per-language markers live in
-# intent_lexicon.py (offline-LLM-built, frozen). CURIOSITY is the discriminator:
-# "what is / vs" = discovering (low purchase intent) vs "buy / price" = buying.
-_TRANSACTIONAL_INTENT = 1.0
-_EVALUATION_INTENT = 0.8
-_DEFAULT_INTENT = 0.6  # unmatched: a product-variant/brand refinement
-_USAGE_INTENT = 0.4
-_CURIOSITY_INTENT = 0.2
-_INTENT_FALLBACK_LANGUAGE = "en"
+# The tiered word list that used to live here is gone, and so is
+# intent_lexicon.py. It had to be kept correct for every language times every
+# product category, and it was wrong in the way that predicts: it knew the
+# question form ("como cozinhar") and missed the form people type, which in
+# Portuguese is the method itself ("picanha na airfryer"). What a term MEANS is
+# the curation's job now — one model call per product per market, where
+# knowing the language and the product is exactly what a model is for. What a
+# term is WORTH comes from what advertisers bid on it, which no one has to
+# maintain.
 
 
 def _monthly_volumes(monthly_searches: Any) -> list[tuple[int, int, float]]:
@@ -259,24 +252,24 @@ async def missing_volume_terms(terms: list[str], location: str) -> list[str]:
 def _select_expansion(
     related: list[dict[str, Any]],
     approved_terms: list[str],
-    tiers: dict[str, list[str]],
     outras_marcas: list[str] | None = None,
     excluded_terms: list[str] | None = None,
 ) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
-    """Conservatively pick related keywords to FOLD into the demand sum, WITHOUT
-    any per-product exclusion list (that doesn't scale). A keyword qualifies when:
+    """Conservatively pick related keywords to FOLD into the demand sum. A
+    keyword qualifies when:
       - its volume clears the floor;
       - it does not carry ANOTHER registered brand's name (see _de_outra_marca);
       - it is clearly the product — its normalized form contains an approved
         product/brand term (drops unrelated products that bleed in);
-      - its intent is purchase-oriented — NOT the lexicon's `usage`
-        (recipe/how-to/clean = ownership) or `curiosity` (what-is/vs = browsing)
-        tiers, which are not new demand. Kept: transactional/evaluation/default
-        (buying, shopping/reviews, product variants).
-    The lexicon is per-LANGUAGE and product-agnostic — the same one intent uses.
-    (The LLM proposes the seeds; Google's related keywords confirm/expand what
-    real buyers type.) Literal duplicates vs the approved terms are removed later
-    by _dedup_volume_rows on the merged set. Top N by volume."""
+      - the curation did not rule it out for this market (`excluded_terms`).
+    Which queries are not purchase intent is answered once per product per
+    market, by the same model call that finds the country's term — not by a word
+    list kept in this file, which would have to be maintained for every language
+    times every category and would still miss the form people actually type.
+    (The LLM proposes the seeds and the vetoes; Google's related keywords
+    confirm/expand what real buyers type.) Literal duplicates vs the approved
+    terms are removed later by _dedup_volume_rows on the merged set. Top N by
+    volume."""
     approved_norms = [n for n in (_norm_term(t) for t in approved_terms) if n]
     # The curation's own veto list, which the expansion never consulted. These
     # are terms that LOOK like the product and mean something else in this
@@ -293,8 +286,6 @@ def _select_expansion(
         if any(x in kw_norm for x in excluded_norms):  # ruled out for this market
             continue
         if not any(a in kw_norm for a in approved_norms):  # relevance: contains a product term
-            continue
-        if _classify_query_intent(r["keyword"], tiers) < _DEFAULT_INTENT:  # drop usage/curiosity (not new demand)
             continue
         qualifying.append((r["keyword"], r["volume"], r["monthly"]))
     qualifying.sort(key=lambda x: x[1], reverse=True)
@@ -431,8 +422,7 @@ async def _demand_rows(
         return _dedup_volume_rows(approved), 0
     seed_label = ", ".join(seed_terms or search_terms[:20])
     related = await _fetch_related_rows(seed_label, location)
-    tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
-    expansao = _select_expansion(related, search_terms, tiers, outras_marcas, excluded_terms)
+    expansao = _select_expansion(related, search_terms, outras_marcas, excluded_terms)
     return _dedup_volume_rows(approved + expansao), len(expansao)
 
 
@@ -504,11 +494,17 @@ async def compute_growth_score(
     seed_terms: list[str] | None = None,
     language: str | None = None,
     outras_marcas: list[str] | None = None,
+    excluded_terms: list[str] | None = None,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.2 — GrowthRaw = (final_avg - initial_avg)/max(initial_avg,1)*100
     over the SUMMED monthly_searches series (trailing 12 months), k = n//3."""
     rows, _ = await _demand_rows(
-        search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+        search_terms,
+        location,
+        seed_terms=seed_terms,
+        language=language,
+        outras_marcas=outras_marcas,
+        excluded_terms=excluded_terms,
     )
     series = _summed_monthly_series(rows)
 
@@ -555,11 +551,17 @@ async def compute_demand_stability_score(
     seed_terms: list[str] | None = None,
     language: str | None = None,
     outras_marcas: list[str] | None = None,
+    excluded_terms: list[str] | None = None,
 ) -> RawIndicatorResult:
     """Cap. 4 §4.2.3 — StabilityRaw = CV = stddev/mean (population stddev) of the
     SUMMED monthly_searches series."""
     rows, _ = await _demand_rows(
-        search_terms, location, seed_terms=seed_terms, language=language, outras_marcas=outras_marcas
+        search_terms,
+        location,
+        seed_terms=seed_terms,
+        language=language,
+        outras_marcas=outras_marcas,
+        excluded_terms=excluded_terms,
     )
     series = _summed_monthly_series(rows)
 
@@ -596,39 +598,36 @@ async def compute_demand_stability_score(
     )
 
 
-def _classify_query_intent(query: str, tiers: dict[str, list[str]]) -> float:
-    """Classify one related keyword against a language's intent lexicon
-    (`tiers` = INTENT_LEXICON[language]). Transactional first (strongest), then
-    curiosity (weakest — separates buying from browsing), then evaluation, then
-    usage; unmatched -> a mild product-variant/brand refinement."""
-    lowered = f" {query.lower()} "  # pad so single-token markers like "vs" match at edges
-    if any(term in lowered for term in tiers.get("transactional", ())):
-        return _TRANSACTIONAL_INTENT
-    if any(term in lowered for term in tiers.get("curiosity", ())):
-        return _CURIOSITY_INTENT
-    if any(term in lowered for term in tiers.get("evaluation", ())):
-        return _EVALUATION_INTENT
-    if any(term in lowered for term in tiers.get("usage", ())):
-        return _USAGE_INTENT
-    return _DEFAULT_INTENT
-
-
 async def compute_search_intent_score(
     seed_terms: list[str],
     location: str,
     period_key: str,
-    language: str | None = None,
     outras_marcas: list[str] | None = None,
     relevant_terms: list[str] | None = None,
+    excluded_terms: list[str] | None = None,
 ) -> RawIndicatorResult:
-    """Cap. 4 §4.2.6 — IntentRaw = volume-weighted average of a lexical buy-vs-
-    curiosity classification over the country's related keywords (Google Ads
-    `keyword_related` for the product's seed terms). Weighting by REAL volume
-    (vs the old relative Trends values) makes a market whose volume concentrates
-    on 'buy/price/where to buy' score high, and one on 'what is/recipe' score
-    low. Queries are classified with the country's search_language lexicon
-    (frozen intent_lexicon.py); unknown language falls back to English."""
-    tiers = INTENT_LEXICON.get(language or "", INTENT_LEXICON[_INTENT_FALLBACK_LANGUAGE])
+    """Cap. 4 §4.2.6 — IntentRaw = volume-weighted purchase value of the
+    country's related keywords, read from what advertisers pay for them.
+
+    Advertiser competition and cost-per-click ARE the purchase signal: nobody
+    bids on a query that does not lead to a sale, and how hard they bid says
+    how much it leads to. So a market whose volume sits on queries advertisers
+    fight over scores high, and one whose volume sits on queries nobody bids on
+    scores low.
+
+    This used to be six parts a hand-written word list to four parts that
+    signal. The word list is gone. It had to be maintained for every language
+    times every product category, and it was wrong in exactly the way that
+    predicts: it knew the question form ("como cozinhar") and missed the form
+    people actually type, which in Portuguese is the method itself ("picanha na
+    airfryer", 9,900 searches a month, counted as someone deciding to buy).
+
+    The market maintains this one. It costs nothing, it works in every language
+    without knowing any, and it does not care whether the product is a cut of
+    beef or a games console. Deciding WHICH terms belong to the product is the
+    curation's job, and a model does that once per product per market — but the
+    number itself stays out of a model's hands, which is what keeps an analysis
+    reproducible and its narrative checkable."""
     if not seed_terms:
         return RawIndicatorResult(
             raw_value=None,
@@ -646,7 +645,18 @@ async def compute_search_intent_score(
     # Mesmo veto da expansão: a intenção de compra desta marca não pode ser
     # composta pelas keywords de outra. Sem isto, um comparativo de alto volume
     # da concorrente pesaria na intenção deste produto.
-    rows = [r for r in related if r["volume"] > 0 and not _de_outra_marca(r["keyword"], outras_marcas)]
+    excluded_norms = [n for n in (_norm_term(t) for t in (excluded_terms or [])) if n]
+    rows = [
+        r
+        for r in related
+        if r["volume"] > 0
+        and not _de_outra_marca(r["keyword"], outras_marcas)
+        # O mesmo veto da curadoria que a expansão respeita: o que o modelo
+        # disse que não é este produto não pode compor a intenção dele. Sem
+        # isto, o lance que os anunciantes dão em "picanha suína" (porco)
+        # entraria na média ponderada da picanha.
+        and not any(x in _norm_term(r["keyword"]) for x in excluded_norms)
+    ]
     # `relevant_terms` só vem preenchido quando o conjunto de seeds é
     # COMPARTILHADO entre dois assuntos (marca + categoria, na mesma request do
     # DataForSEO para não pagar duas vezes). Aí as related voltam todas sob o
@@ -667,13 +677,12 @@ async def compute_search_intent_score(
             notes="keyword_related: no related keywords with volume (Cap. 4 §4.2.6)",
         )
 
-    total_weight = sum(r["volume"] for r in rows)
-    # Commercial signal, normalized within this country's related set:
-    # advertiser competition (0-100) and CPC (relative to the set's max) — both
-    # proxy real purchase value (advertisers only pay/compete on money queries).
+    # Normalized within this country's own related set, never across countries:
+    # CPC is money, and comparing a euro bid against a real bid would make the
+    # richer market look more intentional rather than more expensive.
     max_cpc = max((r["cpc"] or 0.0) for r in rows)
 
-    def _commercial(r: dict[str, Any]) -> float | None:
+    def _purchase_value(r: dict[str, Any]) -> float | None:
         signals: list[float] = []
         if r["competition_index"] is not None:
             signals.append(r["competition_index"] / 100.0)
@@ -681,19 +690,29 @@ async def compute_search_intent_score(
             signals.append(min(1.0, r["cpc"] / max_cpc))
         return sum(signals) / len(signals) if signals else None
 
-    def _intent(r: dict[str, Any]) -> float:
-        lexical = _classify_query_intent(r["keyword"], tiers)
-        commercial = _commercial(r)
-        if commercial is None:  # no CPC/competition data — fall back to pure lexical
-            return lexical
-        return _INTENT_LEXICAL_WEIGHT * lexical + _INTENT_COMMERCIAL_WEIGHT * commercial
+    priced = [(r["volume"], v) for r in rows if (v := _purchase_value(r)) is not None]
+    if not priced:
+        # Volume with no bidding data at all. Reported as unavailable rather
+        # than guessed: a market nobody advertises in and a market we have no
+        # advertising data for look identical from here, and calling the second
+        # one "low intent" would be an invention.
+        return RawIndicatorResult(
+            raw_value=None,
+            direction=IndicatorDirection.DIRECT,
+            calculation_window=period_key,
+            availability_status=AvailabilityStatus.UNAVAILABLE,
+            notes=(f"keyword_related: {len(rows)} keywords, none with competition or CPC data (Cap. 4 §4.2.6)"),
+        )
 
-    weighted_sum = sum(r["volume"] * _intent(r) for r in rows)
-    intent_raw = (weighted_sum / total_weight) * 100
+    total_weight = sum(volume for volume, _v in priced)
+    intent_raw = sum(volume * value for volume, value in priced) / total_weight * 100
     return RawIndicatorResult(
         raw_value=intent_raw,
         direction=IndicatorDirection.DIRECT,
         calculation_window=period_key,
         availability_status=AvailabilityStatus.AVAILABLE,
-        notes=f"{len(rows)} related keywords, volume-weighted lexical intent + commercial (CPC/competition)",
+        notes=(
+            f"{len(priced)} of {len(rows)} related keywords carry advertiser competition or CPC; "
+            "volume-weighted purchase value"
+        ),
     )

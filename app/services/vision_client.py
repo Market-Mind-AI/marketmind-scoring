@@ -60,9 +60,11 @@ class MarketTerms(BaseModel):
     excluded_terms: list[str] = Field(
         default_factory=list,
         description=(
-            "Ambiguous or wrong-meaning terms to EXCLUDE, so they never pollute the volume. List any term that "
-            "looks related but denotes a different product or concept in this market (e.g. for yerba mate: "
-            "'yerba buena' = mint; for air fryer: 'fritadeira de óleo' = oil deep-fryer)."
+            "Everything that must NOT be counted as demand to buy this. Matched as a substring against "
+            "Google's related keywords, so give the shortest distinguishing form. Three kinds: a different "
+            "product sharing the name ('yerba buena' = mint; 'suína' = pork); using it rather than buying it, "
+            "written the way that language writes preparation ('na airfryer', 'no forno', 'receita'); and "
+            "looking it up rather than shopping ('o que é', 'vs', 'wikipedia')."
         ),
     )
     confidence: float = Field(description="0-1 confidence in this market's terms; low values are flagged for review.")
@@ -165,12 +167,22 @@ class VisionClient:
             "around the brand — NEVER the bare generic name ('single malt whisky'), which would count the "
             "entire category's search volume as this brand's demand, and NEVER another brand. If there is no "
             "brand, the product IS the category: use only generic terms, never a branded one. "
-            "Set `primary_name` to the single most-used term, and use "
-            "`excluded_terms` to list look-alike terms that mean something ELSE in that market (e.g. yerba mate "
-            "vs 'yerba buena'=mint; air fryer vs 'fritadeira de óleo'=oil deep-fryer), so they never pollute "
-            "the volume. Give a `confidence` (0-1) per market. Example — Portugal air fryer: primary_name "
-            "'air fryer', search_terms ['air fryer','fritadeira air fryer','fritadeira de ar quente',"
-            "'fritadeira sem óleo'], excluded_terms ['fritadeira de óleo']."
+            "Set `primary_name` to the single most-used term. "
+            "These volumes are summed into a score answering 'should I sell this here', so `search_terms` "
+            "must only be what someone types while deciding to BUY or looking for where to buy.\n"
+            "`excluded_terms` is what must NOT be counted, and it has to be thorough — the terms are matched "
+            "as substrings against Google's related keywords, so give the SHORTEST distinguishing form "
+            "('suína', not 'picanha suína temperada'). Three kinds: (1) a DIFFERENT product sharing the name "
+            "(pork 'picanha' is not beef picanha; 'yerba buena' is mint, not yerba mate; 'fritadeira de óleo' "
+            "is an oil deep-fryer); (2) USING it rather than buying it, whoever searches it already owns it — "
+            "name the ways preparation is written in THAT language, usually the method itself rather than a "
+            "question ('na airfryer', 'no forno', 'na brasa', 'churrasco', 'receita'; for a device, 'como "
+            "limpar', 'não liga', 'manual'); (3) LOOKING IT UP rather than shopping ('o que é', 'vs', "
+            "'significado', 'wikipedia' and the local forms). Local language, lowercase. Be generous: a term "
+            "wrongly excluded costs a little demand, a term wrongly counted inflates one market against all "
+            "the others. Give a `confidence` (0-1) per market. Example — Brazil picanha: primary_name "
+            "'picanha', search_terms ['picanha','picanha bovina','preço da picanha','picanha angus'], "
+            "excluded_terms ['suína','de porco','na airfryer','no forno','na brasa','churrasco','receita']."
         )
         # With no image the text IS the product source, so label it accordingly.
         if hint_text and hint_text.strip():
