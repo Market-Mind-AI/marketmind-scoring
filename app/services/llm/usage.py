@@ -60,6 +60,11 @@ def collect() -> Iterator[Usage]:
         _current.reset(token)
 
 
+def current() -> Usage | None:
+    """The tally open for this request, or None outside one."""
+    return _current.get()
+
+
 def record(model: str, raw_usage: Any) -> None:
     """Add one completed model call to the current tally, if one is open.
 
