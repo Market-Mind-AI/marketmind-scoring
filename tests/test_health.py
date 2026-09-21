@@ -72,3 +72,18 @@ def test_a_collection_service_that_answers_an_error_is_not_connected() -> None:
             assert all(s["status"] == "disconnected" for s in response.json()["external_sources"])
     finally:
         app.dependency_overrides.clear()
+
+
+def test_healthz_answers_without_touching_anything() -> None:
+    """What a liveness probe asks: can THIS process still answer. It must not
+    depend on the database or on the four collection services — a probe that
+    does restarts this service because a different one is unwell, and the
+    restart kills whatever analysis this process was running.
+
+    No dependency override and no patched httpx here, deliberately: if this
+    endpoint ever starts needing either, this test fails.
+    """
+    response = TestClient(app).get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

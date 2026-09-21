@@ -45,6 +45,25 @@ async def _probe(source: DataSource) -> ExternalSourceStatus:
 
 
 @router.get(
+    "/healthz",
+    summary="Is this process alive",
+    description=(
+        "Answers immediately, reads nothing, and calls nobody. This is what a "
+        "liveness probe is for: whether THIS process can still answer.\n\n"
+        "GET /health is a different question and must not be used for that. It "
+        "reaches the four collection services over HTTP, so a slow PyTrends "
+        "makes it slow — and a liveness probe pointed at it restarts this "
+        "service because a different service is unwell. Restarting fixes "
+        "nothing there and costs something real: an analysis running in this "
+        "process dies with it, and comes back only when the resume sweep "
+        "notices fifteen minutes later. That is what was happening."
+    ),
+)
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.get(
     "/health",
     response_model=HealthResponse,
     summary="Health Check",
