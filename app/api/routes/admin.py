@@ -9,18 +9,14 @@ from app.schemas.admin import (
     BackfillTermsResponse,
     BrandSplitRequest,
     BrandSplitResponse,
-    EnrichmentReportResponse,
     MacroPrewarmRequest,
     MacroPrewarmResponse,
-    MergeReportResponse,
     ReconciliationReportResponse,
     RefreshWeightsResponse,
 )
 from app.services.brand_split_service import BrandSplitService
 from app.services.catalog_service import CatalogService
-from app.services.enrichment_service import EnrichmentService
 from app.services.macro_coverage import MacroPrewarmService
-from app.services.merge_service import MergeService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key
@@ -50,23 +46,6 @@ async def run_reconciliation(session: AsyncSession = Depends(get_session)) -> Re
 
 
 @router.post(
-    "/catalog/enrich-mid",
-    response_model=EnrichmentReportResponse,
-    summary="Best-effort google_mid enrichment",
-    description=(
-        "For up to `limit` entities missing google_mid: asks PyTrends for "
-        "suggestions on canonical_title and picks the best deterministic "
-        "match. Never blocks catalog resolution — see app/services/enrichment_service.py."
-    ),
-)
-async def enrich_mid(limit: int = 20, session: AsyncSession = Depends(get_session)) -> EnrichmentReportResponse:
-    report = await EnrichmentService(session).enrich_missing_mids(limit=limit)
-    return EnrichmentReportResponse(
-        checked=report.checked, enriched=report.enriched, no_match=report.no_match, failed=report.failed
-    )
-
-
-@router.post(
     "/catalog/backfill-terms",
     response_model=BackfillTermsResponse,
     summary="Index the curated vocabulary of existing catalog entities",
@@ -82,20 +61,6 @@ async def enrich_mid(limit: int = 20, session: AsyncSession = Depends(get_sessio
 async def backfill_terms(session: AsyncSession = Depends(get_session)) -> BackfillTermsResponse:
     relatorio = await CatalogService(session).backfill_terms()
     return BackfillTermsResponse(**relatorio)
-
-
-@router.post(
-    "/catalog/merge",
-    response_model=MergeReportResponse,
-    summary="Merge duplicate catalog entities",
-    description=(
-        "Merges entities discovered to share the same (enriched) google_mid. "
-        "Run after /admin/catalog/enrich-mid — see app/services/merge_service.py."
-    ),
-)
-async def merge_catalog(session: AsyncSession = Depends(get_session)) -> MergeReportResponse:
-    report = await MergeService(session).merge_duplicates()
-    return MergeReportResponse(merged_pairs=report.merged_pairs)
 
 
 @router.post(

@@ -47,8 +47,6 @@ class ProductAliasItem(BaseModel):
 class CatalogEntityResponse(BaseModel):
     entity_key: uuid.UUID
     canonical_title: str
-    google_mid: str | None
-    google_type: str | None
     category: str | None
     # A marca como PARTIÇÃO da identidade (migration 031) e a família genérica.
     # Expostos porque são o que torna a entidade auditável de fora: foi olhando
@@ -59,7 +57,9 @@ class CatalogEntityResponse(BaseModel):
     # SUPERADO por `brand` (ver ProductCatalog.brands): mantido enquanto o
     # reparo do catálogo não roda, porque é o único ponteiro do estado legado.
     brands: list[str] = []
-    merged_into: uuid.UUID | None
+    # Nunca escondido: uma entidade aposentada (pelo split de marca, por
+    # exemplo) diz para onde foi, e quem lê decide se segue o ponteiro.
+    merged_into: uuid.UUID | None = None
     aliases: list[ProductAliasItem]
 
 

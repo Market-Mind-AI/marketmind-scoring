@@ -3,13 +3,6 @@ import uuid
 from pydantic import BaseModel, Field
 
 
-class EnrichmentReportResponse(BaseModel):
-    checked: int
-    enriched: int
-    no_match: int
-    failed: int
-
-
 class BackfillTermsResponse(BaseModel):
     entidades: int
     aliases: int
@@ -19,10 +12,6 @@ class BackfillTermsResponse(BaseModel):
     # quando a poda entrou, e o Pydantic o descartava em silêncio — deixando
     # invisível justamente a parte destrutiva da operação.
     obsoletos: int = 0
-
-
-class MergeReportResponse(BaseModel):
-    merged_pairs: int
 
 
 class BrandSplitRequest(BaseModel):

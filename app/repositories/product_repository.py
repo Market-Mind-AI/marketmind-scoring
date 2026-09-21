@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, func, select, update
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy import true as sa_true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +42,7 @@ class TrigramOutcome:
 class ProductRepository:
     """Backs the resolution pipeline in app/services/catalog_service.py:
     exact alias -> trigram fuzzy (com veto por excluded_terms) -> LLM -> nova entidade,
-    plus the best-effort google_mid enrichment and merge jobs."""
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -544,54 +544,3 @@ class ProductRepository:
         entity.champion_computed_at = utc_now()
         await self._session.flush()
 
-    async def set_google_mid(self, entity: ProductCatalog, *, google_mid: str, google_type: str | None) -> None:
-        entity.google_mid = google_mid
-        entity.google_type = google_type
-        await self._session.flush()
-
-    async def list_entities_missing_mid(self, *, limit: int = 50) -> list[ProductCatalog]:
-        stmt = (
-            select(ProductCatalog)
-            .where(ProductCatalog.google_mid.is_(None))
-            .where(ProductCatalog.merged_into.is_(None))
-            .limit(limit)
-        )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def find_merge_candidates(self) -> list[tuple[ProductCatalog, ProductCatalog]]:
-        """Entities sharing the same (enriched) google_mid that haven't been
-        merged yet — (keep, duplicate) pairs, oldest entity in each group
-        wins. Kept simple (no self-join cleverness) since the catalog is
-        small in the MVP; see merge_service."""
-        stmt = (
-            select(ProductCatalog)
-            .where(ProductCatalog.google_mid.is_not(None))
-            .where(ProductCatalog.merged_into.is_(None))
-            .order_by(ProductCatalog.google_mid, ProductCatalog.created_at)
-        )
-        result = await self._session.execute(stmt)
-
-        by_mid: dict[str, list[ProductCatalog]] = {}
-        for entity in result.scalars().all():
-            mid = entity.google_mid
-            if mid is None:
-                continue
-            by_mid.setdefault(mid, []).append(entity)
-
-        pairs: list[tuple[ProductCatalog, ProductCatalog]] = []
-        for group in by_mid.values():
-            if len(group) < 2:
-                continue
-            keep, *duplicates = group  # query orders by created_at -> oldest first
-            pairs.extend((keep, dup) for dup in duplicates)
-        return pairs
-
-    async def merge(self, *, keep: ProductCatalog, duplicate: ProductCatalog) -> None:
-        duplicate.merged_into = keep.entity_key
-        await self._session.execute(
-            update(ProductAlias)
-            .where(ProductAlias.entity_key == duplicate.entity_key)
-            .values(entity_key=keep.entity_key)
-        )
-        await self._session.flush()

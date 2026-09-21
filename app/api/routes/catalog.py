@@ -114,13 +114,11 @@ async def get_entity(entity_key: str, session: AsyncSession = Depends(get_sessio
     return CatalogEntityResponse(
         entity_key=entity.entity_key,
         canonical_title=entity.canonical_title,
-        google_mid=entity.google_mid,
-        google_type=entity.google_type,
         category=entity.category,
         brand=marca.name if marca is not None else None,
         generic_entity_key=entity.generic_entity_key,
-        brands=list(entity.brands or []),
         merged_into=entity.merged_into,
+        brands=list(entity.brands or []),
         aliases=[
             ProductAliasItem(alias_normalized=a.alias_normalized, source=a.source, hit_count=a.hit_count)
             for a in entity.aliases

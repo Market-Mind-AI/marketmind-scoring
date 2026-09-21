@@ -12,7 +12,7 @@ from app.db.base import Base
 
 class ProductCatalog(Base):
     """Identidade de produto determinística. entity_key é sempre gerado localmente
-    (uuid4), nunca bloqueado por dependência externa. google_mid é enriquecimento
+    (uuid4), nunca bloqueado por dependência externa. A identidade
     best-effort/assíncrono, nunca requisito para a entidade existir.
 
     A coluna `embedding` (vector(1536)) existiu aqui até a migration 027 e foi
@@ -22,8 +22,6 @@ class ProductCatalog(Base):
 
     entity_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     canonical_title: Mapped[str] = mapped_column(nullable=False)
-    google_mid: Mapped[str | None] = mapped_column(nullable=True)
-    google_type: Mapped[str | None] = mapped_column(nullable=True)
     category: Mapped[str | None] = mapped_column(nullable=True)
     # Per-COUNTRY curated search terms (2026-07-15), keyed by ISO3:
     #   {"<ISO3>": {"primary_name", "formal_name"?, "search_terms": [...],
@@ -119,7 +117,6 @@ class ProductCatalog(Base):
     )
 
     __table_args__ = (
-        Index("ix_product_catalog_google_mid", "google_mid"),
         Index("ix_product_catalog_merged_into", "merged_into"),
         Index("ix_product_catalog_category", "category"),
         Index("ix_product_catalog_brand_key", "brand_key"),
