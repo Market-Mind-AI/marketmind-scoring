@@ -1,12 +1,20 @@
-# MarketMind Core
+# MarketMind Scoring
 
-Servicio de orquestación de MarketMind. No recolecta datos de ninguna API
-externa — eso es trabajo de los 4 microservicios ya existentes (PyTrends,
-WorldBank, OECD, UnitedNationsData). El Core:
+> **A arquitetura do sistema inteiro está em
+> [docs/marketmind-arquitetura.md](docs/marketmind-arquitetura.md).** Comece por
+> lá; este README cobre só este serviço.
 
-- Mantiene el catálogo único de productos (`product_catalog`/`product_aliases`).
-- Sabe qué ya fue recolectado y para qué período (`coverage_index`,
-  `monthly_snapshots`) — los 4 servicios de recolección no tienen esa noción.
+O **método** do MarketMind. Já se chamou `marketmind-core` e orquestrava a
+análise; a orquestração é do agente (`marketmind-orchestrator`) desde 21/09/2026,
+e o que ficou aqui é o que nenhum outro serviço pode fazer.
+
+Não recolhe dado de API externa — isso é dos 4 microserviços de coleta
+(PyTrends, WorldBank, OECD, UnitedNationsData). Este serviço:
+
+- Mantém o catálogo único de produtos (`product_catalog`/`product_aliases`).
+- **Não** controla mais frescor: cada serviço de coleta é dono do próprio e
+  responde em `GET /freshness`. A `coverage_index` foi removida na migration 036
+  por ser uma segunda cópia do mesmo fato.
 - Calcula los indicadores determinísticos del Capítulo 4 (`indicator_values`),
   usando una referencia de normalización fija y versionada por período
   (`normalization_reference`), no relativa a la consulta de cada usuario.

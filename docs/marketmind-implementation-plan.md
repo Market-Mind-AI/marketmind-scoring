@@ -1,3 +1,11 @@
+> **SUPERADO em 21/09/2026 — ver [marketmind-arquitetura.md](marketmind-arquitetura.md).**
+>
+> Este documento planejava a orquestração dentro do `marketmind-core`. Essa
+> orquestração foi para o agente (`marketmind-orchestrator`) e o serviço passou
+> a se chamar `marketmind-scoring`. Fica aqui porque comentários no código ainda
+> citam suas seções, e porque registra o raciocínio de onde o método veio — não
+> como descrição do que o sistema é hoje.
+
 # MarketMind — Plan de Implementación Final
 
 > Consolida las decisiones de arquitectura y metodología discutidas para el TFM MarketMind, cubriendo el nuevo servicio `marketmind-core` y su integración con los 4 microservicios de recolección ya existentes (PyTrends, WorldBank, OECD, UnitedNationsData).

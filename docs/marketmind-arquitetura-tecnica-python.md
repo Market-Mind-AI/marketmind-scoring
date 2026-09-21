@@ -1,3 +1,8 @@
+> **SUPERADO em 21/09/2026 — ver [marketmind-arquitetura.md](marketmind-arquitetura.md).**
+>
+> Descrevia o `marketmind-core` como porta de entrada e orquestrador. Hoje o
+> agente é as duas coisas, e este serviço é `marketmind-scoring`: o método.
+
 # Arquitectura técnica — stack Python de MarketMind Core
 
 Este documento describe los componentes técnicos que componen `marketmind-core` y cómo se conecta a los otros

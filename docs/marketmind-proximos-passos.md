@@ -1,3 +1,8 @@
+> **SUPERADO em 21/09/2026 — ver [marketmind-arquitetura.md](marketmind-arquitetura.md), seção 8.**
+>
+> A lista de pendências aqui é anterior à virada agêntica, e o método mudou
+> depois dela: os pesos são Rank Reciprocal, não ROC.
+
 # Próximos pasos
 
 Estado actual: Fases 0-4 implementadas y probadas (catálogo, cobertura, motor de indicadores del Cap. 4, motor de
