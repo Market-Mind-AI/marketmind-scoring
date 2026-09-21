@@ -45,10 +45,17 @@ _NEUTRAL_STABILITY_CV = 0.5
 # term is "~zero" — noise the LLM proposed that nobody actually searches; drop
 # it so it neither inflates the count nor skews intent.
 _VOLUME_FLOOR = 10.0
-# Conservative expansion: fold at most this many high-volume RELATED keywords
-# (the LLM proposes seeds; Google's related keywords confirm/expand) into the
-# demand sum, capped so a data-rich market isn't disproportionately inflated.
-_EXPANSION_TOP_N = 15
+# There is no cap on how many related keywords may be folded in. There was one
+# (the top 15 by volume), and it was silently deciding the answer: Google
+# returned 2,127 related keywords for picanha in Brazil, 1,967 of them passed
+# every gate, and the cap kept 15. What it threw away was not noise — "picanha
+# swift" and "picanha bassi" are the two brands people actually buy, and
+# "picanha angus" and "picanha wagyu" were in the curated term list itself. A
+# cap on a SUM is a cap on the measurement, and it bit hardest exactly where
+# Google knows the market best, which is the opposite of what it was for.
+# What bounds the sum is the gates that mean something: the volume floor, the
+# relevance gate, the curation's veto, and the close-variant grouping below.
+#
 # Two strings at the SAME reported volume this similar are Google's close-variant
 # grouping of ONE query (e.g. 'airfryer'/'airfryert'), not two searches — merged.
 _NEAR_VARIANT_RATIO = 0.9
@@ -170,7 +177,8 @@ async def _fetch_volume_rows(
     reports of the same query (see _dedup_volume_rows). Growth/Stability use this
     (approved terms only); the demand VOLUME additionally folds in expansion
     (see compute_trend_score). Returns (volume, monthly_series)."""
-    return _dedup_volume_rows(await _fetch_approved_raw(search_terms, location))
+    product_tokens = frozenset().union(*(_tokens(t) for t in search_terms)) if search_terms else frozenset()
+    return _dedup_volume_rows(await _fetch_approved_raw(search_terms, location), product_tokens)
 
 
 async def _fetch_approved_raw(
@@ -267,9 +275,10 @@ def _select_expansion(
     list kept in this file, which would have to be maintained for every language
     times every category and would still miss the form people actually type.
     (The LLM proposes the seeds and the vetoes; Google's related keywords
-    confirm/expand what real buyers type.) Literal duplicates vs the approved
-    terms are removed later by _dedup_volume_rows on the merged set. Top N by
-    volume."""
+    confirm/expand what real buyers type.) Google's own duplicate reports of one
+    query are collapsed later by _dedup_volume_rows on the merged set. Everything
+    that qualifies is returned: there is no cap, and the comment on
+    _NEAR_VARIANT_RATIO says what the one there used to cost."""
     approved_norms = [n for n in (_norm_term(t) for t in approved_terms) if n]
     # The curation's own veto list, which the expansion never consulted. These
     # are terms that LOOK like the product and mean something else in this
@@ -289,7 +298,7 @@ def _select_expansion(
             continue
         qualifying.append((r["keyword"], r["volume"], r["monthly"]))
     qualifying.sort(key=lambda x: x[1], reverse=True)
-    return qualifying[:_EXPANSION_TOP_N]
+    return qualifying
 
 
 def _tokens(term: str) -> frozenset[str]:
@@ -300,8 +309,46 @@ def _tokens(term: str) -> frozenset[str]:
     return frozenset(w for w in re.split(r"[^a-z0-9]+", folded) if w)
 
 
+def _same_query(
+    norm: str,
+    tokens: frozenset[str],
+    members: list[tuple[str, frozenset[str]]],
+    product_tokens: frozenset[str],
+) -> bool:
+    """Whether this keyword is another spelling of a query already in the group.
+
+    Called only for keywords Google reports at the IDENTICAL volume, which is
+    necessary but never sufficient — Google rounds to coarse buckets and two
+    unrelated searches land in the same one all the time. One of these has to
+    hold as well, against at least one spelling already in the group:
+
+      same words in another order   "bassi picanha" / "picanha bassi"
+      one's words inside the other  "picanha bassi" / "picanha do bassi"
+      a shared word that is NOT the  "coulotte beef" / "coulotte steak" — what
+        product's own vocabulary     they have in common is "coulotte", and that
+                                     is not what we asked Google for
+      near-identical strings         "airfryer" / "airfryert", typo variants
+                                     that share no whole word
+
+    The last clause is the load-bearing one. Sharing the name of the thing being
+    measured says nothing: the relevance gate means EVERY related keyword
+    carries it. When the rule was "any shared word", "picanha swift", "picanha
+    bassi", "picanha wagyu" and "picanha angus" — four different products, all
+    reported at 3,600 — were read as one search.
+    """
+    for seen_norm, seen_tokens in members:
+        if tokens and (tokens == seen_tokens or tokens <= seen_tokens or seen_tokens <= tokens):
+            return True
+        if (tokens & seen_tokens) - product_tokens:
+            return True
+        if SequenceMatcher(None, norm, seen_norm).ratio() >= _NEAR_VARIANT_RATIO:
+            return True
+    return False
+
+
 def _dedup_volume_rows(
     raw: Iterable[tuple[str, float, list[tuple[int, int, float]]]],
+    product_tokens: frozenset[str] = frozenset(),
 ) -> list[tuple[str, float, list[tuple[int, int, float]]]]:
     """Drop ~zero-volume rows and count each real query once.
 
@@ -323,19 +370,36 @@ def _dedup_volume_rows(
     every other country's demand is measured against. Picanha read as a weak
     product in Brazil because of it.
 
-    So: an identical reported volume plus at least one shared word is one
-    query, counted once. An identical volume alone is not enough — Google
-    rounds to coarse buckets and two unrelated searches can land in the same
-    one.
+    An identical reported volume is necessary but never sufficient — Google
+    rounds to coarse buckets and two unrelated searches land in the same one all
+    the time. On top of it, one of:
 
-    The cost is a real undercount when two genuinely different searches for the
-    same product share a bucket ("picanha kg" and "picanha wagyu", both 3,600,
-    become 3,600). That is bounded and small. The alternative was unbounded and
-    varied by country, which is worse in a number whose whole purpose is
-    comparing countries.
+      - the same words in a different order ("bassi picanha" / "picanha bassi");
+      - one query's words CONTAINED in the other's ("picanha bassi" inside
+        "picanha do bassi", "picanha steak" inside "beef picanha steak");
+      - a shared word that is NOT part of the product's own vocabulary — the
+        coulotte case, where "coulotte beef" and "coulotte steak" are one group
+        because "coulotte" is the thing they have in common and it is not what
+        we asked for;
+      - near-identical strings, which catches typo variants that share no whole
+        word ("airfryer" / "airfryert").
+
+    The rule this replaced was "same volume plus ANY shared word", and the word
+    they shared was the product's name — which every related keyword carries,
+    because the relevance gate requires it. So in Brazil "picanha swift",
+    "picanha bassi", "picanha wagyu" and "picanha angus", all reported at 3,600,
+    were collapsed into ONE 3,600: four different cuts from four different
+    sellers read as one search. 1,967 qualifying keywords became 38 rows, and
+    the survivors were fragments like "a picanha" and "picanha e", which is also
+    what the per-term breakdown then showed the buyer.
+
+    Sharing the name of the thing being measured says nothing about two queries
+    being the same query. Sharing a word that is NOT its name does.
 
     Input rows are (keyword, volume, monthly_series); the keyword survives,
     because the per-term breakdown in the evidence has to read as real words.
+    `product_tokens` is the vocabulary those keywords were selected FOR — the
+    words that carry no information here.
     """
     groups: list[dict[str, Any]] = []
     for keyword, volume, monthly in raw:
@@ -346,19 +410,20 @@ def _dedup_volume_rows(
         for group in groups:
             if group["volume"] != volume:
                 continue
-            # Same query written differently: an exact word-set match is the
-            # clearest case, a shared word plus the identical volume the
-            # general one, and the old look-alike rule still catches typo
-            # variants that share no whole word ("airfryer"/"airfryert").
-            same_words = tokens and tokens == group["tokens"]
-            shares_a_word = bool(tokens & group["tokens"])
-            looks_alike = SequenceMatcher(None, norm, group["norm"]).ratio() >= _NEAR_VARIANT_RATIO
-            if same_words or shares_a_word or looks_alike:
+            # A group is a SET of spellings, and the keyword is compared against
+            # each of them rather than against whichever one is on display or
+            # against their union. Both shortcuts were tried and both lose
+            # members: comparing to the display spelling let "picaña steak" win
+            # the shortest-spelling tiebreak so "picanha beef steak" matched
+            # nothing, and comparing to the union put "picana" in the set, which
+            # is enough to defeat the containment test.
+            if _same_query(norm, tokens, group["members"], product_tokens):
+                group["members"].append((norm, tokens))
                 # The shortest spelling is the one a person reading the
                 # breakdown recognises: "picanha steak", not "beef picanha
                 # steak roast".
                 if len(keyword) < len(group["keyword"]):
-                    group["keyword"], group["norm"], group["tokens"] = keyword, norm, tokens
+                    group["keyword"] = keyword
                 # And the longest monthly series, since the variants report
                 # slightly different ones for the same search.
                 if len(monthly) > len(group["monthly"]):
@@ -366,7 +431,7 @@ def _dedup_volume_rows(
                 break
         else:
             groups.append(
-                {"keyword": keyword, "norm": norm, "tokens": tokens, "volume": volume, "monthly": monthly}
+                {"keyword": keyword, "members": [(norm, tokens)], "volume": volume, "monthly": monthly}
             )
 
     return [(g["keyword"], g["volume"], g["monthly"]) for g in groups]
@@ -418,12 +483,16 @@ async def _demand_rows(
     nunca "o dado veio truncado".
     """
     approved = await _fetch_approved_raw(search_terms, location)
+    # The words the curation asked for. Every related keyword carries one by
+    # construction, so they are exactly the words that prove nothing about two
+    # keywords being the same search — see _dedup_volume_rows.
+    product_tokens = frozenset().union(*(_tokens(t) for t in search_terms)) if search_terms else frozenset()
     if not search_terms or not expandir:
-        return _dedup_volume_rows(approved), 0
+        return _dedup_volume_rows(approved, product_tokens), 0
     seed_label = ", ".join(seed_terms or search_terms[:20])
     related = await _fetch_related_rows(seed_label, location)
     expansao = _select_expansion(related, search_terms, outras_marcas, excluded_terms)
-    return _dedup_volume_rows(approved + expansao), len(expansao)
+    return _dedup_volume_rows(approved + expansao, product_tokens), len(expansao)
 
 
 async def compute_trend_score(

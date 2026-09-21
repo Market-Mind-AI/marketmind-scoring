@@ -508,6 +508,16 @@ def _rows(*pairs: tuple[str, float]) -> list:
     return [(k, v, _months([v / 12] * 12)) for k, v in pairs]
 
 
+def _vocabulary(*search_terms: str) -> frozenset[str]:
+    """The words the curation asked for. Every related keyword carries one by
+    construction, so they are the words that prove nothing — see
+    _dedup_volume_rows. Passed here because production passes it; with an empty
+    set these tests would all pass while the real path was broken."""
+    from app.services.indicators.pytrends import _tokens
+
+    return frozenset().union(*(_tokens(t) for t in search_terms))
+
+
 def test_the_same_search_written_many_ways_counts_once() -> None:
     """Real data, picanha in the US. Google returned one search under four
     spellings, all at exactly 90,500 — summed, that is 271,500 searches that
@@ -520,7 +530,8 @@ def test_the_same_search_written_many_ways_counts_once() -> None:
             ("picaña steak", 90_500),
             ("picanha beef steak", 90_500),
             ("beef picanha steak", 90_500),
-        )
+        ),
+        _vocabulary("picanha steak"),
     )
 
     assert len(out) == 1
@@ -544,10 +555,60 @@ def test_a_nine_spelling_group_counts_once() -> None:
             ("steak coulotte", 18_100),
             ("beef coulotte", 18_100),
             ("beef coulotte steak", 18_100),
-        )
+        ),
+        _vocabulary("picanha steak", "beef picanha"),
     )
 
     assert sum(v for _k, v, _m in out) == 18_100
+
+
+def test_brands_at_the_same_volume_are_different_products() -> None:
+    """Real data, picanha in Brazil. Google reported "picanha swift", "picanha
+    bassi", "picanha wagyu" and "picanha angus" at exactly 3,600 each — four
+    products from four sellers, and the two brands people actually buy. The rule
+    that stood here was "same volume plus any shared word", and the word they
+    share is "picanha", which the relevance gate guarantees every related
+    keyword carries. So all four were read as one search."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(
+        _rows(
+            ("picanha swift", 3_600),
+            ("picanha bassi", 3_600),
+            ("picanha wagyu", 3_600),
+            ("picanha angus", 3_600),
+        ),
+        _vocabulary("picanha", "picanha bovina", "carne picanha"),
+    )
+
+    assert len(out) == 4
+    assert sum(v for _k, v, _m in out) == 14_400
+
+
+def test_the_same_brand_written_two_ways_still_counts_once() -> None:
+    """The other half of the same real group: "bassi picanha", "picanha bassi"
+    and "picanha do bassi" are one search. Word order and filler words are not a
+    different query."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(
+        _rows(("picanha bassi", 3_600), ("bassi picanha", 3_600), ("picanha do bassi", 3_600)),
+        _vocabulary("picanha"),
+    )
+
+    assert sum(v for _k, v, _m in out) == 3_600
+
+
+def test_two_ways_of_preparing_it_are_two_searches() -> None:
+    """Also real, also at 8,100: "picanha na brasa" and "picanha preço" share
+    only the product's name, so they are two searches and both are counted."""
+    from app.services.indicators.pytrends import _dedup_volume_rows
+
+    out = _dedup_volume_rows(
+        _rows(("picanha na brasa", 8_100), ("picanha preço", 8_100)), _vocabulary("picanha")
+    )
+
+    assert sum(v for _k, v, _m in out) == 16_200
 
 
 def test_different_volumes_are_different_searches_and_are_summed() -> None:
@@ -555,7 +616,7 @@ def test_different_volumes_are_different_searches_and_are_summed() -> None:
     and 'airfryer' at 74k are two searches, however alike they read."""
     from app.services.indicators.pytrends import _dedup_volume_rows
 
-    out = _dedup_volume_rows(_rows(("air fryer", 550_000), ("airfryer", 74_000)))
+    out = _dedup_volume_rows(_rows(("air fryer", 550_000), ("airfryer", 74_000)), _vocabulary("air fryer"))
 
     assert sum(v for _k, v, _m in out) == 624_000
 
@@ -565,7 +626,7 @@ def test_an_identical_volume_with_nothing_in_common_stays_separate() -> None:
     the same one. Sharing a bucket is not evidence on its own."""
     from app.services.indicators.pytrends import _dedup_volume_rows
 
-    out = _dedup_volume_rows(_rows(("picanha", 18_100), ("wagyu brisket", 18_100)))
+    out = _dedup_volume_rows(_rows(("picanha", 18_100), ("wagyu brisket", 18_100)), _vocabulary("picanha"))
 
     assert sum(v for _k, v, _m in out) == 36_200
 
@@ -574,7 +635,9 @@ def test_the_shortest_spelling_is_the_one_reported() -> None:
     """The per-term breakdown has to read as words a person recognises."""
     from app.services.indicators.pytrends import _dedup_volume_rows
 
-    out = _dedup_volume_rows(_rows(("beef picanha steak roast", 90_500), ("picanha steak", 90_500)))
+    out = _dedup_volume_rows(
+        _rows(("beef picanha steak roast", 90_500), ("picanha steak", 90_500)), _vocabulary("picanha steak")
+    )
 
     assert [k for k, _v, _m in out] == ["picanha steak"]
 
@@ -669,3 +732,19 @@ async def test_the_curation_veto_reaches_every_demand_signal() -> None:
     assert growth.raw_value == pytest.approx(0.0)
     assert stability.raw_value == pytest.approx(0.0)
     assert intent.availability_status == AvailabilityStatus.UNAVAILABLE
+
+
+def test_the_expansion_keeps_everything_that_qualifies() -> None:
+    """There is no top-N. There was one — the 15 highest-volume related keywords
+    — and on real data it was deciding the answer rather than trimming noise:
+    Google returned 2,127 related keywords for picanha in Brazil, 1,967 passed
+    every gate, and the cap kept 15. "picanha swift" ranked 22nd. A cap on a SUM
+    is a cap on the measurement, and it bit hardest in the market where Google
+    knows the vocabulary best, which is backwards."""
+    from app.services.indicators.pytrends import _select_expansion
+
+    related = _related(*[(f"picanha {n}", float(5000 - n)) for n in range(40)])
+
+    picked = _select_expansion(related, ["picanha"], None, [])
+
+    assert len(picked) == 40
