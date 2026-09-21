@@ -665,29 +665,43 @@ async def _run_via_orchestrator(lines: list[str]) -> dict[str, AsyncMock]:
     return mocks
 
 
-async def test_orchestrator_narrative_alone_does_not_complete_the_request() -> None:
+async def test_the_core_does_not_complete_what_the_agent_owns() -> None:
+    """The scoring step emits its markets several steps before the champion is
+    crowned and the evidence assembled. Completing on that event would bill a
+    partial answer while the agent was still working on the rest of it."""
     mocks = await _run_via_orchestrator(
-        ['data: {"report_generation": {"report": {"narrative": "Looks like a good market."}}}']
+        ['data: {"score": {"mos_results": [{"country": "USA", "mos": 70.0}]}}']
     )
 
     mocks["analysis_repo"].mark_done.assert_not_awaited()
-    mocks["analysis_repo"].mark_failed.assert_awaited_once()
-    assert "no scored market" in mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+    mocks["analysis_repo"].mark_failed.assert_not_awaited()
 
 
-async def test_orchestrator_stream_error_becomes_the_failure_reason() -> None:
-    mocks = await _run_via_orchestrator(['data: {"error": "Scoring belongs to the scoring service"}'])
-
-    mocks["analysis_repo"].mark_done.assert_not_awaited()
-    assert "Scoring belongs to the scoring service" in (
-        mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
-    )
-
-
-async def test_orchestrator_scored_markets_do_complete_the_request() -> None:
-    """The shape step 8 has to produce: a terminal event carrying the markets."""
-    mocks = await _run_via_orchestrator(['data: {"score": {"mos_results": [{"country": "USA", "mos": 70.0}]}}'])
+async def test_an_error_on_the_stream_is_logged_not_recorded_twice() -> None:
+    """The agent records its own analysis failures, with the reason. This side
+    would only overwrite that with a vaguer one."""
+    mocks = await _run_via_orchestrator(['data: {"error": "the sources do not hold the data"}'])
 
     mocks["analysis_repo"].mark_failed.assert_not_awaited()
-    mocks["analysis_repo"].mark_done.assert_awaited_once()
-    assert mocks["analysis_repo"].mark_done.call_args.kwargs["result"] == [{"country": "USA", "mos": 70.0}]
+    mocks["analysis_repo"].mark_done.assert_not_awaited()
+
+
+async def test_an_unreachable_orchestrator_is_recorded_here() -> None:
+    """The one failure the agent cannot report, because it never ran."""
+    session, mocks = _patched_service(all_covered=True)
+    try:
+        with patch("app.services.analysis_service.httpx.AsyncClient", _refusing_client):
+            await AnalysisService(session).run_via_orchestrator(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+
+    mocks["analysis_repo"].mark_failed.assert_awaited_once()
+    assert "could not be reached" in mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+
+
+def _refusing_client(**kwargs: object) -> "_FakeClient":
+    raise ConnectionError("connection refused")
+
+

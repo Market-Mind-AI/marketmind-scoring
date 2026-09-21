@@ -496,44 +496,29 @@ class AnalysisService:
                 await self._session.commit()
 
     async def run_via_orchestrator(self, request_id: uuid.UUID) -> None:
-        """Run the analysis through the LangGraph orchestrator instead of `run`.
+        """Hand the analysis to the agent, and get out of the way.
 
-        Not finished: the orchestrator does not return scored markets yet (it is
-        wired to the scoring tools in step 8 of the migration). Until it does,
-        this path can only fail, and failing is the point.
+        The agent owns the whole lifecycle now: it marks the request running,
+        reports progress, completes it with the scored markets, attaches the
+        narrative, and fails it with a reason. This does not duplicate any of
+        that -- it starts the run and watches the stream so a transport failure
+        has somewhere to be recorded.
 
-        What stood here marked the request `done` the moment the orchestrator
-        sent any narrative, with `result=[]` and a placeholder breakdown. So
-        flipping USE_NEW_ORCHESTRATOR handed the buyer an analysis with no
-        countries, no MOS and no evidence, recorded as complete -- and billing
-        is tied to `done` (D8). An empty answer that bills is worse than no
-        answer, so the rule here is the same as everywhere else in this service:
-        nothing partial goes out.
+        An earlier version read the stream for scored markets and completed the
+        request itself. That was wrong in a way that would have been hard to
+        see: the scoring step emits its markets several steps before the
+        champion is crowned and the evidence is assembled, so the request would
+        have been marked done -- and billed -- carrying a partial answer, while
+        the agent was still working on the rest of it.
         """
         analysis_request = await self._analysis_repo.get(request_id)
         if analysis_request is None:
             logger.warning(f"AnalysisRequest {request_id} not found")
             return
 
+        payload = {"analysis_id": str(request_id)}
+
         try:
-            await self._analysis_repo.mark_running(analysis_request)
-            await self._session.commit()
-
-            payload = {
-                "analysis_id": str(request_id),
-                "countries": list(analysis_request.countries),
-                "product_description": analysis_request.user_prompt or (analysis_request.canonical_title or ""),
-                "product_image_url": "",
-                "attributes": {},
-                "enrichment_results": [],
-                "mos_score": {},
-                "report": {},
-                "errors": [],
-            }
-
-            scored: list[dict[str, Any]] = []
-            stream_error: str | None = None
-
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream(
                     "POST", f"{settings.orchestrator_api_base_url}/run-analysis", json=payload
@@ -542,33 +527,26 @@ class AnalysisService:
                     async for line in response.aiter_lines():
                         if not line.startswith("data: "):
                             continue
-                        data = json.loads(line[6:])
-                        logger.info(f"Orchestrator event received: {list(data.keys())}")
-                        if "error" in data:
-                            stream_error = str(data["error"])
-                        # Step 8 fills this in: the terminal event carries the
-                        # scored markets, and only those may complete a request.
-                        for node_output in data.values():
-                            if isinstance(node_output, dict) and node_output.get("mos_results"):
-                                scored = node_output["mos_results"]
+                        event = json.loads(line[6:])
+                        if "error" in event:
+                            # The agent reports its own analysis failures through
+                            # the record. An error on the stream is the run
+                            # itself coming apart, which is this side's to log.
+                            logger.error(f"AnalysisRequest {request_id}: orchestrator error: {event['error']}")
+                        else:
+                            logger.info(f"AnalysisRequest {request_id}: {', '.join(event.keys())}")
 
-            if not scored:
-                raise MarketMindCoreError(
-                    "Orchestrator run produced no scored market, so there is nothing to deliver. "
-                    + (stream_error or "The orchestrator is not wired to the scoring service yet (migration step 8).")
-                )
-
-            await self._analysis_repo.mark_done(
-                analysis_request, result=scored, explanation=None, breakdown=None
-            )
-            await self._session.commit()
-
-        except Exception as exc:  # noqa: BLE001 - background task boundary, must never crash the process
-            logger.exception(f"AnalysisRequest {request_id} failed via orchestrator")
+        except Exception as exc:  # noqa: BLE001 — background task boundary, must never crash the process
+            # Only reached when the orchestrator could not be talked to at all.
+            # Anything the agent itself decided it has already recorded, so this
+            # never overwrites a request it already finished.
+            logger.exception(f"AnalysisRequest {request_id} could not be handed to the orchestrator")
             await self._session.rollback()
-            failed_request = await self._analysis_repo.get(request_id)
-            if failed_request is not None:
-                await self._analysis_repo.mark_failed(failed_request, error_message=str(exc))
+            current = await self._analysis_repo.get(request_id)
+            if current is not None and current.status not in ("done", "failed"):
+                await self._analysis_repo.mark_failed(
+                    current, error_message=f"The orchestrator could not be reached: {exc}"
+                )
                 await self._session.commit()
 
     async def _search_language(self, iso3: str) -> str | None:
