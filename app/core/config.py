@@ -98,6 +98,15 @@ class Settings(BaseSettings):
     ollama_llm_timeout_seconds: float = 300.0
     ollama_llm_narrative_language: str = "pt"
 
+    # Shared secret the orchestrator sends on /internal/* calls. Those routes
+    # WRITE -- they register analyses, collect, and complete requests -- so they
+    # are not for the browser.
+    #
+    # Empty means every /internal/* call is refused, on purpose. An unset secret
+    # that waved everything through would be indistinguishable, in a running
+    # deployment, from one that was configured correctly.
+    internal_api_token: str = ""
+
     # marketmind-orchestrator API base URL and feature flag
     use_new_orchestrator: bool = False
     orchestrator_api_base_url: str = "http://host.docker.internal:8081"

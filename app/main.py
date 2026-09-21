@@ -12,6 +12,7 @@ from app.api.routes.countries import router as countries_router
 from app.api.routes.coverage import router as coverage_router
 from app.api.routes.health import router as health_router
 from app.api.routes.indicators import router as indicators_router
+from app.api.routes.internal import router as internal_router
 from app.api.routes.mos import router as mos_router
 from app.core.config import settings
 from app.core.logging import logger
@@ -80,4 +81,5 @@ app.include_router(countries_router, tags=["Countries"])
 app.include_router(indicators_router, tags=["Indicators"])
 app.include_router(mos_router, tags=["MOS"])
 app.include_router(analyze_router, tags=["Analyze"])
+app.include_router(internal_router)
 app.include_router(admin_router)
