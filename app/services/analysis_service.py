@@ -15,10 +15,12 @@ settings.country_indicator_ttl_days).
 """
 
 import asyncio
+import json
 import uuid
 from datetime import timedelta
 from typing import Any
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -494,12 +496,20 @@ class AnalysisService:
                 await self._session.commit()
 
     async def run_via_orchestrator(self, request_id: uuid.UUID) -> None:
-        """Fase 5 (New Architecture) — proxies the analysis execution to the LangGraph orchestrator.
-        Connects via SSE, maps node completion events to DB status, and writes the final report."""
-        import json
-        import httpx
-        from app.core.config import settings
+        """Run the analysis through the LangGraph orchestrator instead of `run`.
 
+        Not finished: the orchestrator does not return scored markets yet (it is
+        wired to the scoring tools in step 8 of the migration). Until it does,
+        this path can only fail, and failing is the point.
+
+        What stood here marked the request `done` the moment the orchestrator
+        sent any narrative, with `result=[]` and a placeholder breakdown. So
+        flipping USE_NEW_ORCHESTRATOR handed the buyer an analysis with no
+        countries, no MOS and no evidence, recorded as complete -- and billing
+        is tied to `done` (D8). An empty answer that bills is worse than no
+        answer, so the rule here is the same as everywhere else in this service:
+        nothing partial goes out.
+        """
         analysis_request = await self._analysis_repo.get(request_id)
         if analysis_request is None:
             logger.warning(f"AnalysisRequest {request_id} not found")
@@ -511,6 +521,7 @@ class AnalysisService:
 
             payload = {
                 "analysis_id": str(request_id),
+                "countries": list(analysis_request.countries),
                 "product_description": analysis_request.user_prompt or (analysis_request.canonical_title or ""),
                 "product_image_url": "",
                 "attributes": {},
@@ -520,26 +531,39 @@ class AnalysisService:
                 "errors": [],
             }
 
+            scored: list[dict[str, Any]] = []
+            stream_error: str | None = None
+
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream(
                     "POST", f"{settings.orchestrator_api_base_url}/run-analysis", json=payload
                 ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data = json.loads(line[6:])
-                            logger.info(f"Orchestrator event received: {list(data.keys())}")
+                        if not line.startswith("data: "):
+                            continue
+                        data = json.loads(line[6:])
+                        logger.info(f"Orchestrator event received: {list(data.keys())}")
+                        if "error" in data:
+                            stream_error = str(data["error"])
+                        # Step 8 fills this in: the terminal event carries the
+                        # scored markets, and only those may complete a request.
+                        for node_output in data.values():
+                            if isinstance(node_output, dict) and node_output.get("mos_results"):
+                                scored = node_output["mos_results"]
 
-                            if "report" in data and "narrative" in data["report"]:
-                                await self._analysis_repo.mark_done(
-                                    analysis_request,
-                                    result=[],
-                                    explanation=data["report"]["narrative"],
-                                    breakdown={"status": "done via orchestrator"},
-                                )
-                                await self._session.commit()
-                                break
-        except Exception as exc:
+            if not scored:
+                raise MarketMindCoreError(
+                    "Orchestrator run produced no scored market, so there is nothing to deliver. "
+                    + (stream_error or "The orchestrator is not wired to the scoring service yet (migration step 8).")
+                )
+
+            await self._analysis_repo.mark_done(
+                analysis_request, result=scored, explanation=None, breakdown=None
+            )
+            await self._session.commit()
+
+        except Exception as exc:  # noqa: BLE001 - background task boundary, must never crash the process
             logger.exception(f"AnalysisRequest {request_id} failed via orchestrator")
             await self._session.rollback()
             failed_request = await self._analysis_repo.get(request_id)

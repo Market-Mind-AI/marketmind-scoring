@@ -612,3 +612,82 @@ async def test_fonte_sem_o_dado_nao_vira_espera_infinita() -> None:
 
     dormiu.assert_not_awaited(), "causa definitiva não gera espera"
     mocks["analysis_repo"].mark_done.assert_awaited_once()
+
+
+# --- Caminho do orchestrator: nada parcial sai por aqui também (D3/D8) ---
+#
+# O caminho antigo marcava `done` assim que o orchestrator mandasse qualquer
+# narrativa, com result=[] e um breakdown de mentira. Como a cobrança está presa
+# ao `done`, ligar a flag entregava análise vazia cobrada.
+
+
+class _FakeStream:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    async def __aenter__(self) -> "_FakeStream":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    async def aiter_lines(self):  # noqa: ANN202
+        for line in self._lines:
+            yield line
+
+
+class _FakeClient:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    async def __aenter__(self) -> "_FakeClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def stream(self, *args: object, **kwargs: object) -> _FakeStream:
+        return _FakeStream(self._lines)
+
+
+async def _run_via_orchestrator(lines: list[str]) -> dict[str, AsyncMock]:
+    session, mocks = _patched_service(all_covered=True)
+    try:
+        with patch("app.services.analysis_service.httpx.AsyncClient", lambda **kw: _FakeClient(lines)):
+            await AnalysisService(session).run_via_orchestrator(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+    return mocks
+
+
+async def test_orchestrator_narrative_alone_does_not_complete_the_request() -> None:
+    mocks = await _run_via_orchestrator(
+        ['data: {"report_generation": {"report": {"narrative": "Looks like a good market."}}}']
+    )
+
+    mocks["analysis_repo"].mark_done.assert_not_awaited()
+    mocks["analysis_repo"].mark_failed.assert_awaited_once()
+    assert "no scored market" in mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+
+
+async def test_orchestrator_stream_error_becomes_the_failure_reason() -> None:
+    mocks = await _run_via_orchestrator(['data: {"error": "Scoring belongs to the scoring service"}'])
+
+    mocks["analysis_repo"].mark_done.assert_not_awaited()
+    assert "Scoring belongs to the scoring service" in (
+        mocks["analysis_repo"].mark_failed.call_args.kwargs["error_message"]
+    )
+
+
+async def test_orchestrator_scored_markets_do_complete_the_request() -> None:
+    """The shape step 8 has to produce: a terminal event carrying the markets."""
+    mocks = await _run_via_orchestrator(['data: {"score": {"mos_results": [{"country": "USA", "mos": 70.0}]}}'])
+
+    mocks["analysis_repo"].mark_failed.assert_not_awaited()
+    mocks["analysis_repo"].mark_done.assert_awaited_once()
+    assert mocks["analysis_repo"].mark_done.call_args.kwargs["result"] == [{"country": "USA", "mos": 70.0}]
