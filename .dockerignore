@@ -1,0 +1,29 @@
+# Without this, `COPY . .` puts the working directory into the image — which
+# includes .env. Secrets baked into an image layer travel wherever the image
+# travels, survive `docker run -e` overriding them, and are readable by anyone
+# who can pull it.
+.env
+.env.*
+!.env.example
+
+# A virtualenv built on the developer's machine. Copying it in wastes hundreds
+# of megabytes and ships binaries built for the wrong platform, which can
+# shadow the ones actually installed in the image.
+.venv/
+venv/
+env/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.git/
+.github/
+backups/
+pgadmin/
+docs/
+tests/
+*.md
+!README.md
