@@ -9,7 +9,6 @@ Tracing never fails a call. Every Langfuse operation is guarded; the provider's
 answer, or its exception, passes through unchanged.
 """
 
-import json
 import logging
 from typing import Any
 
@@ -57,10 +56,10 @@ class TracedProvider(LLMProvider):
         client = observability.client()
         if client is None:
             return None
-        recorded: dict[str, Any] = {"system": system, "user": user} if system else {"user": user}
-        if image is not None:
-            recorded["image"] = describe_image(image)
         try:
+            recorded: dict[str, Any] = {"system": system, "user": user} if system else {"user": user}
+            if image is not None:
+                recorded["image"] = describe_image(image)
             return client.start_observation(
                 name=self.site,
                 as_type="generation",
@@ -92,10 +91,6 @@ def _finish(generation: Any | None, **update: Any) -> None:
     if generation is None:
         return
     try:
-        # JSON-encode output and usage_details for Langfuse
-        for key in ("output", "usage_details"):
-            if key in update and update[key] is not None:
-                update[key] = json.dumps(update[key])
         generation.update(**{k: v for k, v in update.items() if v is not None})
         generation.end()
     except Exception:  # noqa: BLE001 — tracing never fails a call
