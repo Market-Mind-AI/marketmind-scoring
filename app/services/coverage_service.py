@@ -8,7 +8,6 @@ from app.core.logging import logger
 from app.db.models.job_task import JobTask
 from app.domain.enums import DataSource, IngestionRunStatus, JobTaskStatus
 from app.repositories.country_repository import CountryRepository
-from app.repositories.coverage_repository import CoverageRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.coverage import CoverageGap, GapStatus, JobTaskResult
 from app.services.collection_client import CollectionClient, CollectionRequest
@@ -30,32 +29,67 @@ class CoverageService:
 
     def __init__(self, session: AsyncSession, collection_client: CollectionClient | None = None) -> None:
         self._session = session
-        self._coverage_repo = CoverageRepository(session)
         self._job_repo = JobRepository(session)
         self._country_repo = CountryRepository(session)
         self._collection_client = collection_client or CollectionClient()
 
-    async def check_coverage(self, gaps: list[CoverageGap]) -> list[GapStatus]:
-        """Pure read — never dispatches collection. Used by callers that
-        want to know what's missing before deciding sync vs async handling
-        (see Fase 5 /analyze)."""
-        results = []
+    async def _stale(self, gaps: list[CoverageGap]) -> dict[int, bool]:
+        """Whether each gap still needs collecting, asked of the service that
+        owns the data. Keyed by id() of the gap, so two gaps that look alike
+        are still answered separately.
+
+        This used to read coverage_index, a local record of what had been
+        collected. That was a second copy of a fact the collection services
+        already hold, and the two disagreed: a demand gap is only ever created
+        because the pytrends service just said it lacks those terms, and the
+        local index could still call it fresh and skip the collection.
+
+        One request per source, for every pair at once.
+        """
+        por_fonte: dict[DataSource, list[CoverageGap]] = {}
         for gap in gaps:
-            row = await self._coverage_repo.get(
-                gap.source.value, gap.entity_key, gap.country, gap.indicator_code, gap.period_key
+            por_fonte.setdefault(gap.source, []).append(gap)
+
+        stale: dict[int, bool] = {}
+        for source, do_source in por_fonte.items():
+            if source == DataSource.PYTRENDS:
+                # The exception, by design. Demand is per product and per
+                # keyword, so there is nothing to pre-store and no freshness to
+                # ask about — and the caller only builds a pytrends gap after
+                # asking that service which terms it is missing. Asking again
+                # here would be the same question twice.
+                stale.update({id(gap): True for gap in do_source})
+                continue
+            paises = sorted({gap.country for gap in do_source})
+            indicadores = sorted({gap.indicator_code for gap in do_source})
+            respostas = await self._collection_client.freshness(
+                source,
+                countries=paises,
+                indicators=indicadores,
+                stale_after_days=settings.coverage_stale_after_days,
             )
-            results.append(
-                GapStatus(
-                    source=gap.source,
-                    entity_key=gap.entity_key,
-                    country=gap.country,
-                    indicator_code=gap.indicator_code,
-                    period_key=gap.period_key,
-                    covered=self._coverage_repo.is_fresh(row),
-                    last_fetched_at=row.last_fetched_at if row else None,
-                )
+            for gap in do_source:
+                # A pair the service did not report on was never checked there,
+                # which is stale — never "fresh by omission".
+                stale[id(gap)] = respostas.get((gap.country, gap.indicator_code), True)
+        return stale
+
+    async def check_coverage(self, gaps: list[CoverageGap]) -> list[GapStatus]:
+        """Pure read — never dispatches collection. Used by callers that want to
+        know what is missing before deciding how to handle it."""
+        stale = await self._stale(gaps)
+        return [
+            GapStatus(
+                source=gap.source,
+                entity_key=gap.entity_key,
+                country=gap.country,
+                indicator_code=gap.indicator_code,
+                period_key=gap.period_key,
+                covered=not stale[id(gap)],
+                last_fetched_at=None,
             )
-        return results
+            for gap in gaps
+        ]
 
     async def check_or_collect(
         self, gaps: list[CoverageGap], *, requested_by: str | None
@@ -77,9 +111,14 @@ class CoverageService:
         # back another gap's already-successful collection. This also keeps
         # the race-dedup rollback in create_task (see job_repository) scoped
         # to only that gap's own uncommitted insert attempt.
+        # One freshness question for the whole batch, before any dispatch. Asked
+        # once here rather than once per gap: it is one request per source
+        # either way, and asking inside the loop would make it one per gap.
+        stale = await self._stale(gaps)
+
         results = []
         for gap in gaps:
-            result = await self._process_gap(job_id, gap)
+            result = await self._process_gap(job_id, gap, stale=stale[id(gap)])
             await self._session.commit()
             results.append(result)
 
@@ -88,11 +127,8 @@ class CoverageService:
         await self._session.commit()
         return job_id, results
 
-    async def _process_gap(self, job_id: uuid.UUID, gap: CoverageGap) -> JobTaskResult:
-        existing = await self._coverage_repo.get(
-            gap.source.value, gap.entity_key, gap.country, gap.indicator_code, gap.period_key
-        )
-        if not gap.force and self._coverage_repo.is_fresh(existing):
+    async def _process_gap(self, job_id: uuid.UUID, gap: CoverageGap, *, stale: bool) -> JobTaskResult:
+        if not gap.force and not stale:
             task = await self._job_repo.mark_skipped(
                 job_id=job_id,
                 source=gap.source.value,
@@ -186,15 +222,9 @@ class CoverageService:
             )
             return job_task_to_result(task)
 
-        await self._coverage_repo.upsert_collected(
-            source=gap.source.value,
-            entity_key=gap.entity_key,
-            country=gap.country,
-            indicator_code=gap.indicator_code,
-            period_key=gap.period_key,
-            is_closed=gap.is_closed,
-            ttl_days=gap.ttl_days if gap.ttl_days is not None else settings.default_coverage_ttl_days,
-        )
+        # Nothing written back about freshness. The service that collected it
+        # stamped its own last_checked_at, and that is now the only record —
+        # which is the point: one fact, one place.
         await self._job_repo.mark_done(task)
         return job_task_to_result(task)
 

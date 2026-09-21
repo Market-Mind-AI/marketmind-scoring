@@ -134,6 +134,11 @@ class Settings(BaseSettings):
 
     # Default freshness window applied to a coverage_index row when the
     # caller doesn't specify one explicitly (see coverage_service).
+    # How old a collection service's last CHECK may be before this service asks
+    # it to collect again. The check, not the datum: World Bank and UN Data
+    # publish yearly, so a rule written against the data's own date would
+    # re-fetch every indicator every day forever.
+    coverage_stale_after_days: int = 30
     default_coverage_ttl_days: int = 30
 
     # Freshness window for the country-level macro indicators (WorldBank, OECD,

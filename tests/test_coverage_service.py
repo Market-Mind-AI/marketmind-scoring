@@ -10,16 +10,30 @@ from app.services.coverage_service import CoverageService
 
 
 def _mock_client(
-    *, run_id: uuid.UUID | None = None, status: IngestionRunStatus = IngestionRunStatus.SUCCESS
+    *,
+    run_id: uuid.UUID | None = None,
+    status: IngestionRunStatus = IngestionRunStatus.SUCCESS,
+    fresh: bool = False,
 ) -> AsyncMock:
     client = AsyncMock()
     client.dispatch.return_value = run_id or uuid.uuid4()
     client.poll_until_done.return_value = status
+    # Freshness is answered by the service that owns the data. Spelled out
+    # rather than left to AsyncMock's default, which returns a truthy object
+    # for every lookup and would make every gap look stale by accident.
+    client.freshness.side_effect = lambda source, *, countries, indicators, stale_after_days: {
+        (c, i): not fresh for c in countries for i in indicators
+    }
     return client
 
 
-async def test_gap_already_fresh_is_skipped_without_dispatch(db_session: AsyncSession) -> None:
-    client = _mock_client()
+async def test_a_gap_the_owning_service_calls_fresh_is_not_collected_again(
+    db_session: AsyncSession,
+) -> None:
+    """The decision belongs to whoever holds the data. This service used to keep
+    its own record of what had been collected and decide from that — a second
+    copy of the same fact, and when the two disagreed the local one won."""
+    client = _mock_client(fresh=True)
     service = CoverageService(db_session, collection_client=client)
     gap = CoverageGap(
         source=DataSource.WORLDBANK,
@@ -30,20 +44,62 @@ async def test_gap_already_fresh_is_skipped_without_dispatch(db_session: AsyncSe
         collection_params={"start_year": 2020, "end_year": 2026},
     )
 
-    # First call collects it (nothing covered yet).
-    job_id_1, results_1 = await service.check_or_collect([gap], requested_by="test")
-    assert results_1[0].status == JobTaskStatus.DONE
-    client.dispatch.assert_awaited_once()
+    _job_id, results = await service.check_or_collect([gap], requested_by="test")
 
-    # Second call for the exact same (closed) gap must not dispatch again.
-    client.dispatch.reset_mock()
-    job_id_2, results_2 = await service.check_or_collect([gap], requested_by="test")
-    assert job_id_2 != job_id_1
-    assert results_2[0].status == JobTaskStatus.SKIPPED
+    assert results[0].status == JobTaskStatus.SKIPPED
     client.dispatch.assert_not_awaited()
 
 
-async def test_successful_collection_updates_coverage(db_session: AsyncSession) -> None:
+async def test_the_freshness_of_a_batch_is_asked_once_per_source(db_session: AsyncSession) -> None:
+    """Not once per gap. Twenty-two indicators across two sources is two
+    questions, and the endpoint takes every pair at once."""
+    client = _mock_client(fresh=True)
+    service = CoverageService(db_session, collection_client=client)
+    gaps = [
+        CoverageGap(
+            source=source,
+            country=country,
+            indicator_code=f"i{n}",
+            period_key="2026",
+            collection_params={"start_year": 2020, "end_year": 2026},
+        )
+        for source in (DataSource.WORLDBANK, DataSource.OECD)
+        for country in ("USA", "BRA")
+        for n in range(5)
+    ]
+
+    await service.check_coverage(gaps)
+
+    assert client.freshness.await_count == 2
+
+
+async def test_a_demand_gap_is_never_skipped_as_fresh(db_session: AsyncSession) -> None:
+    """PyTrends is the exception on purpose: demand is per product and per
+    keyword, so there is nothing pre-stored to be fresh about. And a demand gap
+    only exists because that service just said it lacks those terms — so
+    skipping it would be believing a second record over the one that answered.
+    That is exactly what happened while coverage_index was consulted here."""
+    client = _mock_client(fresh=True)  # even told everything is fresh
+    service = CoverageService(db_session, collection_client=client)
+    gap = CoverageGap(
+        source=DataSource.PYTRENDS,
+        country="BRA",
+        indicator_code="search_volume",
+        period_key="2026-09",
+        collection_params={"location": "BR", "keywords": ["picanha"], "language": "pt"},
+    )
+
+    _job_id, results = await service.check_or_collect([gap], requested_by="test")
+
+    assert results[0].status != JobTaskStatus.SKIPPED
+    client.dispatch.assert_awaited_once()
+    client.freshness.assert_not_awaited(), "nothing to ask: the caller already asked"
+
+
+async def test_a_collection_leaves_no_freshness_record_behind_here(db_session: AsyncSession) -> None:
+    """It used to write one. The service that collected stamped its own
+    last_checked_at as well, so the same fact lived in two places — one fact,
+    one place now."""
     run_id = uuid.uuid4()
     client = _mock_client(run_id=run_id, status=IngestionRunStatus.SUCCESS)
     service = CoverageService(db_session, collection_client=client)
@@ -55,13 +111,16 @@ async def test_successful_collection_updates_coverage(db_session: AsyncSession) 
         collection_params={"start_period": "2026-01", "end_period": "2026-07"},
     )
 
-    job_id, results = await service.check_or_collect([gap], requested_by="test")
+    _job_id, results = await service.check_or_collect([gap], requested_by="test")
     assert results[0].status == JobTaskStatus.DONE
     assert results[0].ingestion_run_id == run_id
 
+    # Asked again right after, and the answer comes from the source — which in
+    # this test still reports stale, so it would collect again. The point is
+    # that nothing local claims otherwise.
     coverage = await service.check_coverage([gap])
-    # gap didn't set ttl_days explicitly -> settings.default_coverage_ttl_days (30d) applied on collection.
-    assert coverage[0].covered is True
+    assert coverage[0].covered is False
+    assert coverage[0].last_fetched_at is None
 
 
 async def test_failed_ingestion_run_marks_task_failed(db_session: AsyncSession) -> None:

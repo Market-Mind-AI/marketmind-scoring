@@ -1,7 +1,6 @@
 from app.db.models.analysis_request import AnalysisRequest
 from app.db.models.brand import Brand
 from app.db.models.country import Country
-from app.db.models.coverage_index import CoverageIndex
 from app.db.models.indicator_value import IndicatorValue
 from app.db.models.indicator_weight import IndicatorWeight
 from app.db.models.job import Job
@@ -17,7 +16,6 @@ from app.db.models.product_excluded_term import ProductExcludedTerm
 __all__ = [
     "AnalysisRequest",
     "Brand",
-    "CoverageIndex",
     "Country",
     "IndicatorValue",
     "IndicatorWeight",

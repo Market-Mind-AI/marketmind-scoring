@@ -216,6 +216,36 @@ class CollectionClient:
                 f"Failed to dispatch {req.source.value} collection: {type(exc).__name__}: {exc}"
             ) from exc
 
+    async def freshness(
+        self, source: DataSource, *, countries: list[str], indicators: list[str], stale_after_days: int
+    ) -> dict[tuple[str, str], bool]:
+        """Ask a collection service when it last LOOKED, per country and
+        indicator. Returns {(country, indicator_code): is_stale}.
+
+        The service that owns the data is the one that knows this. Keeping a
+        second copy of the answer here — which is what coverage_index was —
+        meant two records of the same fact, and when they disagreed the stale
+        one won: a collection the pytrends service had just said it needed was
+        skipped because the local index still called it fresh.
+
+        One request per source for every pair at once, not one per gap. An
+        unreachable service raises, and the caller decides — treating "I could
+        not ask" as "it is fresh" would silently skip collection.
+        """
+        base_url = _BASE_URLS[source]
+        params = [("country", c) for c in countries] + [("indicator", i) for i in indicators]
+        params.append(("stale_after_days", str(stale_after_days)))
+        try:
+            async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
+                response = await client.get("/freshness", params=params)
+                response.raise_for_status()
+                body = response.json()
+        except httpx.HTTPError as exc:
+            raise CollectionDispatchError(f"{source.value} freshness failed: {exc or type(exc).__name__}") from exc
+
+        items = (body.get("data") or {}).get("items") or []
+        return {(item["country"], item["indicator_code"]): bool(item.get("stale", True)) for item in items}
+
     async def poll_until_done(self, source: DataSource, ingestion_run_id: uuid.UUID) -> IngestionRunStatus:
         base_url = _BASE_URLS[source]
         deadline = time.monotonic() + settings.collection_poll_timeout_seconds
