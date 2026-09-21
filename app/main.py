@@ -2,8 +2,9 @@ import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from app.api.routes.admin import router as admin_router
 from app.api.routes.analyze import router as analyze_router
@@ -18,6 +19,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.db.session import engine
 from app.services.analysis_resume_service import AnalysisResumeService
+from app.services.llm import usage as llm_usage
 
 
 @asynccontextmanager
@@ -63,6 +65,31 @@ app = FastAPI(
     # prefix, is unaffected.
     root_path=settings.root_path,
 )
+
+@app.middleware("http")
+async def report_llm_usage(request: Request, call_next) -> Response:
+    """Say, on every response, what that request spent on models.
+
+    The orchestrator decides; the model calls that decision causes happen here.
+    Without this the only component able to report what a run cost is the one
+    component that cannot see it.
+
+    Headers rather than a field on each response body: it covers every endpoint
+    at once, including the ones whose response shape is fixed by the method, and
+    a caller that does not read them is unaffected.
+    """
+    with llm_usage.collect() as spend:
+        response = await call_next(request)
+    if spend.calls:
+        response.headers["X-LLM-Input-Tokens"] = str(spend.input_tokens)
+        response.headers["X-LLM-Output-Tokens"] = str(spend.output_tokens)
+        response.headers["X-LLM-Calls"] = str(spend.calls)
+        if spend.calls_without_usage:
+            # So a total of zero over three calls reads as "not reported by the
+            # provider" rather than as "free".
+            response.headers["X-LLM-Calls-Without-Usage"] = str(spend.calls_without_usage)
+    return response
+
 
 # The browser frontend (marketmind-ai) calls this API directly, so its origin
 # must be allowed. Origins are configurable via CORS_ALLOW_ORIGINS (see config).

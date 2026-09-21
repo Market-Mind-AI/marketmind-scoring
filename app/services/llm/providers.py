@@ -9,6 +9,7 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from app.services.llm import usage
 from app.services.llm.base import ImageInput, LLMError, LLMProvider
 
 
@@ -59,10 +60,12 @@ class ClaudeProvider(LLMProvider):
 
         if response_model is not None:
             response = await self._client.messages.parse(output_format=response_model, **kwargs)
+            usage.record(self.model, getattr(response, "usage", None))
             if response.parsed_output is None:
                 raise LLMError(f"Claude returned no parseable result (stop_reason={response.stop_reason})")
             return response.parsed_output
         response = await self._client.messages.create(**kwargs)
+        usage.record(self.model, getattr(response, "usage", None))
         return "".join(block.text for block in response.content if block.type == "text")
 
 
@@ -96,6 +99,7 @@ class GptProvider(LLMProvider):
                 messages=messages,  # type: ignore[arg-type]
                 response_format=response_model,
             )
+            usage.record(self.model, getattr(parsed, "usage", None))
             result = parsed.choices[0].message.parsed
             if result is None:
                 raise LLMError("GPT returned no parseable structured result")
@@ -104,6 +108,7 @@ class GptProvider(LLMProvider):
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
         )
+        usage.record(self.model, getattr(completion, "usage", None))
         return completion.choices[0].message.content or ""
 
 
@@ -143,7 +148,9 @@ class OllamaProvider(LLMProvider):
         async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
             response = await client.post(path, json=payload)
             response.raise_for_status()
-            content = response.json().get("content")
+            body = response.json()
+            usage.record(self.model, body.get("usage"))
+            content = body.get("content")
         if not content:
             raise LLMError("Ollama gateway returned empty content")
         if response_model is not None:
