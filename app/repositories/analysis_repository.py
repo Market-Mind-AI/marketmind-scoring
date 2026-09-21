@@ -76,10 +76,16 @@ class AnalysisRepository:
         analysis_request.explanation = explanation
         analysis_request.breakdown = breakdown
         analysis_request.finished_at = utc_now()
+        # A finished analysis is not waiting on anything. Every done row in the
+        # database still carried the last thing it had been doing ("scoring the
+        # markets"), which is a lie to anyone reading the row and a lie on any
+        # screen that shows it.
+        analysis_request.progress = None
         await self._session.flush()
 
     async def mark_failed(self, analysis_request: AnalysisRequest, *, error_message: str) -> None:
         analysis_request.status = "failed"
         analysis_request.error_message = error_message
         analysis_request.finished_at = utc_now()
+        analysis_request.progress = None
         await self._session.flush()

@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,11 @@ router = APIRouter()
 # The cap bounds a stream watching a request that stops moving.
 _SSE_POLL_SECONDS = 1.5
 _SSE_MAX_SECONDS = 15 * 60
+# How long the stream keeps watching AFTER the scores are done, waiting for the
+# narrative. The narrative is one model call and the request is already complete
+# without it, so this is bounded and short: past it the stream closes saying the
+# text did not arrive, rather than holding a connection open for a sentence.
+_SSE_NARRATIVE_SECONDS = 180.0
 
 
 async def _load_breakdown(session: AsyncSession, analysis_request: AnalysisRequest) -> dict[str, Any] | None:
@@ -164,12 +169,20 @@ def _parse_request_id(request_id: str) -> uuid.UUID:
     summary="Poll an analysis request",
     description="result/breakdown are only populated once status == 'done'.",
 )
-async def get_analysis(request_id: str, session: AsyncSession = Depends(get_session)) -> AnalysisStatusResponse:
+async def get_analysis(
+    request_id: str, response: Response, session: AsyncSession = Depends(get_session)
+) -> AnalysisStatusResponse:
     parsed_id = _parse_request_id(request_id)
     analysis_repo = AnalysisRepository(session)
     analysis_request = await analysis_repo.get(parsed_id)
     if analysis_request is None:
         raise HTTPException(status_code=404, detail=f"Analysis request {request_id} not found")
+
+    # This URL is polled while the answer is still changing and never changes
+    # shape, so anything between here and the browser is free to serve the first
+    # body it saw — which reads to the user as an analysis that finished long
+    # after it did. There is nothing here worth caching: it is one row.
+    response.headers["Cache-Control"] = "no-store"
 
     breakdown = await _load_breakdown(session, analysis_request)
     brand, category_title = await _identidade(session, analysis_request)
@@ -190,8 +203,9 @@ async def stream_analysis(request_id: str, request: Request) -> StreamingRespons
     parsed_id = _parse_request_id(request_id)
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        last_status: str | None = None
+        last: tuple[str, str | None, bool] | None = None
         waited = 0.0
+        done_since: float | None = None
         while True:
             if await request.is_disconnected():
                 return
@@ -200,17 +214,59 @@ async def stream_analysis(request_id: str, request: Request) -> StreamingRespons
             if analysis_request is None:
                 yield f"data: {json.dumps({'request_id': request_id, 'status': 'not_found'})}\n\n"
                 return
+
             status = analysis_request.status
-            if status != last_status:
-                last_status = status
-                yield f"data: {json.dumps({'request_id': request_id, 'status': status})}\n\n"
-            if status in ("done", "failed"):
+            progress = analysis_request.progress
+            has_explanation = bool(analysis_request.explanation and analysis_request.explanation.strip())
+
+            # Pushed on ANY of the three changing, not on the status alone. The
+            # progress line is what the waiting screen says it is doing, and it
+            # moves many times within one status; watching only the status meant
+            # the caller had to poll for it anyway, which is what this endpoint
+            # exists to avoid.
+            current = (status, progress, has_explanation)
+            if current != last:
+                last = current
+                yield "data: " + json.dumps(
+                    {
+                        "request_id": request_id,
+                        "status": status,
+                        "progress": progress,
+                        "has_explanation": has_explanation,
+                    }
+                ) + "\n\n"
+
+            if status == "failed":
                 return
-            if waited >= _SSE_MAX_SECONDS:
-                yield f"data: {json.dumps({'request_id': request_id, 'status': status, 'timeout': True})}\n\n"
+            if status == "done":
+                # NOT closed the moment the scores land. The narrative is
+                # attached a moment later, and a stream that closes here leaves
+                # the caller polling for the slowest part of the run — which is
+                # exactly the wait people notice, because the answer is already
+                # sitting in the database while the screen still says it is
+                # being written.
+                if has_explanation:
+                    return
+                done_since = waited if done_since is None else done_since
+                if waited - done_since >= _SSE_NARRATIVE_SECONDS:
+                    yield "data: " + json.dumps(
+                        {
+                            "request_id": request_id,
+                            "status": status,
+                            "progress": progress,
+                            "has_explanation": False,
+                            "narrative_abandoned": True,
+                        }
+                    ) + "\n\n"
+                    return
+            elif waited >= _SSE_MAX_SECONDS:
+                yield "data: " + json.dumps(
+                    {"request_id": request_id, "status": status, "progress": progress, "timeout": True}
+                ) + "\n\n"
                 return
+
             # Comment line doubles as an SSE heartbeat, keeping proxies from
-            # closing an idle connection between status changes.
+            # closing an idle connection between changes.
             yield ": ping\n\n"
             await asyncio.sleep(_SSE_POLL_SECONDS)
             waited += _SSE_POLL_SECONDS
@@ -219,7 +275,7 @@ async def stream_analysis(request_id: str, request: Request) -> StreamingRespons
         event_stream(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-store",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
