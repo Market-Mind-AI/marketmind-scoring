@@ -1,25 +1,29 @@
 """Retoma análises que morreram no meio, e encerra as que já passaram do prazo.
 
 POR QUE EXISTE. A decisão D3 ("nada parcial sai") transformou uma falha de
-fonte numa espera: a análise fica em `running`, insistindo, até o dado vir. Mas
-a análise roda como `BackgroundTask` do FastAPI, dentro do processo — se o pod
-reinicia, ela some e o pedido fica em `running` para sempre. Sem retomada,
-trocamos "entrega incompleta" por "não entrega nunca", que é pior: o usuário
-paga e não recebe nem o parcial.
+fonte numa espera: a análise fica em `running`, insistindo, até o dado vir. Se
+o pod que a conduzia reinicia, ela para de avançar e o pedido fica em `running`
+para sempre. Sem retomada, trocamos "entrega incompleta" por "não entrega
+nunca", que é pior: o usuário paga e não recebe nem o parcial.
+
+E o checkpointer sozinho não resolve isso. Ele guarda onde a execução parou,
+mas não percebe que parou — alguém tem que reinvocar o grafo. Esta varredura é
+esse alguém.
 
 COMO SE DISTINGUE MORTA DE OCUPADA. Pelo batimento (`heartbeat_at`, migration
-034), atualizado a cada país coberto e a cada tentativa do laço de insistência.
+034), carimbado a cada vez que o agente diz o que está fazendo.
 Silêncio maior que `analysis_stale_after_seconds` é morte, porque é mais longo
 que o maior passo entre dois batimentos. Só isso torna a varredura segura se um
 dia rodar com mais de uma réplica: uma análise viva nunca é retomada em
 paralelo com ela mesma.
 
-POR QUE RETOMAR É SIMPLESMENTE RODAR DE NOVO. Todo passo de `AnalysisService.run`
-é idempotente por construção, e não por acidente: a coleta pula o que a
-`coverage_index` já tem, os indicadores são upsert por (país, indicador,
-período), o MOS é upsert por (produto, país, período) e o campeão é cacheado
-por período. Retomar é reexecutar e deixar cada passo reconhecer o que já
-existe — nenhum estado intermediário precisou ser inventado para isso.
+POR QUE RETOMAR É SIMPLESMENTE REINVOCAR. `AnalysisService.run` entrega o
+pedido ao orchestrator com o mesmo `analysis_id`, e é esse id que dá nome ao
+checkpoint — então o grafo continua do último nó concluído em vez de recomeçar.
+Mesmo se recomeçasse não haveria dano: todo passo é idempotente por construção,
+e não por acidente. A coleta pula o que já está fresco, os indicadores são
+upsert por (país, indicador, período), o MOS é upsert por (produto, país,
+período) e o campeão é cacheado por período.
 
 O prazo é verificado antes: uma análise cujo `deadline_at` já passou enquanto
 estava interrompida não é retomada, é encerrada como `failed` com o motivo. É a

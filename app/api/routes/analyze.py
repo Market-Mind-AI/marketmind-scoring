@@ -20,10 +20,9 @@ from app.services.explanation_client import ExplanationClient
 
 router = APIRouter()
 
-# SSE poll cadence and safety cap. The pipeline runs as a FastAPI BackgroundTask
-# in-process, so the stream just watches the DB row and pushes on change — free,
-# no message broker. The cap bounds a stuck-in-"running" request (v1 has no
-# worker/retry, see AnalysisRequest docstring).
+# SSE poll cadence and safety cap. The run happens in the orchestrator; this
+# side just watches the DB row and pushes on change — free, no message broker.
+# The cap bounds a stream watching a request that stops moving.
 _SSE_POLL_SECONDS = 1.5
 _SSE_MAX_SECONDS = 15 * 60
 
@@ -110,11 +109,10 @@ def _status_payload(
         "and POST /catalog/identify-image), then returns a request_id "
         "immediately (202 Accepted) and processes everything else — ensuring "
         "the last 6 months of data freshness, computing Cap. 4 indicators, "
-        "and computing the Cap. 5 MOS — in the background. Poll "
-        "GET /analyze/{request_id} for the result, or subscribe to "
-        "GET /analyze/{request_id}/stream (SSE) for live status. v1 uses FastAPI "
-        "BackgroundTasks (no dedicated worker/queue yet) — if the API "
-        "restarts mid-run, the request is left stuck in 'running'."
+        "and computing the Cap. 5 MOS — is done by the orchestrator, which "
+        "this hands the request to. Poll GET /analyze/{request_id} for the "
+        "result, or subscribe to GET /analyze/{request_id}/stream (SSE) for "
+        "live status."
     ),
 )
 async def analyze(
@@ -122,7 +120,6 @@ async def analyze(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> AnalyzeAcceptedResponse:
-    from app.core.config import settings
     catalog_service = CatalogService(session)
     # A marca PARTICIONA a identidade: um pedido com marca resolve para a
     # entidade daquela marca (título com a marca), com a família genérica
@@ -149,11 +146,7 @@ async def analyze(
     )
     await session.commit()
 
-    analysis_service = AnalysisService(session)
-    if settings.use_new_orchestrator:
-        background_tasks.add_task(analysis_service.run_via_orchestrator, analysis_request.id)
-    else:
-        background_tasks.add_task(analysis_service.run, analysis_request.id)
+    background_tasks.add_task(AnalysisService(session).run, analysis_request.id)
 
     return AnalyzeAcceptedResponse(request_id=analysis_request.id, status=analysis_request.status)
 

@@ -103,52 +103,6 @@ def test_cached_champion_wins_when_no_requested_market_scored() -> None:
     assert champion == "BRA"
 
 
-def test_a_beaten_champion_is_promoted_not_merely_displaced() -> None:
-    """Structural guard on the write, which is separate from the comparison.
-
-    Getting the comparison right only fixes the CURRENT report. If the beaten
-    champion stays stored, every later analysis reloads it: a request for ESP and
-    PRT alone would crown BRA at 66.37 while the USA at 69.03 was already known
-    to be better. So the losing branch has to persist the winner too.
-    """
-    import inspect
-    import re
-
-    from app.services import analysis_service
-
-    src = inspect.getsource(analysis_service.AnalysisService.run)
-    # Isolate the branch where the cached champion lost.
-    idx = src.index("The stored champion lost")
-    branch = src[idx : idx + 1200]
-    assert "set_champion" in branch, (
-        "a beaten cached champion is displaced in the report but left stored, so it will be reloaded and "
-        "crowned again on the next analysis"
-    )
-    assert re.search(r"country=best_requested\.country", branch), (
-        "the promotion does not store the market that actually won"
-    )
-
-
-def test_service_compares_the_cached_champion_against_requested_scores() -> None:
-    """Structural guard, because the mirror above can drift from the real code.
-
-    What regressed was not a formula but the absence of one: the cached branch
-    assigned the stored country and never looked at the current scores. So this
-    asserts the comparison is present in that branch.
-    """
-    import inspect
-
-    from app.services import analysis_service
-
-    src = inspect.getsource(analysis_service.AnalysisService.run)
-    assert "best_requested" in src, "the cached champion branch no longer computes the best requested market"
-    assert "beats_requested" in src, "the cached champion is no longer compared against requested scores"
-    # And the comparison must be strict, so a tie favours the requested market.
-    assert "float(cached_mos) > float(best_requested.mos)" in src, (
-        "the cached-vs-requested comparison changed shape; confirm a tie still favours the requested market"
-    )
-
-
 @pytest.mark.parametrize(
     ("cached", "requested_top", "expected"),
     [
@@ -160,3 +114,13 @@ def test_service_compares_the_cached_champion_against_requested_scores() -> None
 )
 def test_boundaries(cached: Decimal, requested_top: Decimal, expected: str) -> None:
     assert _choose_champion(cached_country="BRA", cached_mos=cached, requested=[("USA", requested_top)]) == expected
+
+
+# The two structural guards that stood here read the source of the in-process
+# loop, which is gone. What they guarded moved with the logic: the comparison
+# against the requested markets, and the write that replaces a beaten champion
+# rather than merely displacing it, are now asserted behaviourally in the
+# orchestrator's tests/test_graph.py — where the decision is actually made.
+#
+# They were worth having. Reimplementing this in the agent lost both behaviours
+# at first, and it was those two tests failing that said so.

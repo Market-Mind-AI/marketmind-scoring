@@ -391,7 +391,11 @@ async def ensure_coverage(
         "reference-market candidates, so those have to be collected regardless "
         "of which countries were asked about — that is what keeps the ruler "
         "stable instead of moving with each query.\n\n"
-        "Skip this when champion_cached is already true. Candidate demand is "
+        "When champion_cached comes back true the collection is skipped, and "
+        "the stored champion comes with it — the caller needs the figure, not "
+        "just the fact, because a stored champion that a requested market now "
+        "beats has to be replaced rather than crowned again.\n\n"
+        "Skip the collection when champion_cached is already true. Candidate demand is "
         "the slowest collection in the system and re-running it produces the "
         "same answer: three consecutive analyses of one product took 594s, 203s "
         "and 396s, and nearly all of the repeat cost was this work redone."
@@ -407,7 +411,12 @@ async def candidates_coverage(
             entity, request.requested_countries, period_key=request.period_key
         )
         await session.commit()
-    return CandidatesCoverageResponse(entity_key=request.entity_key, champion_cached=cached)
+    return CandidatesCoverageResponse(
+        entity_key=request.entity_key,
+        champion_cached=cached,
+        champion_country=entity.champion_country if cached else None,
+        champion_mos=float(entity.champion_mos) if cached and entity.champion_mos is not None else None,
+    )
 
 
 @router.post(

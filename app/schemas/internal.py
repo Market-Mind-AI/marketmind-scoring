@@ -158,6 +158,12 @@ class CandidatesCoverageRequest(BaseModel):
 
 class CandidatesCoverageResponse(BaseModel):
     entity_key: uuid.UUID
+    # The champion this product already has for the period, when it has one.
+    # The caller needs the figure, not just the fact: a stored champion that a
+    # requested market now beats must be replaced, or it is reloaded and
+    # crowned again on every later analysis.
+    champion_country: str | None = None
+    champion_mos: float | None = None
     # Whether a champion computed for this period already exists. When it does,
     # candidate collection is the slowest work in the system and it produces the
     # same answer, so the caller should skip it: three consecutive analyses of

@@ -107,8 +107,8 @@ class Settings(BaseSettings):
     # deployment, from one that was configured correctly.
     internal_api_token: str = ""
 
-    # marketmind-orchestrator API base URL and feature flag
-    use_new_orchestrator: bool = False
+    # marketmind-orchestrator: where analyses are run. Not a choice — the
+    # in-process loop that used to be the alternative is gone.
     orchestrator_api_base_url: str = "http://host.docker.internal:8081"
 
 
