@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app import observability
+from app import observability, prompts
 from app.services.llm import usage
 from app.services.llm.base import ImageInput, LLMProvider
 
@@ -60,12 +60,14 @@ class TracedProvider(LLMProvider):
             recorded: dict[str, Any] = {"system": system, "user": user} if system else {"user": user}
             if image is not None:
                 recorded["image"] = describe_image(image)
+            linked = prompts.take_linked_prompt()
             return client.start_observation(
                 name=self.site,
                 as_type="generation",
                 model=self.model,
                 input=recorded,
                 metadata={"provider": type(self.inner).__name__},
+                **({"prompt": linked} if linked is not None else {}),
             )
         except Exception:  # noqa: BLE001 — tracing never fails a call
             logger.debug("Could not open the %s generation", self.site, exc_info=True)

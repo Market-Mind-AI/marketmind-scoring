@@ -10,10 +10,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langfuse import Langfuse
+from langfuse.api import Prompt_Text
+from langfuse.model import TextPromptClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 
-from app import observability
+from app import observability, prompts
 from app.core.config import settings
 from app.services.llm import resolver, usage
 from app.services.llm.base import ImageInput, LLMProvider
@@ -242,3 +244,36 @@ def test_a_request_carrying_traceparent_puts_its_calls_in_that_trace(spans) -> N
     TestClient(app).post("/probe", headers={"traceparent": f"00-{trace_id}-b88f74cfd738d647-01"})
 
     assert spans()["enrichment"]["trace_id"] == trace_id
+
+
+async def test_a_generation_is_linked_to_the_prompt_version_it_used(
+    spans, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts.take_linked_prompt()
+    stored = TextPromptClient(
+        Prompt_Text(
+            name="enrichment-system",
+            version=4,
+            prompt="You localise.",
+            labels=["production"],
+            tags=[],
+            config={},
+        )
+    )
+    monkeypatch.setattr(observability.client(), "get_prompt", lambda name, **_: stored)
+
+    system = prompts.prompt_text("enrichment-system", "the code text")
+    await TracedProvider(FakeProvider(), site="enrichment").complete(system=system, user="x")
+
+    gen = spans()["enrichment"]
+    assert _attr(gen, "prompt.name") == "enrichment-system"
+    assert _attr(gen, "prompt.version") == 4
+    assert json.loads(_attr(gen, "input"))["system"] == "You localise."
+
+
+async def test_a_call_without_a_fetched_prompt_is_not_linked(spans) -> None:
+    prompts.take_linked_prompt()
+
+    await TracedProvider(FakeProvider(), site="explanation").complete(user="x")
+
+    assert _attr(spans()["explanation"], "prompt.name") is None
