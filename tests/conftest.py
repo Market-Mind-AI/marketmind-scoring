@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.db.models  # noqa: F401 — registers every model on Base.metadata before _PRESERVE_TABLES logic reads it
+from app import prompts
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine as app_engine
@@ -107,6 +108,21 @@ async def _reset_database_after_test() -> AsyncGenerator[None, None]:
         await app_engine.dispose()
     except RuntimeError:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_prompts_state() -> Generator[None, None, None]:
+    """`app/prompts.py` keeps two module-level globals across calls: the
+    linked-prompt ContextVar and the `_known` set (see F1, the known-set
+    design that keeps Langfuse off the request path for unconfirmed names).
+    Left dirty, one test's fetch/warm can make a later, unrelated test see a
+    name as already known (skipping its own fetch) or inherit a stale link.
+    """
+    prompts.take_linked_prompt()
+    prompts._known.clear()
+    yield
+    prompts.take_linked_prompt()
+    prompts._known.clear()
 
 
 @pytest.fixture

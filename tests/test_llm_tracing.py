@@ -246,10 +246,7 @@ def test_a_request_carrying_traceparent_puts_its_calls_in_that_trace(spans) -> N
     assert spans()["enrichment"]["trace_id"] == trace_id
 
 
-async def test_a_generation_is_linked_to_the_prompt_version_it_used(
-    spans, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    prompts.take_linked_prompt()
+async def test_a_generation_is_linked_to_the_prompt_version_it_used(spans, monkeypatch: pytest.MonkeyPatch) -> None:
     stored = TextPromptClient(
         Prompt_Text(
             name="enrichment-system",
@@ -261,6 +258,9 @@ async def test_a_generation_is_linked_to_the_prompt_version_it_used(
         )
     )
     monkeypatch.setattr(observability.client(), "get_prompt", lambda name, **_: stored)
+    # prompt_text only fetches from Langfuse for a name the known set already
+    # confirms (F1, app/prompts.py) — warm it here so the fetch above runs.
+    prompts.warm({"enrichment-system": "the code text"})
 
     system = prompts.prompt_text("enrichment-system", "the code text")
     await TracedProvider(FakeProvider(), site="enrichment").complete(system=system, user="x")
@@ -272,8 +272,6 @@ async def test_a_generation_is_linked_to_the_prompt_version_it_used(
 
 
 async def test_a_call_without_a_fetched_prompt_is_not_linked(spans) -> None:
-    prompts.take_linked_prompt()
-
     await TracedProvider(FakeProvider(), site="explanation").complete(user="x")
 
     assert _attr(spans()["explanation"], "prompt.name") is None

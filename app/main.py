@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
@@ -23,19 +23,36 @@ from app.services.analysis_resume_service import AnalysisResumeService
 from app.services.llm import usage as llm_usage
 
 
+async def _manter_prompts_aquecidos(registry: Mapping[str, str]) -> None:
+    """Keep confirming unconfirmed prompt names, forever, every 60 s.
+
+    get_prompt is a synchronous HTTP call; run from a thread so it never blocks
+    the event loop. A name only pays this once — `warm` skips whatever is
+    already confirmed — so a seeded or recovered prompt gets off the request
+    path within about 60 s of becoming available, and steady state (every
+    name already confirmed) makes no request at all.
+    """
+    while True:
+        await asyncio.to_thread(prompts.warm, registry)
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
     if not observability.tracing_enabled():
         logger.warning("Langfuse is not configured; model calls will not be traced.")
-    # get_prompt is a synchronous HTTP call; warmed from a thread here, no
-    # request pays for the first fetch on the event loop. Not awaited: startup
-    # never waits on Langfuse, and a request that arrives first fetches itself.
+    # A name Langfuse has never confirmed is never fetched inline (see
+    # app/prompts.py's `_known`), so nothing on the request path can block on
+    # a cold or failed fetch. This loop is what confirms names, off the event
+    # loop, so a request never has to. Not awaited: startup never waits on
+    # Langfuse, and it keeps running for the life of the process so a prompt
+    # seeded or recovered after startup is still picked up, without a deploy.
     aquecimento = None
     if observability.tracing_enabled():
         from app.prompt_registry import PROMPTS
 
-        aquecimento = asyncio.create_task(asyncio.to_thread(prompts.warm, PROMPTS))
+        aquecimento = asyncio.create_task(_manter_prompts_aquecidos(PROMPTS))
     # Análise que morreu com o processo anterior fica em `running` para sempre,
     # e com a regra de "nada parcial sai" (D3) isso deixou de ser um registro
     # feio para virar um pedido pago que nunca entrega. A varredura retoma o que

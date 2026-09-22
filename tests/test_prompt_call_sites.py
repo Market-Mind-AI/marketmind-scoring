@@ -9,6 +9,7 @@ from langfuse.api import Prompt_Text
 from langfuse.model import TextPromptClient
 
 from app import observability, prompts
+from app.prompt_registry import PROMPTS
 from app.services.catalog_matcher import CatalogMatchDecision, CatalogMatcher
 from app.services.enrichment_client import EnrichmentClient, LocalizedMarketsResult
 from app.services.explanation_client import _system_prompt
@@ -17,15 +18,32 @@ from app.services.vision_client import MarketTerms, ProductIdentification, Visio
 
 
 class EditedInLangfuse:
-    """Stands in for Langfuse: every prompt comes back as 'EDITED <name>'."""
+    """Stands in for Langfuse: every prompt comes back as 'EDITED <name>', with
+    the same variable placeholders as its code default so the placeholder-
+    drift guard (F3, app/prompts.py) doesn't reject it and fall back to the
+    code text instead."""
+
+    _VARIABLES = {
+        "vision-instructions": ("subject", "country_list"),
+        "explanation-system-pt": ("structure", "scope_intro", "country_rule", "ruler_scope"),
+        "explanation-system-en": ("structure", "scope_intro", "country_rule", "ruler_scope"),
+    }
 
     def __init__(self) -> None:
         self.names: list[str] = []
 
     def get_prompt(self, name: str, **_: object) -> TextPromptClient:
         self.names.append(name)
+        placeholders = "".join(f" {{{{{variable}}}}}" for variable in self._VARIABLES.get(name, ()))
         return TextPromptClient(
-            Prompt_Text(name=name, version=7, prompt=f"EDITED {name}", labels=["production"], tags=[], config={})
+            Prompt_Text(
+                name=name,
+                version=7,
+                prompt=f"EDITED {name}{placeholders}",
+                labels=["production"],
+                tags=[],
+                config={},
+            )
         )
 
 
@@ -33,6 +51,11 @@ class EditedInLangfuse:
 def langfuse(monkeypatch: pytest.MonkeyPatch) -> EditedInLangfuse:
     fake = EditedInLangfuse()
     monkeypatch.setattr(observability, "client", lambda: fake)
+    # Each call site's prompt_text only fetches from Langfuse for a name the
+    # known set already confirms (F1) — warm it here so these tests still
+    # exercise the real "Langfuse has the text" path on their very first call.
+    prompts.warm(PROMPTS)
+    fake.names.clear()
     yield fake
     prompts.take_linked_prompt()
 
@@ -120,9 +143,9 @@ async def test_vision_uses_its_prompt_and_keeps_the_users_text(langfuse: EditedI
             image_base64=None, image_media_type=None, hint_text="air fryer 5L", countries=["BRA"]
         )
 
-    assert provider.complete.await_args.kwargs["user"] == (
-        "EDITED vision-instructions\n\nProduct description from the user: air fryer 5L"
-    )
+    prompt = provider.complete.await_args.kwargs["user"]
+    assert prompt.startswith("EDITED vision-instructions")
+    assert prompt.endswith("\n\nProduct description from the user: air fryer 5L")
 
 
 @pytest.mark.parametrize(

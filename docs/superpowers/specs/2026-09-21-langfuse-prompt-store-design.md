@@ -52,19 +52,20 @@ def prompt_text(name: str, default: str, **variables: str) -> str
 def take_linked_prompt() -> Any | None   # the fetched prompt for the next generation; read-and-clear
 ```
 
-`prompt_text` behaves as follows:
+`prompt_text` is built around a **known set**: a module-level `_known: set[str]` of names Langfuse has confirmed it holds. The SDK never caches a fallback, and its HTTP client retries 5xx/timeouts on its own regardless of `max_retries` — so without this, a cold or failed fetch pays a synchronous 0.4-7 s call on the event loop on *every* request, not just the first. `prompt_text` behaves as follows:
 
-- **When `observability.client()` is `None`** (unconfigured, or in tests, since `tests/conftest.py` blanks the keys): it returns `compile_template(default, variables)` and links nothing.
-- **Otherwise** it calls:
+- **When `observability.client()` is `None`**, or **when `name` is not in `_known`**: it returns `compile_template(default, variables)` and links nothing. Neither branch makes a network call — a name Langfuse hasn't confirmed is never fetched inline, cold or down.
+- **Otherwise** (a known name, with a client) it calls:
   ```python
   client.get_prompt(
       name, label="production", type="text", fallback=default,
-      max_retries=1, fetch_timeout_seconds=3,
+      max_retries=0, fetch_timeout_seconds=3,
   )
   ```
-  - Caching uses the SDK default of 60 s with background refresh, so only a process's first fetch of a prompt can block, and for at most about 3 s.
-  - If the result is not a fallback (`is_fallback` is false), the call records it in a context variable for the next generation. A fallback is never linked, since Langfuse can't link one.
-  - It returns `result.compile(**variables)`.
+  For a known name this is a cache hit, or a stale hit the SDK refreshes in the background — never a cold fetch, since only `warm()` (see below) ever adds a name to `_known`, and it always fetches once before doing so.
+  - If the result is a fallback, or the call raises, the name is dropped from `_known` (so the *next* call for it takes the no-network branch above, until `warm()` reconfirms it) and the link is cleared.
+  - If the result's variables don't match the code default's (F3, the placeholder-drift guard): it is not used either — the compiled default is returned, unlinked, and a warning is logged once per `(name, version)`. Unlike a fallback/exception, the name stays in `_known`, so a corrected version is picked up on the next refresh.
+  - Otherwise it records the result in a context variable for the next generation and returns `result.compile(**variables)`.
 - **It never raises.** Any exception logs at debug level (`marketmind-scoring.prompts`) and returns the compiled default.
 
 `take_linked_prompt()` returns the recorded prompt and clears it, so one fetch links at most one generation.
@@ -87,11 +88,14 @@ Each replaces its constant with `prompt_text(<name>, <constant>, **vars)`:
 
 `PROMPTS: dict[str, str]` maps each of the six names to its default constant, imported from the service modules. It lives in its own module so that `app/prompts.py` never imports the service modules, which avoids an import cycle. The sync script and the warm-up both use it.
 
-`get_prompt` is a synchronous HTTP call, and core is async, so a cold fetch inside a request would block the event loop, for up to about 3 s when Langfuse is slow. To keep it out of requests:
-- `prompts.warm(registry)` fetches every prompt once.
-- When tracing is enabled, the lifespan starts it as a background task via `asyncio.to_thread`, keeping a reference to the task like the existing sweep task.
-- Startup is never delayed. A request that arrives before the warm-up finishes just fetches for itself.
-- After warm-up, fetches are cache hits, and the SDK refreshes stale entries on its own background threads.
+`get_prompt` is a synchronous HTTP call, and core is async, so a cold or failed fetch inside a request would block the event loop for as long as Langfuse takes to answer — with no `max_retries` backstop, since the SDK's HTTP client retries on its own. To keep this off the request path entirely:
+- `prompts.warm(registry)` calls `get_prompt(name, label="production", type="text", max_retries=0, fetch_timeout_seconds=3)` **without a fallback** — so a failure raises — for each name not already in `_known`, and adds a name to `_known` on a non-fallback success. Names already known are skipped, so steady state makes no request at all.
+- When tracing is enabled, the lifespan runs it in a keep-warm loop: `asyncio.to_thread(prompts.warm, registry)` then `asyncio.sleep(60)`, forever, keeping a reference to the task like the existing sweep task.
+- Startup is never delayed. A request for a name not yet confirmed just uses the code text, with no network of its own.
+- A name seeded or recovered after startup is picked up by the next loop iteration, within about 60 s, without a deploy.
+- Once every registry name is known, the loop's `warm()` calls are a no-op — no `get_prompt` at all — until a name is dropped from `_known` by a fallback or an exception on the request path.
+
+**Trade-off:** a prompt edited in Langfuse (an existing, already-known name) is picked up within the SDK's own cache TTL, same as before. A name that is newly seeded, or that recovers after Langfuse was down or misconfigured, is picked up within about 60 s (the keep-warm loop's interval), rather than on the very next call.
 
 ### `scripts/sync_prompts.py` (new, makes no LLM calls)
 
@@ -104,17 +108,19 @@ It seeds and syncs Langfuse from the code defaults in `app/prompt_registry.PROMP
 
 ## Error handling
 
-- Langfuse down, slow, missing a prompt, or misconfigured: the fetch falls back to the code text after at most about 3 s on a cold cache, and to the cached version when warm. Model calls are never blocked beyond that and never fail.
-- A prompt in Langfuse missing one of the variables: `compile` leaves an unfilled `{{variable}}` in place. This is a content error by whoever edited the prompt, and Langfuse's UI shows each prompt's variables. It is not guarded against in code (YAGNI).
+- Langfuse down, slow, missing a prompt, or misconfigured: an unconfirmed name never fetches on the request path at all, so nothing blocks on it. A confirmed name that starts failing is dropped from `_known` on the first failure — so it, too, falls back to the code text with no further network on the request path — and is retried by the keep-warm loop.
+- A prompt in Langfuse whose declared variables don't match the code default's: the placeholder-drift guard (F3) rejects it rather than let `compile` leave an unfilled `{{variable}}` in place — the compiled default is used instead, and a warning is logged once per `(name, version)`. The name stays in `_known`, so a corrected version is picked up on the next refresh.
 
 ## Testing
 
 **`tests/test_prompts.py`:**
 - Without a client, the default compiles with its variables and nothing is linked.
-- A fetched `production` prompt replaces the default and is linked.
-- A fallback result is used but not linked.
-- An exception from `get_prompt` returns the default.
+- An unknown (not-yet-`_known`) name returns the default without calling `get_prompt`, even with a client configured.
+- After `warm()`, a known name is fetched inline with `max_retries=0`, and the result is used and linked.
+- A fallback result, or an exception from `get_prompt`, drops the name from `_known` — the next call for it makes no request — and is used/returns the default, unlinked.
+- `warm()` adds only non-fallback successes, skips names already known, survives exceptions, and returns the loaded count.
 - `take_linked_prompt` is read-once.
+- A stored prompt whose variables don't match the code default's (F3) is rejected: the default is used, unlinked, and the warning logs once per `(name, version)`.
 - The rendered explanation, vision and system texts are byte-identical to today's output while the defaults are in use.
 
 **`tests/test_llm_tracing.py`:** a generation opened after a linked fetch carries `langfuse.observation.prompt.name` and `.version`. This uses a locally constructed `TextPromptClient`, with no network.
@@ -134,7 +140,10 @@ It seeds and syncs Langfuse from the code defaults in `app/prompt_registry.PROMP
 
 A `feat/langfuse-prompt-store` branch and PR in core, stacked on `feat/langfuse-llm-tracing` (PR #1), for Álvaro to review.
 
+**Seeding a new Langfuse project:** `_known` starts empty in every process, and a name only ever enters it once Langfuse confirms it (`warm`, i.e. a successful, non-fallback `get_prompt`). Pointing a deployment at a Langfuse project that has never been seeded means every one of the six names stays unconfirmed forever — the code text is used throughout, with no request ever failing or blocking, but also no prompt ever coming from Langfuse. Run `scripts/sync_prompts.py` against the new project *before* switching a deployment to it (see Testing's free live check). Until then, the code text is what ships.
+
 ## Risks
 
 - **Prompt drift:** UI edits and the code defaults diverge over time. `sync_prompts.py --update` realigns Langfuse to code, and the PR description tells the team that Langfuse `production` is authoritative.
-- **Cold-start latency:** a fetch can take up to about 3 s when Langfuse is slow, bounded by `fetch_timeout_seconds`. The startup warm-up takes that cost off the request path. Only a request that lands in the first seconds after a restart, before the warm-up finishes, can still pay it.
+- **Placeholder drift:** an edit in the Langfuse UI that adds/removes a `{{variable}}` the code default doesn't (or does) expect is rejected by the guard in F3 rather than silently leaving a placeholder unfilled — it logs a warning and keeps using the code text until the prompt is corrected.
+- **Cold or failed fetches no longer cost anything on the request path.** A name Langfuse hasn't confirmed (never seeded, or dropped after a failure) is never fetched inline — see `prompt_text`'s known-set design above. The trade-off is latency of *pickup*, not request latency: an edit to an already-known prompt lands within the SDK's cache TTL, same as before; a newly seeded or recovered name lands within about 60 s, the keep-warm loop's interval, rather than on the very next call.
