@@ -12,6 +12,7 @@ the already-identified product identity — it computes no score (Cap. 4 §4.0).
 from pydantic import BaseModel, Field
 
 from app.core.exceptions import MarketMindCoreError
+from app.prompts import prompt_text
 from app.services.llm import LLMError, resolve_enrichment_llm
 from app.services.vision_client import MarketTerms
 
@@ -109,7 +110,9 @@ class EnrichmentClient:
             )
         )
         try:
-            result = await self._provider.complete(system=_SYSTEM, user=prompt, response_model=LocalizedMarketsResult)
+            result = await self._provider.complete(
+                system=prompt_text("enrichment-system", _SYSTEM), user=prompt, response_model=LocalizedMarketsResult
+            )
         except LLMError as exc:
             raise EnrichmentError(f"Enrichment LLM call failed: {exc}") from exc
         if not isinstance(result, LocalizedMarketsResult):  # defensive; schema is provider-enforced
