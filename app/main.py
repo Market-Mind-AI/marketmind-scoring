@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from app import observability
+from app import observability, prompts
 from app.api.routes.admin import router as admin_router
 from app.api.routes.analyze import router as analyze_router
 from app.api.routes.catalog import router as catalog_router
@@ -28,6 +28,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
     if not observability.tracing_enabled():
         logger.warning("Langfuse is not configured; model calls will not be traced.")
+    # get_prompt is a synchronous HTTP call; warmed from a thread here, no
+    # request pays for the first fetch on the event loop. Not awaited: startup
+    # never waits on Langfuse, and a request that arrives first fetches itself.
+    aquecimento = None
+    if observability.tracing_enabled():
+        from app.prompt_registry import PROMPTS
+
+        aquecimento = asyncio.create_task(asyncio.to_thread(prompts.warm, PROMPTS))
     # Análise que morreu com o processo anterior fica em `running` para sempre,
     # e com a regra de "nada parcial sai" (D3) isso deixou de ser um registro
     # feio para virar um pedido pago que nunca entrega. A varredura retoma o que
@@ -37,6 +45,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     varredura.cancel()
     with suppress(asyncio.CancelledError):
         await varredura
+    if aquecimento is not None:
+        aquecimento.cancel()
+        with suppress(asyncio.CancelledError):
+            await aquecimento
     await engine.dispose()
     logger.info(f"Shutting down {settings.app_name}")
 
