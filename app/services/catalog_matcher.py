@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from app.core.logging import logger
+from app.prompts import prompt_text
 from app.services.llm.base import LLMError
 from app.services.llm.resolver import resolve_catalog_match_llm
 
@@ -146,7 +147,7 @@ class CatalogMatcher:
 
         try:
             decision = await provider.complete(
-                system=_SYSTEM, user=prompt, response_model=CatalogMatchDecision
+                system=prompt_text("catalog-match-system", _SYSTEM), user=prompt, response_model=CatalogMatchDecision
             )
         except LLMError as exc:
             # Falha para "sem correspondência" em vez de propagar: o chamador

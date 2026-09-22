@@ -14,6 +14,7 @@ it never silently invents a field outside the declared schema.
 from pydantic import BaseModel, Field
 
 from app.core.exceptions import MarketMindCoreError
+from app.prompts import prompt_text
 from app.schemas.catalog import ImageMediaType
 from app.services.llm import ImageInput, LLMError, resolve_vision_llm
 
@@ -120,6 +121,52 @@ class ProductIdentification(BaseModel):
     confidence: float
 
 
+# The instructions for the vision call, edited in Langfuse ("vision-instructions");
+# this is the fallback and the seed. {{subject}} and {{country_list}} are filled per call.
+_INSTRUCTIONS = (
+        "Identify {{subject}} for a cross-country market-demand analysis. "
+        "CRITICAL: only identify a product that is ACTUALLY present in the input. If no image was given and "
+        "the text does not name or describe a concrete product (e.g. it is empty or just 'quero', 'hello', "
+        "'test', or a question with no product), set `product_found`=false, leave `product_name` empty, and "
+        "return no markets — do NOT invent, guess, or default to any product. "
+        "`product_name`: short, generic, commonly-searched canonical name, plain ASCII, no brand/size/"
+        "certification (e.g. 'Iberian ham', 'air fryer'; 'Jamon Iberico', not 'Jamón Ibérico'). "
+        "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'); an "
+        "ACCESSORY, part, consumable, service or content FOR another product gets its OWN category "
+        "('Kitchen Accessories', 'Spare Parts', 'Cookbooks', 'Services'), never the category of the product "
+        "it belongs to. "
+        "Put the brand only in `brand`; `product_name` stays generic. "
+        "`markets`: provide EXACTLY ONE entry for EACH of these ISO-3166 alpha-3 countries: "
+        "{{country_list}}. For each country, `search_terms` is a GENEROUS list of the real terms a local "
+        "buyer actually types for THIS product — genuine colloquial/regional/loanword names and spelling/"
+        "spacing variants, NEVER word-for-word translations, and ALWAYS also include the original English/"
+        "Latin-script names in every market's list. The system pulls each term's ABSOLUTE monthly "
+        "search volume and SUMS them into ONE product's demand score, so more real terms = more captured "
+        "demand (be generous, but every term must truly mean this product). THE BRAND DECIDES WHAT "
+        "'this product' MEANS: if you identified a brand, EVERY term must name it, in whatever script "
+        "local buyers use ('cardhu 12', 'whisky cardhu', 'カーデュ 12年'), varying model/size/variant "
+        "around the brand — NEVER the bare generic name ('single malt whisky'), which would count the "
+        "entire category's search volume as this brand's demand, and NEVER another brand. If there is no "
+        "brand, the product IS the category: use only generic terms, never a branded one. "
+        "Set `primary_name` to the single most-used term. "
+        "These volumes are summed into a score answering 'should I sell this here', so `search_terms` "
+        "must only be what someone types while deciding to BUY or looking for where to buy.\n"
+        "`excluded_terms` is what must NOT be counted, and it has to be thorough — the terms are matched "
+        "as substrings against Google's related keywords, so give the SHORTEST distinguishing form "
+        "('suína', not 'picanha suína temperada'). Three kinds: (1) a DIFFERENT product sharing the name "
+        "(pork 'picanha' is not beef picanha; 'yerba buena' is mint, not yerba mate; 'fritadeira de óleo' "
+        "is an oil deep-fryer); (2) USING it rather than buying it, whoever searches it already owns it — "
+        "name the ways preparation is written in THAT language, usually the method itself rather than a "
+        "question ('na airfryer', 'no forno', 'na brasa', 'churrasco', 'receita'; for a device, 'como "
+        "limpar', 'não liga', 'manual'); (3) LOOKING IT UP rather than shopping ('o que é', 'vs', "
+        "'significado', 'wikipedia' and the local forms). Local language, lowercase. Be generous: a term "
+        "wrongly excluded costs a little demand, a term wrongly counted inflates one market against all "
+        "the others. Give a `confidence` (0-1) per market. Example — Brazil picanha: primary_name "
+        "'picanha', search_terms ['picanha','picanha bovina','preço da picanha','picanha angus'], "
+        "excluded_terms ['suína','de porco','na airfryer','no forno','na brasa','churrasco','receita']."
+    )
+
+
 class VisionClient:
     def __init__(self) -> None:
         # Provider + model resolved from .env for the `vision` site (default:
@@ -142,47 +189,8 @@ class VisionClient:
             raise VisionError("identify_product requires an image or a text description")
         country_list = ", ".join(countries) if countries else "(none provided)"
         subject = "this product" if image_base64 else "the product described below"
-        instructions = (
-            f"Identify {subject} for a cross-country market-demand analysis. "
-            "CRITICAL: only identify a product that is ACTUALLY present in the input. If no image was given and "
-            "the text does not name or describe a concrete product (e.g. it is empty or just 'quero', 'hello', "
-            "'test', or a question with no product), set `product_found`=false, leave `product_name` empty, and "
-            "return no markets — do NOT invent, guess, or default to any product. "
-            "`product_name`: short, generic, commonly-searched canonical name, plain ASCII, no brand/size/"
-            "certification (e.g. 'Iberian ham', 'air fryer'; 'Jamon Iberico', not 'Jamón Ibérico'). "
-            "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'); an "
-            "ACCESSORY, part, consumable, service or content FOR another product gets its OWN category "
-            "('Kitchen Accessories', 'Spare Parts', 'Cookbooks', 'Services'), never the category of the product "
-            "it belongs to. "
-            "Put the brand only in `brand`; `product_name` stays generic. "
-            "`markets`: provide EXACTLY ONE entry for EACH of these ISO-3166 alpha-3 countries: "
-            f"{country_list}. For each country, `search_terms` is a GENEROUS list of the real terms a local "
-            "buyer actually types for THIS product — genuine colloquial/regional/loanword names and spelling/"
-            "spacing variants, NEVER word-for-word translations, and ALWAYS also include the original English/"
-            "Latin-script names in every market's list. The system pulls each term's ABSOLUTE monthly "
-            "search volume and SUMS them into ONE product's demand score, so more real terms = more captured "
-            "demand (be generous, but every term must truly mean this product). THE BRAND DECIDES WHAT "
-            "'this product' MEANS: if you identified a brand, EVERY term must name it, in whatever script "
-            "local buyers use ('cardhu 12', 'whisky cardhu', 'カーデュ 12年'), varying model/size/variant "
-            "around the brand — NEVER the bare generic name ('single malt whisky'), which would count the "
-            "entire category's search volume as this brand's demand, and NEVER another brand. If there is no "
-            "brand, the product IS the category: use only generic terms, never a branded one. "
-            "Set `primary_name` to the single most-used term. "
-            "These volumes are summed into a score answering 'should I sell this here', so `search_terms` "
-            "must only be what someone types while deciding to BUY or looking for where to buy.\n"
-            "`excluded_terms` is what must NOT be counted, and it has to be thorough — the terms are matched "
-            "as substrings against Google's related keywords, so give the SHORTEST distinguishing form "
-            "('suína', not 'picanha suína temperada'). Three kinds: (1) a DIFFERENT product sharing the name "
-            "(pork 'picanha' is not beef picanha; 'yerba buena' is mint, not yerba mate; 'fritadeira de óleo' "
-            "is an oil deep-fryer); (2) USING it rather than buying it, whoever searches it already owns it — "
-            "name the ways preparation is written in THAT language, usually the method itself rather than a "
-            "question ('na airfryer', 'no forno', 'na brasa', 'churrasco', 'receita'; for a device, 'como "
-            "limpar', 'não liga', 'manual'); (3) LOOKING IT UP rather than shopping ('o que é', 'vs', "
-            "'significado', 'wikipedia' and the local forms). Local language, lowercase. Be generous: a term "
-            "wrongly excluded costs a little demand, a term wrongly counted inflates one market against all "
-            "the others. Give a `confidence` (0-1) per market. Example — Brazil picanha: primary_name "
-            "'picanha', search_terms ['picanha','picanha bovina','preço da picanha','picanha angus'], "
-            "excluded_terms ['suína','de porco','na airfryer','no forno','na brasa','churrasco','receita']."
+        instructions = prompt_text(
+            "vision-instructions", _INSTRUCTIONS, subject=subject, country_list=country_list
         )
         # With no image the text IS the product source, so label it accordingly.
         if hint_text and hint_text.strip():

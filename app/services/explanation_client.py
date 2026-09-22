@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.db.models.mos_result import MosResult
 from app.domain.enums import IndicatorCode, IndicatorDimension
+from app.prompts import prompt_text
 from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.metric_explanation_repository import MetricExplanationRepository
 from app.repositories.mos_repository import MosRepository
@@ -114,14 +115,14 @@ def _flag_demand_outliers(countries: list[dict[str, Any]]) -> None:
         )
 
 _SYSTEM_PROMPT_PT = """Você é um analista de entrada em mercados (market-entry) que ajuda um negócio \
-a {scope_intro}, a partir de um "pacote de evidências" já calculado \
+a {{scope_intro}}, a partir de um "pacote de evidências" já calculado \
 pelo motor determinístico de MOS (Market Opportunity Score) da MarketMind.
 
 REGRAS INVIOLÁVEIS:
 - Use SOMENTE os números fornecidos no pacote. NUNCA invente, estime, arredonde de forma nova \
 ou recalcule qualquer valor. Não escreva nenhum número que não esteja no input.
 - Você EXPLICA os resultados determinísticos; você não os recalcula nem os contesta.
-- {country_rule}
+- {{country_rule}}
 
 O PACOTE traz, para CADA país: o MOS (com banda e um campo `explanation` em texto), a lista de \
 `dimensions` e a lista de `signals` (indicadores). CADA item — MOS, dimensão e sinal — tem um campo \
@@ -140,14 +141,14 @@ FORMATO (MUITO IMPORTANTE): escreva como um analista humano escreveria um parece
 PROSA CORRIDA, fluida e natural. É PROIBIDO usar bullets, listas, tabelas, subtítulos por dimensão ou \
 enumerar "dimensão: score" item a item. As dimensões e números entram TECIDOS nas frases, não em tópicos.
 
-{structure}
+{{structure}}
 
 RÉGUA DE VOLUME DE DEMANDA (`demand_ruler`) — explique-a DENTRO do texto corrido (sem nota/seção separada):
 - Se `mode` = "reference": o score de Demand Volume de cada país é medido como % do MERCADO-REFERÊNCIA \
 do produto — o país `country` (com `volume` buscas/mês), eleito como o de MAIOR volume REAL entre os \
 mercados avaliados (`candidates` = candidatos propostos + os próprios países analisados). Deixe claro que \
 100 seria igualar esse maior mercado, e que os países analisados valem tanto % disso. O mercado-referência \
-é só a régua — NÃO faz parte {ruler_scope} (a menos que também tenha sido pedido).
+é só a régua — NÃO faz parte {{ruler_scope}} (a menos que também tenha sido pedido).
 - Se `mode` = "fixed": não houve volume em nenhum mercado avaliado; usou-se um teto fixo genérico. \
 **Avise claramente** que os scores de volume são só aproximados nesse caso.
 
@@ -162,7 +163,7 @@ oportunidade.
 
 Tom humano de analista, prosa corrida do início ao fim — nada de bullets, listas ou subtítulos."""
 
-_SYSTEM_PROMPT_EN = """You are a market-entry analyst helping a business {scope_intro}, \
+_SYSTEM_PROMPT_EN = """You are a market-entry analyst helping a business {{scope_intro}}, \
 based on an "evidence packet" already computed by MarketMind's deterministic \
 MOS (Market Opportunity Score) engine.
 
@@ -170,7 +171,7 @@ INVIOLABLE RULES:
 - Use ONLY the numbers provided in the packet. NEVER invent, estimate, re-round or recompute any \
 value. Do not write any number that is not in the input.
 - You EXPLAIN the deterministic results; you do not recompute or dispute them.
-- {country_rule}
+- {{country_rule}}
 
 The PACKET carries, for EACH country: the MOS (with band and an `explanation` string), the list of \
 `dimensions` and the list of `signals` (indicators). EVERY item — MOS, dimension and signal — has an \
@@ -189,14 +190,14 @@ FORMAT (VERY IMPORTANT): write the way a human analyst writes a brief for an exe
 natural and readable. Bullets, lists, tables, per-dimension sub-headings, or enumerating "dimension: score" \
 item by item are FORBIDDEN. Dimensions and numbers are WOVEN into the sentences, not listed.
 
-{structure}
+{{structure}}
 
 DEMAND VOLUME RULER (`demand_ruler`) — explain it WITHIN the flowing prose (no separate note/section):
 - If `mode` = "reference": each country's Demand Volume score is measured as a % of the product's \
 REFERENCE MARKET — the country `country` (with `volume` monthly searches), elected as the largest by REAL \
 volume among the evaluated markets (`candidates` = proposed candidates + the analyzed countries themselves). \
 Make clear that 100 would mean matching that biggest market, and the analyzed countries are worth that % of \
-it. The reference market is only the ruler — NOT part of {ruler_scope} (unless it was also requested).
+it. The reference market is only the ruler — NOT part of {{ruler_scope}} (unless it was also requested).
 - If `mode` = "fixed": no evaluated market had any volume; a generic fixed ceiling was used. **Warn \
 clearly** that the volume scores are only approximate in this case.
 
@@ -376,19 +377,23 @@ def _system_prompt(
     is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
     if is_pt:
         structure = _STRUCTURE_PT_SINGLE if single_country else _STRUCTURE_PT_MULTI
-        base = (
-            _SYSTEM_PROMPT_PT.replace("{structure}", structure)
-            .replace("{scope_intro}", _SCOPE_INTRO_PT[single_country])
-            .replace("{country_rule}", _COUNTRY_RULE_PT[single_country])
-            .replace("{ruler_scope}", _RULER_SCOPE_PT[single_country])
+        base = prompt_text(
+            "explanation-system-pt",
+            _SYSTEM_PROMPT_PT,
+            structure=structure,
+            scope_intro=_SCOPE_INTRO_PT[single_country],
+            country_rule=_COUNTRY_RULE_PT[single_country],
+            ruler_scope=_RULER_SCOPE_PT[single_country],
         )
     else:
         structure = _STRUCTURE_EN_SINGLE if single_country else _STRUCTURE_EN_MULTI
-        base = (
-            _SYSTEM_PROMPT_EN.replace("{structure}", structure)
-            .replace("{scope_intro}", _SCOPE_INTRO_EN[single_country])
-            .replace("{country_rule}", _COUNTRY_RULE_EN[single_country])
-            .replace("{ruler_scope}", _RULER_SCOPE_EN[single_country])
+        base = prompt_text(
+            "explanation-system-en",
+            _SYSTEM_PROMPT_EN,
+            structure=structure,
+            scope_intro=_SCOPE_INTRO_EN[single_country],
+            country_rule=_COUNTRY_RULE_EN[single_country],
+            ruler_scope=_RULER_SCOPE_EN[single_country],
         )
         if lang not in ("en", "en-us", "en_us", "english"):
             base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
@@ -396,9 +401,9 @@ def _system_prompt(
     base = f"{base}\n\n{_DEMAND_TERMS_RULE_PT if is_pt else _DEMAND_TERMS_RULE_EN}"
     if external_champion:
         base = f"{base}\n\n{_CHAMPION_RULE_PT if is_pt else _CHAMPION_RULE_EN}"
-    prompt_text = (user_prompt or "").strip()
-    if prompt_text:
-        block = (_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", prompt_text)
+    user_text = (user_prompt or "").strip()
+    if user_text:
+        block = (_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", user_text)
         base = f"{base}\n\n{block}"
     return base
 
