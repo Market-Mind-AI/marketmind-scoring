@@ -45,8 +45,32 @@ from app.utils.period import COUNTRY_LEVEL_PERIOD_KEY
 _ANNUAL_LOOKBACK_YEARS = 10
 
 
-def macro_gaps(country_iso3: str) -> list[CoverageGap]:
+def fontes_sem_cobertura_de(country) -> frozenset[DataSource]:  # noqa: ANN001
+    """As fontes que não cobrem este país, lidas do mapeamento dele.
+
+    Cada coluna de identificação em `countries` é o código do país NAQUELA
+    fonte. Sem código, a fonte não o conhece — e é isso que faz disto um dado
+    verificável em vez de uma lista de exceções mantida à mão: o mapeamento já
+    precisa existir para a coleta funcionar, e a ausência dele é a resposta.
+
+    Medido no armazém do OECD em 2026-09-22: o índice de preços imobiliários
+    (RHP) tem série para 22 dos 24 países suportados. Argentina e Peru não
+    estão, e eram duas tarefas falhando todas as noites desde sempre.
+    """
+    sem: set[DataSource] = set()
+    if getattr(country, "oecd_ref_area", None) is None:
+        sem.add(DataSource.OECD)
+    if getattr(country, "undata_location_id", None) is None:
+        sem.add(DataSource.UNDATA)
+    return frozenset(sem)
+
+
+def macro_gaps(country_iso3: str, *, fontes_sem_cobertura: frozenset[DataSource] = frozenset()) -> list[CoverageGap]:
     """Os gaps de dado macro de um país: World Bank, OECD e UN Data.
+
+    `fontes_sem_cobertura` tira do pedido as fontes que comprovadamente não têm
+    este país — ver `fontes_sem_cobertura_de`, que responde isso a partir do
+    mapeamento da tabela `countries` em vez de uma lista mantida à mão.
 
     Uma linha de cobertura por (país, indicador), não uma por mês. O laço sobre
     os últimos 6 meses que existia aqui produzia 6 × 12 gaps do World Bank por
@@ -63,6 +87,14 @@ def macro_gaps(country_iso3: str) -> list[CoverageGap]:
         (DataSource.OECD, OECD_RAW_CODES, {"start_period": str(ano - _ANNUAL_LOOKBACK_YEARS), "end_period": str(ano)}),
         (DataSource.UNDATA, UNDATA_RAW_CODES, params),
     ):
+        # Uma fonte que não cobre este país não é perguntada. Pedir e receber
+        # "não tenho" falha TODA noite, para sempre — e uma falha que nunca vai
+        # deixar de acontecer treina quem lê o log a ignorar falhas.
+        #
+        # Não é o mesmo que a fonte estar fora do ar, e a diferença é a que o
+        # sistema inteiro usa para decidir se insiste ou desiste.
+        if fonte in fontes_sem_cobertura:
+            continue
         for lista in codigos.values():
             for code in lista:
                 gaps.append(
@@ -93,7 +125,8 @@ class MacroPrewarmService:
         relatorio = {"paises": 0, "ja_frescos": 0, "coletados": 0, "falhados": 0}
 
         for iso3 in alvos:
-            gaps = macro_gaps(iso3)
+            pais = await self._country_repo.get_by_iso3(iso3)
+            gaps = macro_gaps(iso3, fontes_sem_cobertura=fontes_sem_cobertura_de(pais))
             statuses = await self._coverage_service.check_coverage(gaps)
             faltando = [gap for gap, status in zip(gaps, statuses, strict=True) if not status.covered]
             relatorio["paises"] += 1

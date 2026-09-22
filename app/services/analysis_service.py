@@ -38,7 +38,7 @@ from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.explanation_client import ExplanationClient
 from app.services.indicator_engine import IndicatorEngine
 from app.services.indicators import pytrends as pytrends_indicators
-from app.services.macro_coverage import macro_gaps
+from app.services.macro_coverage import fontes_sem_cobertura_de, macro_gaps
 from app.services.mos_engine import MosEngine
 from app.services.product_identification_service import _fallback_market, _has_terms, _market_to_dict
 from app.services.reference_market_client import ReferenceMarketClient, ReferenceMarketError
@@ -380,7 +380,8 @@ class AnalysisService:
         # quem coleta durante a análise e quem pré-aquece fora dela precisam
         # produzir exatamente a mesma lista, senão o pré-aquecimento esquenta
         # uma coisa e a análise pede outra.
-        gaps.extend(macro_gaps(country_iso3))
+        pais_macro = await self._country_repo.get_by_iso3(country_iso3)
+        gaps.extend(macro_gaps(country_iso3, fontes_sem_cobertura=fontes_sem_cobertura_de(pais_macro)))
 
         if not gaps:
             return []
