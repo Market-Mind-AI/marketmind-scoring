@@ -13,6 +13,15 @@ through a context variable: the same idiom as the token tally
 site fetches its prompt immediately before its model call, in the same task.
 
 Never raises: a prompt that cannot be fetched is the text in code.
+
+Langfuse never caches a fallback, and its HTTP client retries 5xx/timeouts on
+its own — so a name Langfuse has never confirmed would pay a synchronous
+0.4-7 s fetch on the event loop on every single call, cold or down. `_known`
+is the set of names Langfuse has confirmed it holds; only those are ever
+fetched inline (a cache hit, or a stale hit the SDK refreshes in the
+background). Everything else uses the code text with no network on the
+request path. `warm` (and the keep-warm loop in app/main.py) is what moves a
+name into `_known`.
 """
 
 import logging
@@ -31,30 +40,76 @@ _FETCH_TIMEOUT_SECONDS = 3
 
 _linked: ContextVar[Any | None] = ContextVar("linked_prompt", default=None)
 
+# Names Langfuse has confirmed it holds. Only these are ever fetched inline;
+# everything else uses the code text with no network on the request path.
+_known: set[str] = set()
+
+# (name, version) pairs already warned about a placeholder mismatch (F3),
+# so a persistent drift logs once rather than on every call.
+_warned_drift: set[tuple[str, int]] = set()
+
+# The loaded count warm() last logged a warning for, so the keep-warm loop
+# (every 60 s) doesn't repeat the same warning forever. None before the
+# first call.
+_last_reported: int | None = None
+
 
 def prompt_text(name: str, default: str, **variables: str) -> str:
     """The instruction called `name`, with its variables filled in."""
+    compiled_default = TemplateParser.compile_template(default, variables)
     client = observability.client()
-    if client is None:
-        return TemplateParser.compile_template(default, variables)
+    if client is None or name not in _known:
+        # Unconfigured, or a name Langfuse has never confirmed: no network on
+        # the request path.
+        _linked.set(None)
+        return compiled_default
     try:
         stored = client.get_prompt(
             name,
             label=LABEL,
             type="text",
             fallback=default,
-            max_retries=1,
+            max_retries=0,
             fetch_timeout_seconds=_FETCH_TIMEOUT_SECONDS,
         )
-        text = stored.compile(**variables)
     except Exception:  # noqa: BLE001 — a prompt that cannot be fetched is the text in code
         logger.debug("Could not fetch prompt %s; using the text in code", name, exc_info=True)
+        _known.discard(name)
         _linked.set(None)
-        return TemplateParser.compile_template(default, variables)
+        return compiled_default
     # A fallback is the code text wearing a prompt's clothes: Langfuse cannot
     # link a generation to it, and it must not inherit a stale link either.
-    _linked.set(None if stored.is_fallback else stored)
-    return text
+    # It also means Langfuse no longer confirms this name, so the next call
+    # goes back to the code text with no network, until warm() reconfirms it.
+    if stored.is_fallback:
+        _known.discard(name)
+        _linked.set(None)
+        return compiled_default
+    expected = TemplateParser.find_variable_names(default)
+    if set(stored.variables) != set(expected):
+        _warn_about_drift(name, stored, expected)
+        _linked.set(None)
+        return compiled_default
+    _linked.set(stored)
+    return stored.compile(**variables)
+
+
+def _warn_about_drift(name: str, stored: Any, expected: list[str]) -> None:
+    """A stored prompt whose variables don't match the code default (F3):
+    using it would silently leave a placeholder unfilled, or drop one the
+    code text relies on. Logged once per (name, version) — the name stays in
+    `_known`, so a corrected version is picked up on the next refresh."""
+    key = (name, stored.version)
+    if key in _warned_drift:
+        return
+    _warned_drift.add(key)
+    logger.warning(
+        "Prompt %s v%s in Langfuse has variables %s, expected %s; using the text in code",
+        name,
+        stored.version,
+        stored.variables,
+        expected,
+    )
 
 
 def take_linked_prompt() -> Any | None:
@@ -64,15 +119,47 @@ def take_linked_prompt() -> Any | None:
     return stored
 
 
-def warm(registry: Mapping[str, str]) -> None:
-    """Fetch every prompt once, so no request pays the first fetch.
+def warm(registry: Mapping[str, str]) -> int:
+    """Confirm every not-yet-known name once, so a request never pays the
+    first fetch.
 
     get_prompt is a synchronous HTTP call; inside a request it would block the
-    event loop for as long as Langfuse takes to answer. Run from a thread at
-    startup, the fetches land in the SDK's cache, which then refreshes itself
-    in the background.
+    event loop for as long as Langfuse takes to answer. Run from a thread,
+    repeatedly (see app.main's keep-warm loop), so a name seeded or recovered
+    after startup still gets off the request path on its own. A name already
+    in `_known` is skipped: steady state makes no request at all.
+
+    Returns how many of the registry's names are now in `_known`.
     """
-    for name, default in registry.items():
-        prompt_text(name, default)
+    client = observability.client()
+    if client is None:
+        return 0
+    for name in registry:
+        if name in _known:
+            continue
+        try:
+            stored = client.get_prompt(
+                name,
+                label=LABEL,
+                type="text",
+                max_retries=0,
+                fetch_timeout_seconds=_FETCH_TIMEOUT_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 — an unconfirmed name just stays unconfirmed
+            logger.debug("Could not warm prompt %s; using the text in code", name, exc_info=True)
+            continue
+        if not stored.is_fallback:
+            _known.add(name)
     take_linked_prompt()
-    logger.info("Warmed %d prompts from Langfuse", len(registry))
+    loaded = sum(1 for name in registry if name in _known)
+    _report(loaded, len(registry))
+    return loaded
+
+
+def _report(loaded: int, total: int) -> None:
+    global _last_reported
+    if loaded == total:
+        logger.info("Warmed %d of %d prompts from Langfuse", loaded, total)
+    elif loaded != _last_reported:
+        logger.warning("Warmed %d of %d prompts from Langfuse; using the code text for the rest", loaded, total)
+    _last_reported = loaded

@@ -1049,7 +1049,7 @@ Expected: six `<name>: created` lines. On a rerun, six `exists v1` lines.
 
 ```bash
 docker compose restart marketmind-scoring-api && until curl -sf localhost:8004/health >/dev/null; do sleep 2; done
-docker logs marketmind-scoring-api 2>&1 | grep -c "Warmed 6 prompts"   # expect 1
+docker logs marketmind-scoring-api 2>&1 | grep -c "Warmed 6 of 6 prompts"   # expect 1
 cd ../marketmind-orchestrator && poetry run python - <<'EOF'
 import base64, json, urllib.request
 from app.config import get_settings
