@@ -1,7 +1,7 @@
 import asyncio
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.db.session import get_session
 from app.domain.enums import DataSource
 from app.schemas.responses import ExternalSourceStatus, HealthResponse
+from app.services.sentinela import Sentinela
 
 router = APIRouter()
 
@@ -61,6 +62,30 @@ async def _probe(source: DataSource) -> ExternalSourceStatus:
 )
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get(
+    "/health/nightly",
+    summary="A noite correu bem — resultado, não processo",
+    description=(
+        "As probes e os eventos do Kubernetes dizem se os processos estão de "
+        "pé. Isto diz se o que eles produziram presta.\n\n"
+        "Não é a mesma pergunta. Em 22/09/2026 o refresh do World Bank "
+        "recoletava 288 indicadores por noite e terminava `Complete`, em verde, "
+        "com nada certo — porque nunca registrava ter verificado. Processo de "
+        "pé, resultado errado.\n\n"
+        "Responde 200 quando tudo está bem e 503 quando não. As duas leituras "
+        "são de propósito: uma pessoa abre e lê o detalhe de cada verificação, "
+        "e o CronJob diário chama com `curl --fail`, onde um 503 vira Job "
+        "`Failed` — que é o que a regra de alerta já observa. O mesmo alarme, "
+        "sem infraestrutura nova."
+    ),
+)
+async def nightly(response: Response, session: AsyncSession = Depends(get_session)) -> dict:
+    relatorio = (await Sentinela(session).verificar()).to_dict()
+    if not relatorio["ok"]:
+        response.status_code = 503
+    return relatorio
 
 
 @router.get(
