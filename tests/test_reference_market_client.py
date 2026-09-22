@@ -21,8 +21,8 @@ async def test_candidates_returns_ranked_shortlist() -> None:
     provider.complete = AsyncMock(
         return_value=ReferenceCandidatesResult(
             candidates=[
-                MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["air fryer"], confidence=0.95),
-                MarketTerms(country="USA", primary_name="air fryer", search_terms=["air fryer"], confidence=0.9),
+                MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["air fryer"], search_language="pt", confidence=0.95),
+                MarketTerms(country="USA", primary_name="air fryer", search_terms=["air fryer"], search_language="en", confidence=0.9),
             ]
         )
     )

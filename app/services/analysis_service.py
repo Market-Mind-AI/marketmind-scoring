@@ -147,6 +147,28 @@ def _is_available(values: dict[str, IndicatorValue], code: IndicatorCode) -> boo
     )
 
 
+def _idioma_do_mercado(market: dict[str, Any] | None, country) -> str:  # noqa: ANN001
+    """O idioma em que a busca deste país foi escrita.
+
+    Dito pelo modelo na MESMA chamada que produziu os termos — ele acabou de
+    escolher o idioma ao escrevê-los, então perguntar de novo, ou manter uma
+    tabela dizendo o mesmo, é trabalho sem informação nova.
+
+    Era uma coluna preenchida à mão em `countries`. Duas coisas estavam erradas
+    nisso: acrescentar um mercado exigia alguém cadastrar a linha antes, e o
+    valor era UM por país para sempre — Índia e Canadá ficaram "en", o que é
+    defensável na média e falso para produtos cujo público busca em hindi ou em
+    francês.
+
+    A coluna continua como último recurso para mercados enriquecidos antes
+    desta mudança, e só por isso; nada novo precisa ser cadastrado nela.
+    """
+    do_mercado = (market or {}).get("search_language")
+    if do_mercado:
+        return str(do_mercado)
+    return (getattr(country, "search_language", None) or "en")
+
+
 class AnalysisService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -217,9 +239,6 @@ class AnalysisService:
                 )
                 await self._session.commit()
 
-    async def _search_language(self, iso3: str) -> str | None:
-        country = await self._country_repo.get_by_iso3(iso3)
-        return country.search_language if country is not None else None
 
     async def ensure_product_enrichment(
         self, entity: Any, countries: list[str], *, com_candidatos: bool = True
@@ -238,7 +257,11 @@ class AnalysisService:
         missing = [c for c in countries if not _has_terms((entity.localized_markets or {}).get(c))]
         if missing:
             try:
-                fill = [(iso3, await self._search_language(iso3)) for iso3 in missing]
+                # Sem dica de idioma. Pedir que o modelo DIGA o idioma e ao
+                # mesmo tempo dizer a ele qual é fecha um círculo: a resposta
+                # passa a ser o que mandamos, e a tabela que mandávamos é
+                # justamente a que deixou de existir.
+                fill = [(iso3, None) for iso3 in missing]
                 markets = await self._enrichment_client.localized_markets(
                     product_name=product_name, brand=None, category=entity.category, countries=fill
                 )
@@ -320,7 +343,9 @@ class AnalysisService:
                         mercado_familia.get("primary_name")
                     )
             location = country.iso2 if country is not None else None
-            language = (country.search_language if country is not None else None) or "en"
+            # O idioma vem de quem escreveu os termos, não de um cadastro. Ver
+            # _idioma_do_mercado.
+            language = _idioma_do_mercado(market, country)
             # What this country is actually searched for, recorded for the
             # caller. It is the one part of the pipeline a model wrote, and
             # nothing downstream reveals it: a wrong native term produces a
@@ -434,7 +459,7 @@ class AnalysisService:
             country = await self._country_repo.get_by_iso3(iso3)
             if country is None or country.iso2 is None:
                 continue
-            language = country.search_language or "en"
+            language = _idioma_do_mercado(cand, country)
             gaps.append(
                 CoverageGap(
                     source=DataSource.PYTRENDS,
@@ -508,7 +533,7 @@ class AnalysisService:
                 country.iso2,
                 period_key,
                 seed_terms=pytrends_indicators.build_seed_terms(terms),
-                language=country.search_language,
+                language=_idioma_do_mercado(cand, country),
             )
             if r.raw_value is not None and float(r.raw_value) > 0:
                 measured.append({"country": iso3, "volume": float(r.raw_value)})

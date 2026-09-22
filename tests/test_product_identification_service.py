@@ -20,6 +20,7 @@ def _identification(**overrides: object) -> ProductIdentification:
         "markets": [
             MarketTerms(
                 country="USA",
+                search_language="en",
                 primary_name="air fryer",
                 search_terms=["air fryer", "airfryer"],
                 excluded_terms=["deep fryer"],

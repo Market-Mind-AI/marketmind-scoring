@@ -33,6 +33,11 @@ def _market_to_dict(market: MarketTerms) -> dict[str, Any]:
         "formal_name": market.formal_name,
         "search_terms": market.search_terms,
         "excluded_terms": market.excluded_terms,
+        # O idioma em que ESTES termos foram escritos, dito por quem os
+        # escreveu. Era uma coluna preenchida à mão em `countries`, um valor
+        # por país fixado para sempre — Índia e Canadá como "en", e nenhuma
+        # forma de acrescentar um país sem alguém cadastrar a linha primeiro.
+        "search_language": market.search_language,
         "confidence": market.confidence,
     }
 
@@ -149,7 +154,8 @@ class ProductIdentificationService:
 
         # (1) localized_markets for the countries vision missed — local TEXT LLM.
         try:
-            fill = [(iso3, await self._search_language(iso3)) for iso3 in missing]
+            # Sem dica de idioma — ver a nota em analysis_service.
+            fill = [(iso3, None) for iso3 in missing]
             for market in await self._enrichment_client.localized_markets(
                 product_name=product_name, brand=brand, category=category, countries=fill
             ):
@@ -182,6 +188,3 @@ class ProductIdentificationService:
             logger.info("No reference-market candidates — analysis will fall back to another Demand Volume ruler")
         return localized_markets, reference_candidates
 
-    async def _search_language(self, iso3: str) -> str | None:
-        country = await self._country_repo.get_by_iso3(iso3)
-        return country.search_language if country is not None else None

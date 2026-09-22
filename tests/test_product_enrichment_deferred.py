@@ -25,9 +25,11 @@ def _bare_service() -> tuple[Any, list[Any]]:
     return AnalysisService(AsyncMock()), patchers
 
 
-def _market(country: str, term: str) -> SimpleNamespace:
+def _market(country: str, term: str, language: str = "en") -> SimpleNamespace:
+    # `search_language` é obrigatório no modelo: quem escreve os termos diz em
+    # que idioma os escreveu, e o dublê tem de refletir isso.
     return SimpleNamespace(
-        country=country, primary_name=term, formal_name=None,
+        country=country, primary_name=term, formal_name=None, search_language=language,
         search_terms=[term], excluded_terms=[], confidence=0.9,
     )  # fmt: skip
 
@@ -56,7 +58,11 @@ async def test_enrichment_called_only_for_missing_country() -> None:
 
     # JPN missing → enrichment asked ONLY for JPN (with its language); merged in.
     svc._enrichment_client.localized_markets.assert_awaited_once()
-    assert svc._enrichment_client.localized_markets.await_args.kwargs["countries"] == [("JPN", "ja")]
+    # Sem dica de idioma. Pedir que o modelo DIGA em que idioma se busca naquele
+    # país e ao mesmo tempo informá-lo fecha um círculo: a resposta vira o que
+    # mandamos, e o que mandávamos era a tabela preenchida à mão que deixou de
+    # existir.
+    assert svc._enrichment_client.localized_markets.await_args.kwargs["countries"] == [("JPN", None)]
     assert entity.localized_markets["JPN"]["search_terms"] == ["ノンフライヤー"]
     assert entity.localized_markets["USA"]["search_terms"] == ["air fryer"]  # untouched
     # reference_candidates already present → NOT regenerated.
@@ -99,3 +105,32 @@ async def test_reference_candidates_outside_basket_dropped() -> None:
             p.stop()
 
     assert [c["country"] for c in entity.reference_candidates] == ["BRA"]  # XXX dropped (outside basket)
+
+
+def test_the_language_comes_from_whoever_wrote_the_terms() -> None:
+    """Era uma coluna preenchida à mão em `countries`: um idioma por país,
+    fixado para sempre, e nenhum jeito de acrescentar um mercado sem alguém
+    cadastrar a linha antes. Índia e Canadá ficaram "en" — defensável na média e
+    falso para produtos cujo comprador busca em hindi ou em francês.
+
+    Quem escreveu os termos escolheu o idioma ao escrevê-los. Basta declará-lo.
+    """
+    from app.services.analysis_service import _idioma_do_mercado
+
+    pais = SimpleNamespace(search_language="en")
+    mercado = {"search_terms": ["picanha"], "search_language": "pt"}
+
+    assert _idioma_do_mercado(mercado, pais) == "pt", "o do mercado ganha do cadastro"
+
+
+def test_a_market_from_before_this_change_still_has_an_answer() -> None:
+    """A coluna continua como último recurso, e só por isso: mercados curados
+    antes desta mudança não carregam o idioma, e uma análise deles não pode
+    parar por causa disso."""
+    from app.services.analysis_service import _idioma_do_mercado
+
+    antigo = {"search_terms": ["air fryer"]}
+
+    assert _idioma_do_mercado(antigo, SimpleNamespace(search_language="ja")) == "ja"
+    assert _idioma_do_mercado(antigo, SimpleNamespace(search_language=None)) == "en"
+    assert _idioma_do_mercado(None, None) == "en"

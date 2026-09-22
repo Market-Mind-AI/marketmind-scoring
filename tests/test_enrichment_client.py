@@ -16,7 +16,7 @@ async def test_localized_markets_returns_structured_markets() -> None:
     provider = AsyncMock()
     provider.complete = AsyncMock(
         return_value=LocalizedMarketsResult(
-            markets=[MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["fritadeira"], confidence=0.9)]
+            markets=[MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["fritadeira"], search_language="pt", confidence=0.9)]
         )
     )
     client = _client(provider)

@@ -37,6 +37,14 @@ class MarketTerms(BaseModel):
     genuinely type, not literal translations."""
 
     country: str = Field(description="ISO-3166 alpha-3 country code this market entry is for (e.g. 'PRT', 'USA').")
+    search_language: str = Field(
+        description=(
+            "ISO 639-1 code of the language these search_terms are written in — the language people in this "
+            "country actually search this product in ('pt' for Brazil, 'ar' for Saudi Arabia, 'en' for India). "
+            "You already chose it by writing the terms; state it. Where a country searches in more than one, "
+            "give the one THESE terms are in, which should be the one most buyers of THIS product use."
+        )
+    )
     primary_name: str = Field(
         description="The single most-used real search term for this product in this country (a local buyer's default)."
     )

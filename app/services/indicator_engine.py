@@ -226,7 +226,11 @@ class IndicatorEngine:
         # localized_markets) with the SAME reference terms its demand was
         # collected under — used only for the off-request "champion" benchmark.
         location = country.iso2 or resolve_source_country_code(DataSource.PYTRENDS, country)
-        language = country.search_language
+        # Do mercado curado, que é onde quem escreveu os termos disse em que
+        # idioma os escreveu. A coluna do país é o último recurso, para
+        # mercados anteriores a essa mudança.
+        mercado_do_pais = (entity.localized_markets or {}).get(country.iso3) if entity is not None else None
+        language = (mercado_do_pais or {}).get("search_language") or getattr(country, "search_language", None)
         if terms_override:
             search_terms = as_term_list(terms_override)
             excluded_terms: list[str] = []
