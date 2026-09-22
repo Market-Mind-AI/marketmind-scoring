@@ -60,19 +60,39 @@ class CoverageService:
                 # here would be the same question twice.
                 stale.update({id(gap): True for gap in do_source})
                 continue
-            paises = sorted({gap.country for gap in do_source})
+            # Cada serviço indexa o país do jeito dele, e perguntar no código
+            # errado não dá erro: devolve ZERO pares, que a regra abaixo lê como
+            # "nunca verificado" e portanto vencido. O UN Data indexa por ISO2, e
+            # perguntar por ISO3 fazia a coleta INTEIRA dele ser refeita em toda
+            # passagem, para sempre — caro, silencioso, e exatamente o oposto do
+            # que um índice de frescor existe para fazer.
+            como_pedir = {gap.country: await self._codigo_para(source, gap.country) for gap in do_source}
             indicadores = sorted({gap.indicator_code for gap in do_source})
             respostas = await self._collection_client.freshness(
                 source,
-                countries=paises,
+                countries=sorted({c for c in como_pedir.values() if c}),
                 indicators=indicadores,
                 stale_after_days=settings.coverage_stale_after_days,
             )
             for gap in do_source:
                 # A pair the service did not report on was never checked there,
                 # which is stale — never "fresh by omission".
-                stale[id(gap)] = respostas.get((gap.country, gap.indicator_code), True)
+                chave = (como_pedir.get(gap.country), gap.indicator_code)
+                stale[id(gap)] = respostas.get(chave, True)
         return stale
+
+    async def _codigo_para(self, source: DataSource, iso3: str) -> str | None:
+        """O código com que ESTE serviço indexa o país.
+
+        World Bank e OECD respondem por ISO3; o UN Data guarda ISO2. Não há
+        convenção comum a seguir — o que existe é a tabela `countries`, que tem
+        as duas grafias, então a tradução acontece aqui e não vira suposição
+        espalhada pelo código.
+        """
+        if source != DataSource.UNDATA:
+            return iso3
+        pais = await self._country_repo.get_by_iso3(iso3)
+        return pais.iso2 if pais is not None else None
 
     async def check_coverage(self, gaps: list[CoverageGap]) -> list[GapStatus]:
         """Pure read — never dispatches collection. Used by callers that want to

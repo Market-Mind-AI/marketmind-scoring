@@ -208,3 +208,53 @@ async def test_attaches_to_already_active_task_instead_of_redispatching(db_sessi
     assert results[0].id == other_task.id
     assert results[0].status == JobTaskStatus.PENDING
     client.dispatch.assert_not_awaited()
+
+
+async def test_the_un_service_is_asked_in_the_code_it_actually_indexes_by(db_session: AsyncSession) -> None:
+    """Asking in the wrong code does not raise — it returns ZERO pairs, which
+    the rule above reads as "never checked" and therefore stale. The UN service
+    indexes by ISO2, and asking it for ISO3 made its ENTIRE collection redo
+    itself on every pass, for ever: expensive, silent, and the exact opposite of
+    what a freshness index is for."""
+    from sqlalchemy import select
+
+    from app.db.models.country import Country
+
+    # O banco de teste já vem com os países semeados; só garante o que importa.
+    pais = (await db_session.execute(select(Country).where(Country.iso3 == "BRA"))).scalar_one_or_none()
+    if pais is None:
+        pais = Country(iso3="BRA", iso2="BR", name="Brazil", continent="South America")
+        db_session.add(pais)
+        await db_session.flush()
+    assert pais.iso2 == "BR"
+
+    client = _mock_client(fresh=True)
+    service = CoverageService(db_session, collection_client=client)
+    gap = CoverageGap(
+        source=DataSource.UNDATA,
+        country="BRA",
+        indicator_code="MEDIAN_AGE",
+        period_key="2026",
+        collection_params={"start_year": 2020, "end_year": 2026},
+    )
+
+    resultado = await service.check_coverage([gap])
+
+    assert client.freshness.await_args.kwargs["countries"] == ["BR"], "perguntado em ISO2"
+    assert resultado[0].covered is True, "e a resposta tem de casar com o gap, que é ISO3"
+
+
+async def test_the_other_services_keep_being_asked_in_iso3(db_session: AsyncSession) -> None:
+    client = _mock_client(fresh=True)
+    service = CoverageService(db_session, collection_client=client)
+    gap = CoverageGap(
+        source=DataSource.WORLDBANK,
+        country="BRA",
+        indicator_code="NY.GDP.PCAP.CD",
+        period_key="2026",
+        collection_params={"start_year": 2020, "end_year": 2026},
+    )
+
+    await service.check_coverage([gap])
+
+    assert client.freshness.await_args.kwargs["countries"] == ["BRA"]
