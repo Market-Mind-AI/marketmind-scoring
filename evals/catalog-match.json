@@ -1,0 +1,21 @@
+{
+  "dataset": "catalog-match",
+  "description": "The LLM step that decides whether a query names the same product as a catalog entry. Half the cases must answer 'none'.",
+  "items": [
+    {"id": "alias-air-fryer", "input": {"text": "freidora de aire", "candidates": [{"title": "air fryer", "category": "Kitchen Appliances"}, {"title": "deep fryer", "category": "Kitchen Appliances"}]}, "expected_output": {"expected_title": "air fryer"}},
+    {"id": "oil-deep-fryer", "input": {"text": "fritadeira de óleo", "candidates": [{"title": "air fryer", "category": "Kitchen Appliances"}, {"title": "deep fryer", "category": "Kitchen Appliances"}]}, "expected_output": {"expected_title": "deep fryer"}, "note": "An oil deep-fryer is not an air fryer."},
+    {"id": "pork-picanha", "input": {"text": "picanha suína", "candidates": [{"title": "picanha", "category": "Beef"}, {"title": "pork shoulder", "category": "Pork"}]}, "expected_output": {"expected_title": null}, "note": "Pork picanha is a different product from beef picanha, and no candidate is it."},
+    {"id": "yerba-buena", "input": {"text": "yerba buena", "candidates": [{"title": "yerba mate", "category": "Tea & Infusions"}, {"title": "mint", "category": "Herbs"}]}, "expected_output": {"expected_title": "mint"}},
+    {"id": "coconut-oil", "input": {"text": "aceite de coco orgánico", "candidates": [{"title": "extra virgin olive oil", "category": "Cooking Oils"}, {"title": "coconut oil", "category": "Cooking Oils"}]}, "expected_output": {"expected_title": "coconut oil"}},
+    {"id": "brand-partition", "input": {"text": "Cardhu 12", "candidates": [{"title": "single malt whisky", "category": "Spirits"}, {"title": "Cardhu single malt whisky", "category": "Spirits"}]}, "expected_output": {"expected_title": "Cardhu single malt whisky"}, "note": "A query naming a brand resolves to that brand's entry, not the generic family."},
+    {"id": "generic-not-brand", "input": {"text": "whisky single malt", "candidates": [{"title": "Cardhu single malt whisky", "category": "Spirits"}]}, "expected_output": {"expected_title": null}, "note": "The generic term must not resolve to one brand's entry."},
+    {"id": "translation", "input": {"text": "café colombiano en grano", "candidates": [{"title": "colombian coffee", "category": "Coffee"}]}, "expected_output": {"expected_title": "colombian coffee"}},
+    {"id": "japanese-script", "input": {"text": "カーデュ 12年", "candidates": [{"title": "Cardhu single malt whisky", "category": "Spirits"}, {"title": "green tea", "category": "Tea"}]}, "expected_output": {"expected_title": "Cardhu single malt whisky"}},
+    {"id": "accessory-vs-appliance", "input": {"text": "papel para airfryer", "candidates": [{"title": "air fryer", "category": "Kitchen Appliances"}, {"title": "air fryer liners", "category": "Kitchen Accessories"}]}, "expected_output": {"expected_title": "air fryer liners"}},
+    {"id": "size-variant", "input": {"text": "air fryer 8L", "candidates": [{"title": "air fryer", "category": "Kitchen Appliances"}]}, "expected_output": {"expected_title": "air fryer"}, "note": "A size variant is the same product."},
+    {"id": "homonym-apple", "input": {"text": "manzana fresca", "candidates": [{"title": "Apple iPhone", "category": "Smartphones"}, {"title": "apple juice", "category": "Beverages"}]}, "expected_output": {"expected_title": null}},
+    {"id": "spare-part", "input": {"text": "filtro HEPA para robot aspirador", "candidates": [{"title": "robot vacuum", "category": "Home Appliances"}, {"title": "HEPA filter", "category": "Appliance Parts"}]}, "expected_output": {"expected_title": "HEPA filter"}},
+    {"id": "sunscreen-vs-aftersun", "input": {"text": "protector solar SPF 50", "candidates": [{"title": "after sun lotion", "category": "Skincare"}, {"title": "sunscreen", "category": "Skincare"}]}, "expected_output": {"expected_title": "sunscreen"}},
+    {"id": "unrelated-supplements", "input": {"text": "creatina monohidratada", "candidates": [{"title": "whey protein", "category": "Supplements"}, {"title": "BCAA", "category": "Supplements"}]}, "expected_output": {"expected_title": null}}
+  ]
+}
