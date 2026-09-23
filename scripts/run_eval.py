@@ -162,6 +162,20 @@ def estimate(dataset: str, count: int) -> float:
     return COST_PER_CASE[dataset] * count
 
 
+def _spread(items: list[Any], limit: int) -> list[Any]:
+    """A smoke sample taken across the dataset, not off one end of it.
+
+    Langfuse returns items newest-first, so the first five were simply the last
+    five cases uploaded — for identify-product that was three of the four
+    "names no product" cases, and the run said little about identification.
+    Stepping through the list keeps the sample mixed whatever the order.
+    """
+    if limit >= len(items):
+        return list(items)
+    step = len(items) / limit
+    return [items[int(i * step)] for i in range(limit)]
+
+
 def _run(client: Any, dataset_name: str, limit: int | None, label: str) -> None:
     # DatasetClient.run_experiment (client.get_dataset(name).run_experiment) has
     # no `data` parameter: it always runs every item in the dataset, so a
@@ -172,7 +186,7 @@ def _run(client: Any, dataset_name: str, limit: int | None, label: str) -> None:
     item_evaluators, run_evaluators = EVALUATORS[dataset_name]
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
     dataset = client.get_dataset(dataset_name)
-    items = dataset.items if limit is None else dataset.items[:limit]
+    items = dataset.items if limit is None else _spread(dataset.items, limit)
     result = client.run_experiment(
         name=f"{dataset_name} @ {label}",
         run_name=f"{dataset_name} @ {label} — {stamp}",

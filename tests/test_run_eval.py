@@ -269,3 +269,15 @@ def test_archive_duplicates_is_its_own_mode_like_upload(monkeypatch) -> None:
 
     assert result == 0
     assert fake.ran_experiment is False
+
+
+def test_the_smoke_sample_is_spread_across_the_dataset() -> None:
+    """Langfuse returns items newest-first, so taking the first five sampled one
+    end of the file — for identify-product, three of the four no-product cases."""
+    items = list(range(25))
+
+    chosen = run_eval._spread(items, 5)
+
+    assert len(chosen) == 5
+    assert chosen == [0, 5, 10, 15, 20]
+    assert run_eval._spread(items, 40) == items
