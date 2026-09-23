@@ -25,10 +25,22 @@ def identification(*, input: dict, output: dict | None, expected_output: dict, *
     found = bool((output or {}).get("product_found"))
     expected_found = bool(expected_output["product_found"])
     results = [Evaluation(name="product_found_correct", value=1.0 if found == expected_found else 0.0)]
-    if not expected_found or not found:
-        # Nothing else is meaningful: either the case expects no product, or the
-        # run produced none, and scoring an absent name as wrong twice would
-        # count the same mistake twice.
+    if not expected_found:
+        # The case expects no product: nothing else is meaningful to check.
+        return results
+
+    if not found:
+        # A product was expected but none was found. This still scores the
+        # metrics it missed, rather than skipping them: an early return here
+        # would drop this case out of mean_of("product_name_match") etc.
+        # entirely, so a prompt that refuses more often would average over a
+        # smaller, easier set of cases and look better for refusing more.
+        comment = "no product was identified"
+        results.append(Evaluation(name="product_name_match", value=0.0, comment=comment))
+        if expected_output.get("category_required"):
+            results.append(Evaluation(name="category_present", value=0.0, comment=comment))
+        if expected_output.get("brand"):
+            results.append(Evaluation(name="brand_correct", value=0.0, comment=comment))
         return results
 
     accepted = {normalize(name) for name in expected_output["product_name"]}
@@ -91,4 +103,5 @@ def mean_of(metric: str):
             return []
         return [Evaluation(name=f"{metric}_mean", value=sum(values) / len(values))]
 
+    run_evaluator.__name__ = f"{metric}_mean"
     return run_evaluator

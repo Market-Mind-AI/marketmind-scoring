@@ -27,6 +27,14 @@ def test_ids_are_unique(name: str) -> None:
     assert len(ids) == len(set(ids))
 
 
+def test_ids_are_unique_across_datasets() -> None:
+    """Langfuse dataset item ids are global: reusing one across datasets would
+    re-point the existing item instead of creating a second one."""
+    ids = [case.id for name in cases.DATASETS for case in cases.load(name).items]
+
+    assert len(ids) == len(set(ids))
+
+
 def test_identification_cases_carry_what_the_evaluators_read() -> None:
     for case in cases.load("identify-product").items:
         assert case.input["hint_text"]

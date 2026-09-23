@@ -22,7 +22,7 @@ What exists today is **online** measurement only: every analysis reports five me
 - **Datasets:** product identification, catalog matching and reference markets. The narrative is **out of scope** here: it needs evidence packets, which only completed analyses produce, and that needs live DataForSEO.
 - **Judge:** Langfuse-managed evaluators, not the orchestrator's in-code judge. The orchestrator is not touched in this piece, and its `app/quality.py` judge stays off and documented as such.
 - **Cases live in git** (`evals/*.json`) and are uploaded to Langfuse, the same way prompts are seeded.
-- **Default verification is a 5-case smoke sweep** (about US$0.40). The full sweep (about US$2.20 per prompt version) is opt-in.
+- **Default verification is a 5-case smoke sweep** (at least US$0.65: 5 × (0.045 + 0.011 + 0.073)). The full sweep (about US$2.20 per prompt version) is opt-in. Every figure here is a floor, not a ceiling: adaptive thinking is on by default and billed as output, so any given case can cost more than its measured estimate.
 
 ## Non-goals
 
@@ -126,7 +126,7 @@ This is configuration, not code, because Langfuse calls the model itself. The sp
 
 ## Costs
 
-Nothing runs by itself. Uploading is free. Per run: about $1.15 for `identify-product` (25 cases), $0.17 for `catalog-match` (15) and $0.88 for `reference-markets` (12). The 5-case smoke sweep over all three is about $0.40. The judge costs about $0.02 per narrative it judges, at whatever sampling you set in Langfuse.
+Nothing runs by itself. Uploading is free. Per run: about $1.15 for `identify-product` (25 cases), $0.17 for `catalog-match` (15) and $0.88 for `reference-markets` (12). The 5-case smoke sweep over all three is at least $0.65 (5 × (0.045 + 0.011 + 0.073)). The judge costs about $0.02 per narrative it judges, at whatever sampling you set in Langfuse. Every figure above is a floor: adaptive thinking is on by default and billed as output, so a case can cost more.
 
 ## Testing
 

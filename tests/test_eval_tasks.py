@@ -88,6 +88,36 @@ async def test_catalog_matching_builds_candidates_from_the_case() -> None:
     assert "freidora de aire" in provider.user
 
 
+async def test_catalog_matching_passes_a_candidates_curated_terms_to_the_prompt() -> None:
+    """CatalogMatcher._describe renders 'no curated terms' when a candidate's
+    localized_markets is None (F5) — a case that turns on exactly those terms
+    needs them to reach the prompt to be judged fairly."""
+    from app.services.catalog_matcher import CatalogMatchDecision
+
+    provider = AsyncMock()
+    provider.complete = AsyncMock(return_value=CatalogMatchDecision(entity_key="", reasoning="none of them"))
+
+    with patch("evaluation.tasks._catalog_provider", return_value=provider):
+        await tasks.match_catalog(
+            item={
+                "input": {
+                    "text": "fritadeira de óleo",
+                    "candidates": [
+                        {
+                            "title": "deep fryer",
+                            "category": "Kitchen Appliances",
+                            "search_terms": ["fritadeira de óleo", "freidora de aceite"],
+                        }
+                    ],
+                }
+            }
+        )
+
+    # "freidora de aceite" only reaches the prompt through search_terms — the
+    # query text itself is "fritadeira de óleo", a different string.
+    assert "freidora de aceite" in provider.complete.await_args.kwargs["user"]
+
+
 async def test_catalog_matching_reports_no_match_as_none() -> None:
     from app.services.catalog_matcher import CatalogMatchDecision
 

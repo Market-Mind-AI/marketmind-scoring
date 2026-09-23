@@ -173,6 +173,31 @@ def test_a_failed_call_scores_zero_rather_than_crashing() -> None:
     assert scores["product_found_correct"] == 0.0
 
 
+def test_expecting_a_product_but_finding_none_scores_the_missed_metrics_zero() -> None:
+    """An early return here would drop the case out of every mean_of(...)
+    but product_found_correct, so a prompt that refuses more often would be
+    scored over an easier, smaller set of cases and look better for it."""
+    scores = _by_name(
+        evaluators.identification(
+            input={"hint_text": "air fryer 5.5L"},
+            output={"product_found": False},
+            expected_output={
+                "product_found": True,
+                "product_name": ["air fryer"],
+                "category_required": True,
+                "brand": "Cardhu",
+            },
+        )
+    )
+
+    assert scores == {
+        "product_found_correct": 0.0,
+        "product_name_match": 0.0,
+        "category_present": 0.0,
+        "brand_correct": 0.0,
+    }
+
+
 def test_the_right_catalog_entry_scores_one() -> None:
     scores = _by_name(
         evaluators.catalog(
@@ -242,7 +267,9 @@ def test_the_run_level_evaluator_averages_one_metric() -> None:
 def test_an_apostrophe_does_not_split_a_name() -> None:
     assert evaluators.normalize("women's running shoes") == evaluators.normalize("womens running shoes")
     assert evaluators.normalize("Levi’s") == evaluators.normalize("levis")
-    assert evaluators.normalize("Levi’s") == evaluators.normalize("Levi’s")
+    assert evaluators.normalize("Levi’s") == evaluators.normalize("Levi's")
+
+
 def test_a_possessive_name_still_matches_its_accepted_spelling() -> None:
     scores = {
         e.name: e.value

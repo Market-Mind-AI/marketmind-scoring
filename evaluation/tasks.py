@@ -32,11 +32,27 @@ class _Candidate:
     """What CatalogMatcher reads off a catalog row. The rows themselves live in
     the database; a case names its candidates, so the experiment needs none."""
 
-    def __init__(self, title: str, category: str | None) -> None:
+    def __init__(
+        self,
+        title: str,
+        category: str | None,
+        search_terms: list[str] | None = None,
+        excluded_terms: list[str] | None = None,
+    ) -> None:
         self.entity_key = uuid.uuid4()
         self.canonical_title = title
         self.category = category
-        self.localized_markets = None
+        # _describe (app/services/catalog_matcher.py) reads terms off
+        # (localized_markets or {}).values(), one market dict at a time; the
+        # market key itself is never read, so a single stand-in entry is
+        # enough to carry a case's curated terms into the prompt. Without
+        # either list there is nothing to show, so this stays None exactly
+        # like a real catalog row with no curated terms yet.
+        self.localized_markets = (
+            {"case": {"search_terms": search_terms or [], "excluded_terms": excluded_terms or []}}
+            if search_terms or excluded_terms
+            else None
+        )
 
 
 async def identify_product(*, item: Any, **kwargs: Any) -> dict:
@@ -62,7 +78,10 @@ async def identify_product(*, item: Any, **kwargs: Any) -> dict:
 
 async def match_catalog(*, item: Any, **kwargs: Any) -> dict:
     case = input_of(item)
-    candidates = [_Candidate(c["title"], c.get("category")) for c in case["candidates"]]
+    candidates = [
+        _Candidate(c["title"], c.get("category"), c.get("search_terms"), c.get("excluded_terms"))
+        for c in case["candidates"]
+    ]
     chosen = await CatalogMatcher(provider=_catalog_provider()).pick(text=case["text"], candidates=candidates)
     return {"matched_title": chosen.canonical_title if chosen is not None else None}
 

@@ -20,6 +20,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from langfuse.api import NotFoundError  # noqa: E402
+from langfuse.api.core import ApiError  # noqa: E402
 
 from app import observability, prompts  # noqa: E402
 from app.core.config import settings  # noqa: E402
@@ -38,7 +39,12 @@ COST_PER_CASE: dict[str, float] = {
 EVALUATORS = {
     "identify-product": (
         [evaluators.identification],
-        [evaluators.mean_of("product_found_correct"), evaluators.mean_of("product_name_match")],
+        [
+            evaluators.mean_of("product_found_correct"),
+            evaluators.mean_of("product_name_match"),
+            evaluators.mean_of("category_present"),
+            evaluators.mean_of("brand_correct"),
+        ],
     ),
     "catalog-match": ([evaluators.catalog], [evaluators.mean_of("match_correct")]),
     "reference-markets": (
@@ -98,8 +104,10 @@ def upload(client: Any, dataset_files: list[cases.DatasetFile], score_configs: l
         try:
             client.api.score_configs.create(**config)
             report.append(f"score config {config['name']}: created")
-        except Exception as exc:  # noqa: BLE001 — a config that already exists is not a failure
-            report.append(f"score config {config['name']}: skipped ({type(exc).__name__})")
+        except ApiError as exc:
+            # A config that already exists is not a failure — the API answers
+            # 409, so the report says that rather than the generic "created".
+            report.append(f"score config {config['name']}: skipped ({exc.status_code})")
     return report
 
 
@@ -107,22 +115,29 @@ def estimate(dataset: str, count: int) -> float:
     return COST_PER_CASE[dataset] * count
 
 
-def _run(client: Any, dataset: str, limit: int | None, label: str) -> None:
-    file = cases.load(dataset)
-    items = file.items if limit is None else file.items[:limit]
-    item_evaluators, run_evaluators = EVALUATORS[dataset]
+def _run(client: Any, dataset_name: str, limit: int | None, label: str) -> None:
+    # DatasetClient.run_experiment (client.get_dataset(name).run_experiment) has
+    # no `data` parameter: it always runs every item in the dataset, so a
+    # `--limit`/smoke count applied to the local file was silently ignored
+    # (F2). Going through the top-level client's run_experiment, which does
+    # take `data`, is what makes the slice actually reach the SDK — and it
+    # slices the dataset Langfuse holds, not the local json file.
+    item_evaluators, run_evaluators = EVALUATORS[dataset_name]
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
-    result = client.get_dataset(dataset).run_experiment(
-        name=f"{dataset} @ {label}",
-        run_name=f"{dataset} @ {label} — {stamp}",
+    dataset = client.get_dataset(dataset_name)
+    items = dataset.items if limit is None else dataset.items[:limit]
+    result = client.run_experiment(
+        name=f"{dataset_name} @ {label}",
+        run_name=f"{dataset_name} @ {label} — {stamp}",
         description=f"{len(items)} cases, prompts from the {label} label",
-        task=tasks.TASKS[dataset],
+        data=items,
+        task=tasks.TASKS[dataset_name],
         evaluators=item_evaluators,
         run_evaluators=run_evaluators,
         max_concurrency=4,
         metadata={"label": label, "cases": str(len(items))},
     )
-    print(result.format() if hasattr(result, "format") else result)
+    print(result.format(include_item_results=True))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -156,14 +171,23 @@ def main(argv: list[str] | None = None) -> int:
     ]
     total = sum(estimate(name, count) for name, count in plan)
     for name, count in plan:
-        print(f"{name}: {count} cases, about US${estimate(name, count):.2f}")
-    print(f"total: about US${total:.2f}, prompts from the {args.label} label")
+        print(f"{name}: {count} cases, at least US${estimate(name, count):.2f}")
+    print(f"total: at least US${total:.2f}, prompts from the {args.label} label")
+    print("thinking is on by default and billed as output, so a case can cost more than this.")
     if not args.yes and input("run it? [y/N] ").strip().lower() not in ("y", "yes"):
         print("nothing run.")
         return 2
 
     settings.langfuse_prompt_label = args.label
-    asyncio.run(asyncio.to_thread(prompts.warm, PROMPTS))
+    loaded = asyncio.run(asyncio.to_thread(prompts.warm, PROMPTS))
+    print(f"{loaded}/{len(PROMPTS)} prompts loaded from the {args.label} label")
+    if loaded == 0 and args.label != "production":
+        print(
+            f"no prompt carries the {args.label} label: every call would fall back to the code "
+            "text, so the run would measure that instead of the label.",
+            file=sys.stderr,
+        )
+        return 3
     for name, _ in plan:
         _run(client, name, limit, args.label)
     return 0
