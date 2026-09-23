@@ -118,7 +118,6 @@ def _champion_candidates(entity: Any, requested: list[str]) -> list[dict[str, An
     return out
 
 
-
 # Raw PyTrends collection -> the computed demand indicators it feeds (Cap. 4
 # §4.2). Coverage is tracked per raw collection, but "covered" must mean "the
 # indicator is usable", NOT merely "a collection run finished": a run can
@@ -166,7 +165,7 @@ def _idioma_do_mercado(market: dict[str, Any] | None, country) -> str:  # noqa: 
     do_mercado = (market or {}).get("search_language")
     if do_mercado:
         return str(do_mercado)
-    return (getattr(country, "search_language", None) or "en")
+    return getattr(country, "search_language", None) or "en"
 
 
 class AnalysisService:
@@ -238,7 +237,6 @@ class AnalysisService:
                     current, error_message=f"The orchestrator could not be reached: {exc}"
                 )
                 await self._session.commit()
-
 
     async def ensure_product_enrichment(
         self, entity: Any, countries: list[str], *, com_candidatos: bool = True
@@ -460,42 +458,56 @@ class AnalysisService:
             if country is None or country.iso2 is None:
                 continue
             language = _idioma_do_mercado(cand, country)
-            gaps.append(
-                CoverageGap(
-                    source=DataSource.PYTRENDS,
-                    entity_key=entity.entity_key,
-                    country=iso3,
-                    indicator_code="search_volume",
-                    period_key=current_month_period_key(),
-                    collection_params={"location": country.iso2, "language": language, "keywords": terms},
+            # Só os termos que faltam ou venceram — a MESMA pergunta que o
+            # caminho dos países pedidos faz. Aqui ela não era feita: o gap
+            # nascia com a lista inteira e a decisão ficava com
+            # `check_coverage`, que para pytrends responde "vencido" sempre.
+            # Então `covered` era sempre falso e TODA análise rebaixava a
+            # demanda inteira dos candidatos, idêntica à da análise anterior,
+            # pagando por chamada. Medido em 23/09/2026.
+            faltando = await pytrends_indicators.missing_volume_terms(terms, country.iso2)
+            if faltando:
+                gaps.append(
+                    CoverageGap(
+                        source=DataSource.PYTRENDS,
+                        entity_key=entity.entity_key,
+                        country=iso3,
+                        indicator_code="search_volume",
+                        period_key=current_month_period_key(),
+                        collection_params={"location": country.iso2, "language": language, "keywords": faltando},
+                        force=True,
+                    )
                 )
-            )
             seed_terms = pytrends_indicators.build_seed_terms(terms)
-            # Force collection when related rows are absent under THIS seed set
-            # (a stale "covered" flag from a prior run under different seeds must
-            # not strand the candidate's search_intent — same fix as requested
-            # countries). Needed so the candidate can be fully scored for the
-            # off-request "champion" benchmark, not just measured for the ruler.
-            related_exists = await pytrends_indicators.related_rows_exist(seed_terms, country.iso2)
-            gaps.append(
-                CoverageGap(
-                    source=DataSource.PYTRENDS,
-                    entity_key=entity.entity_key,
-                    country=iso3,
-                    indicator_code="keywords_for_keywords",
-                    period_key=current_month_period_key(),
-                    collection_params={"location": country.iso2, "language": language, "seed_keywords": seed_terms},
-                    force=not related_exists,
+            # Relacionadas são função do CONJUNTO de sementes, não de termos
+            # soltos: só se coleta quando este conjunto não tem linhas, ou as
+            # que tem venceram (`related_rows_exist` já considera idade). Sem
+            # isso o candidato fica sem search_intent e não pode ser pontuado
+            # como "campeão" — só medido como régua.
+            if not await pytrends_indicators.related_rows_exist(seed_terms, country.iso2):
+                gaps.append(
+                    CoverageGap(
+                        source=DataSource.PYTRENDS,
+                        entity_key=entity.entity_key,
+                        country=iso3,
+                        indicator_code="keywords_for_keywords",
+                        period_key=current_month_period_key(),
+                        collection_params={
+                            "location": country.iso2,
+                            "language": language,
+                            "seed_keywords": seed_terms,
+                        },
+                        force=True,
+                    )
                 )
-            )
         if not gaps:
             return
-        statuses = await self._coverage_service.check_coverage(gaps)
-        # Honor gap.force (kfk with absent related rows) even when the raw coverage
-        # row looks fresh — otherwise the stale flag strands search_intent.
-        missing = [gap for gap, status in zip(gaps, statuses, strict=True) if gap.force or not status.covered]
-        if missing:
-            await self._coverage_service.check_or_collect(missing, requested_by="analysis_service:reference_candidates")
+        # Sem `check_coverage` aqui: todo gap que chegou a esta lista já é, por
+        # construção, algo que falta ou venceu — as duas perguntas foram feitas
+        # acima, por termo, que é a granularidade que a cobertura não sabe
+        # expressar. Perguntar de novo seria a mesma pergunta duas vezes e uma
+        # chamada HTTP a mais por análise.
+        await self._coverage_service.check_or_collect(gaps, requested_by="analysis_service:reference_candidates")
 
     async def resolve_demand_ceiling(
         self, entity: Any, countries: list[str], period_key: str

@@ -9,13 +9,17 @@ must agree do agree, while the demand ceiling keeps its own, deliberately
 different, view.
 """
 
+import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.services.analysis_service import (
     _MAX_REFERENCE_CANDIDATES,
+    AnalysisService,
     _champion_candidates,
     _top_reference_candidates,
 )
+from app.services.indicators import pytrends as pytrends_indicators
 
 
 def _entity(*countries: str) -> SimpleNamespace:
@@ -130,3 +134,83 @@ def test_ceiling_non_requested_members_are_always_collected() -> None:
         ceiling_unrequested = {c["country"] for c in _top_reference_candidates(entity)} - requested_set
         collected = {c["country"] for c in _champion_candidates(entity, requested)}
         assert ceiling_unrequested <= collected, f"ceiling reads uncollected data for requested={requested}"
+
+
+# --- o que se coleta para eles: nada que já se tenha -------------------------
+#
+# `ensure_candidates_coverage` nunca era EXECUTADO em teste — só substituído por
+# mock nos dois lugares que o chamam. Passou meses rebaixando a demanda inteira
+# dos candidatos em toda análise, com a suíte verde, porque o gap nascia com a
+# lista completa de termos e a decisão ficava com `check_coverage`, que para
+# pytrends responde "vencido" sempre.
+
+
+def _servico(session) -> "AnalysisService":  # noqa: ANN001, F821
+    servico = AnalysisService.__new__(AnalysisService)
+    servico._session = session
+    servico._country_repo = SimpleNamespace(
+        get_by_iso3=AsyncMock(return_value=SimpleNamespace(iso3="IND", iso2="IN", search_language=None))
+    )
+    servico._coverage_service = SimpleNamespace(
+        check_coverage=AsyncMock(return_value=[]),
+        check_or_collect=AsyncMock(return_value=(None, [])),
+    )
+    return servico
+
+
+async def test_a_candidate_already_stored_and_fresh_collects_nothing(mock_session) -> None:  # noqa: ANN001
+    """O ponto todo do prazo de 30 dias: dentro dele não se pergunta à
+    DataForSEO, que cobra por chamada. Antes, dois candidatos numa análise
+    diária eram dois downloads idênticos por dia, para sempre."""
+    servico = _servico(mock_session)
+    entity = SimpleNamespace(
+        entity_key=uuid.uuid4(),
+        reference_candidates=[{"country": "IND", "search_terms": ["air fryer"]}],
+    )
+
+    with (
+        patch.object(pytrends_indicators, "missing_volume_terms", AsyncMock(return_value=[])),
+        patch.object(pytrends_indicators, "related_rows_exist", AsyncMock(return_value=True)),
+    ):
+        await servico.ensure_candidates_coverage(entity, requested=["ESP"], period_key="2026-09")
+
+    servico._coverage_service.check_or_collect.assert_not_awaited()
+
+
+async def test_only_the_terms_that_are_missing_are_collected(mock_session) -> None:  # noqa: ANN001
+    """Incremental por termo: um termo novo entrando na lista não faz os
+    antigos serem rebaixados junto."""
+    servico = _servico(mock_session)
+    entity = SimpleNamespace(
+        entity_key=uuid.uuid4(),
+        reference_candidates=[{"country": "IND", "search_terms": ["air fryer", "freidora"]}],
+    )
+
+    with (
+        patch.object(pytrends_indicators, "missing_volume_terms", AsyncMock(return_value=["freidora"])),
+        patch.object(pytrends_indicators, "related_rows_exist", AsyncMock(return_value=True)),
+    ):
+        await servico.ensure_candidates_coverage(entity, requested=["ESP"], period_key="2026-09")
+
+    (gaps,), _ = servico._coverage_service.check_or_collect.await_args
+    assert [g.indicator_code for g in gaps] == ["search_volume"]
+    assert gaps[0].collection_params["keywords"] == ["freidora"]
+
+
+async def test_stale_related_keywords_are_collected_again(mock_session) -> None:  # noqa: ANN001
+    """Relacionadas venceram: recolhe, porque o intent score do candidato sai
+    delas e usar as de janeiro em setembro é pontuar com intenção velha."""
+    servico = _servico(mock_session)
+    entity = SimpleNamespace(
+        entity_key=uuid.uuid4(),
+        reference_candidates=[{"country": "IND", "search_terms": ["air fryer"]}],
+    )
+
+    with (
+        patch.object(pytrends_indicators, "missing_volume_terms", AsyncMock(return_value=[])),
+        patch.object(pytrends_indicators, "related_rows_exist", AsyncMock(return_value=False)),
+    ):
+        await servico.ensure_candidates_coverage(entity, requested=["ESP"], period_key="2026-09")
+
+    (gaps,), _ = servico._coverage_service.check_or_collect.await_args
+    assert [g.indicator_code for g in gaps] == ["keywords_for_keywords"]
