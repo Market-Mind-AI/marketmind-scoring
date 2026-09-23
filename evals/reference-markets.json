@@ -1,0 +1,18 @@
+{
+  "dataset": "reference-markets",
+  "description": "The biggest real markets for a product, chosen from the supported basket. expected_markets drives recall; must_include is the part the answer cannot miss.",
+  "items": [
+    {"id": "rm-air-fryer", "input": {"product_name": "air fryer", "brand": null, "category": "Kitchen Appliances"}, "expected_output": {"expected_markets": ["USA", "BRA", "GBR", "DEU", "FRA"], "must_include": ["USA"]}},
+    {"id": "rm-picanha", "input": {"product_name": "picanha", "brand": null, "category": "Beef"}, "expected_output": {"expected_markets": ["BRA", "ARG", "USA"], "must_include": ["BRA"]}},
+    {"id": "rm-yerba-mate", "input": {"product_name": "yerba mate", "brand": null, "category": "Tea & Infusions"}, "expected_output": {"expected_markets": ["ARG", "BRA", "CHL", "PER"], "must_include": ["ARG"]}},
+    {"id": "rm-manuka-honey", "input": {"product_name": "manuka honey", "brand": null, "category": "Honey"}, "expected_output": {"expected_markets": ["USA", "GBR", "JPN", "AUS", "DEU"], "must_include": ["USA"]}},
+    {"id": "rm-olive-oil", "input": {"product_name": "extra virgin olive oil", "brand": null, "category": "Cooking Oils"}, "expected_output": {"expected_markets": ["ESP", "ITA", "USA", "FRA", "PRT", "DEU"], "must_include": ["ESP"]}},
+    {"id": "rm-running-shoes", "input": {"product_name": "running shoes", "brand": null, "category": "Footwear"}, "expected_output": {"expected_markets": ["USA", "DEU", "GBR", "FRA", "JPN", "BRA"], "must_include": ["USA"]}},
+    {"id": "rm-robot-vacuum", "input": {"product_name": "robot vacuum", "brand": null, "category": "Home Appliances"}, "expected_output": {"expected_markets": ["USA", "DEU", "JPN", "FRA", "GBR"], "must_include": ["USA"]}},
+    {"id": "rm-diapers", "input": {"product_name": "diapers", "brand": null, "category": "Baby Care"}, "expected_output": {"expected_markets": ["USA", "IND", "IDN", "BRA", "MEX"], "must_include": ["USA"]}},
+    {"id": "rm-dog-food", "input": {"product_name": "dry dog food", "brand": null, "category": "Pet Food"}, "expected_output": {"expected_markets": ["USA", "BRA", "DEU", "GBR", "FRA", "MEX"], "must_include": ["USA"]}},
+    {"id": "rm-matcha", "input": {"product_name": "matcha green tea", "brand": null, "category": "Tea"}, "expected_output": {"expected_markets": ["JPN", "USA", "DEU", "GBR", "FRA"], "must_include": ["JPN"]}},
+    {"id": "rm-tequila", "input": {"product_name": "tequila", "brand": null, "category": "Spirits"}, "expected_output": {"expected_markets": ["USA", "MEX", "ESP", "DEU"], "must_include": ["USA"]}},
+    {"id": "rm-sunscreen", "input": {"product_name": "sunscreen", "brand": null, "category": "Skincare"}, "expected_output": {"expected_markets": ["USA", "BRA", "AUS", "JPN", "DEU"], "must_include": ["USA"]}}
+  ]
+}

@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.db.models  # noqa: F401 — registers every model on Base.metadata before _PRESERVE_TABLES logic reads it
+from app import prompts
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine as app_engine
@@ -26,6 +27,13 @@ if "test" not in settings.database_name.lower():
         f"Refusing to run the test suite against non-test database '{settings.database_name}'. "
         "The suite truncates tables. Run with DATABASE_NAME=marketmind_test (see conftest.py)."
     )
+
+# Keep the developer's Langfuse keys out of the tests: with them, the app's
+# lifespan builds a real client pointed at Langfuse Cloud, and any test that
+# fakes below the resolver would export its spans there. Tests that need
+# tracing patch settings or replace observability.client themselves.
+settings.langfuse_public_key = ""
+settings.langfuse_secret_key = ""
 
 # Reference/seed data that migrations own and tests must never wipe:
 #  - countries: migration 003's ~27-country basket.
@@ -100,6 +108,21 @@ async def _reset_database_after_test() -> AsyncGenerator[None, None]:
         await app_engine.dispose()
     except RuntimeError:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_prompts_state() -> Generator[None, None, None]:
+    """`app/prompts.py` keeps two module-level globals across calls: the
+    linked-prompt ContextVar and the `_known` set (see F1, the known-set
+    design that keeps Langfuse off the request path for unconfirmed names).
+    Left dirty, one test's fetch/warm can make a later, unrelated test see a
+    name as already known (skipping its own fetch) or inherit a stale link.
+    """
+    prompts.take_linked_prompt()
+    prompts._known.clear()
+    yield
+    prompts.take_linked_prompt()
+    prompts._known.clear()
 
 
 @pytest.fixture

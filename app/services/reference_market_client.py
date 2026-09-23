@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
+from app.prompts import prompt_text
 from app.services.llm import LLMError, resolve_reference_market_llm
 from app.services.vision_client import MarketTerms
 
@@ -74,7 +75,9 @@ class ReferenceMarketClient:
         )
         try:
             result = await self._provider.complete(
-                system=_SYSTEM, user=prompt, response_model=ReferenceCandidatesResult
+                system=prompt_text("reference-market-system", _SYSTEM),
+                user=prompt,
+                response_model=ReferenceCandidatesResult,
             )
         except LLMError as exc:
             raise ReferenceMarketError(f"Reference-market LLM call failed: {exc}") from exc
