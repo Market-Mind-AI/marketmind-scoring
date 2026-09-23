@@ -26,6 +26,10 @@ class Country(Base):
     # this country's term in this language (keyword localization, 2026-07-10).
     search_language: Mapped[str | None] = mapped_column(nullable=True)
     # Continent grouping for the frontend picker (alphabetical within continent).
+    # Se este país pode ser OFERECIDO para análise, que não é o mesmo que estar
+    # no catálogo. Falso enquanto ninguém mediu que ele pontua — ver a migration
+    # 042 e a regra "nada parcial é entregue".
+    analysis_ready: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
     continent: Mapped[str | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 

@@ -158,7 +158,7 @@ class MacroPrewarmService:
         perguntar e ouvir "não tenho".
         """
         auditoria = Auditoria()
-        for country in await self._country_repo.list_all():
+        for country in await self._country_repo.list_including_candidates():
             quantos, vencidos = await self._vencidos_de(country.iso3)
             auditoria.paises += 1
             auditoria.indicadores += quantos
@@ -168,7 +168,10 @@ class MacroPrewarmService:
         return auditoria
 
     async def prewarm(self, *, countries: list[str] | None = None) -> dict[str, int]:
-        alvos = countries or [c.iso3 for c in await self._country_repo.list_all()]
+        # Candidatos incluídos: é justamente o pré-aquecimento que lhes dá dado
+        # para poderem ser medidos. Não são oferecidos por isso — quem oferece é
+        # `list_all`, que só devolve os já medidos (ver a migration 042).
+        alvos = countries or [c.iso3 for c in await self._country_repo.list_including_candidates()]
         relatorio = {"paises": 0, "ja_frescos": 0, "coletados": 0, "falhados": 0}
 
         for iso3 in alvos:
