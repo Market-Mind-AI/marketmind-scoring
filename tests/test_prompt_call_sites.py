@@ -93,7 +93,15 @@ async def test_enrichment_uses_its_prompt(langfuse: EditedInLangfuse) -> None:
     provider = AsyncMock()
     provider.complete = AsyncMock(
         return_value=LocalizedMarketsResult(
-            markets=[MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["fritadeira"], confidence=0.9)]
+            markets=[
+                MarketTerms(
+                    country="BRA",
+                    primary_name="fritadeira",
+                    search_terms=["fritadeira"],
+                    search_language="pt",
+                    confidence=0.9,
+                )
+            ]
         )
     )
     with patch("app.services.enrichment_client.resolve_enrichment_llm", return_value=provider):
@@ -109,8 +117,20 @@ async def test_reference_market_uses_its_prompt(langfuse: EditedInLangfuse) -> N
     provider.complete = AsyncMock(
         return_value=ReferenceCandidatesResult(
             candidates=[
-                MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["air fryer"], confidence=0.95),
-                MarketTerms(country="USA", primary_name="air fryer", search_terms=["air fryer"], confidence=0.9),
+                MarketTerms(
+                    country="BRA",
+                    primary_name="fritadeira",
+                    search_terms=["air fryer"],
+                    search_language="pt",
+                    confidence=0.95,
+                ),
+                MarketTerms(
+                    country="USA",
+                    primary_name="air fryer",
+                    search_terms=["air fryer"],
+                    search_language="en",
+                    confidence=0.9,
+                ),
             ]
         )
     )

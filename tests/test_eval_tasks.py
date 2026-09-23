@@ -28,9 +28,7 @@ async def test_identification_passes_the_case_to_the_real_client() -> None:
     provider.complete = AsyncMock(return_value=_identification())
 
     with patch("app.services.vision_client.resolve_vision_llm", return_value=provider):
-        result = await tasks.identify_product(
-            item={"input": {"hint_text": "air fryer 5.5L", "countries": ["BRA"]}}
-        )
+        result = await tasks.identify_product(item={"input": {"hint_text": "air fryer 5.5L", "countries": ["BRA"]}})
 
     assert result == {
         "product_found": True,
@@ -137,8 +135,20 @@ async def test_reference_markets_asks_for_the_supported_basket() -> None:
     provider.complete = AsyncMock(
         return_value=ReferenceCandidatesResult(
             candidates=[
-                MarketTerms(country="USA", primary_name="air fryer", search_terms=["air fryer"], confidence=0.9),
-                MarketTerms(country="BRA", primary_name="fritadeira", search_terms=["fritadeira"], confidence=0.9),
+                MarketTerms(
+                    country="USA",
+                    primary_name="air fryer",
+                    search_terms=["air fryer"],
+                    search_language="en",
+                    confidence=0.9,
+                ),
+                MarketTerms(
+                    country="BRA",
+                    primary_name="fritadeira",
+                    search_terms=["fritadeira"],
+                    search_language="pt",
+                    confidence=0.9,
+                ),
             ]
         )
     )
