@@ -172,17 +172,49 @@ class MacroPrewarmService:
         # para poderem ser medidos. Não são oferecidos por isso — quem oferece é
         # `list_all`, que só devolve os já medidos (ver a migration 042).
         alvos = countries or [c.iso3 for c in await self._country_repo.list_including_candidates()]
-        relatorio = {"paises": 0, "ja_frescos": 0, "coletados": 0, "falhados": 0}
+        relatorio = {"paises": 0, "ja_frescos": 0, "coletados": 0, "falhados": 0, "promovidos": 0}
 
         for iso3 in alvos:
             quantos, faltando = await self._vencidos_de(iso3)
             relatorio["paises"] += 1
             relatorio["ja_frescos"] += quantos - len(faltando)
-            if not faltando:
-                continue
-            _job_id, resultados = await self._coverage_service.check_or_collect(faltando, requested_by="macro_prewarm")
-            relatorio["coletados"] += sum(1 for r in resultados if r.status == JobTaskStatus.DONE)
-            relatorio["falhados"] += sum(1 for r in resultados if r.status == JobTaskStatus.FAILED)
+            if faltando:
+                _job_id, resultados = await self._coverage_service.check_or_collect(
+                    faltando, requested_by="macro_prewarm"
+                )
+                relatorio["coletados"] += sum(1 for r in resultados if r.status == JobTaskStatus.DONE)
+                relatorio["falhados"] += sum(1 for r in resultados if r.status == JobTaskStatus.FAILED)
+                # Pergunta de novo, agora que coletou: é a resposta depois da
+                # coleta que diz se este país tem o dado, não a de antes.
+                quantos, faltando = await self._vencidos_de(iso3)
+            if not faltando and await self._promover(iso3):
+                relatorio["promovidos"] += 1
 
         logger.info(f"Pré-aquecimento macro: {relatorio}")
         return relatorio
+
+    async def _promover(self, iso3: str) -> bool:
+        """Torna um candidato oferecível, quando o dado dele de fato chegou.
+
+        É isto que faz "disponível" significar MEDIDO em vez de cadastrado. Um
+        país entra na tabela como candidato (migration 043) e só aparece no
+        seletor depois que uma passagem coletou tudo que ele precisa e não
+        sobrou nada vencido.
+
+        Importa porque a regra do grafo é que nada parcial é entregue: um país
+        pedido que não pontua faz a análise INTEIRA desistir, levando junto os
+        países bons escolhidos na mesma consulta. Oferecer antes de coletar é
+        vender uma falha.
+
+        Só promove — nunca rebaixa. Um país que já entregou análise não deixa de
+        ser oferecido porque uma fonte ficou fora do ar esta noite; para isso
+        existe a insistência, e tirá-lo do seletor por uma queda transitória
+        seria trocar um problema pequeno por outro maior.
+        """
+        pais = await self._country_repo.get_by_iso3(iso3)
+        if pais is None or pais.analysis_ready:
+            return False
+        pais.analysis_ready = True
+        await self._session.flush()
+        logger.info(f"País promovido a disponível: {iso3} — o macro dele está completo")
+        return True

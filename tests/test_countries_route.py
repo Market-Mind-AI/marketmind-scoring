@@ -62,3 +62,76 @@ async def test_the_prewarm_population_does_see_candidates(db_session: AsyncSessi
     todos = {c.iso3 for c in await CountryRepository(db_session).list_including_candidates()}
 
     assert "ZZC" in todos
+
+
+# --- a promoção: "disponível" quer dizer medido ------------------------------
+
+
+async def test_a_candidate_whose_data_arrived_becomes_available(db_session: AsyncSession) -> None:
+    """É isto que faz o seletor significar algo. O país entra como candidato
+    (migration 043) e só é oferecido depois que uma passagem coletou tudo de que
+    ele precisa e não sobrou nada vencido."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.macro_coverage import MacroPrewarmService
+
+    db_session.add(Country(iso3="ZZE", iso2="ZE", name="Promovilândia", continent="Africa", analysis_ready=False))
+    await db_session.flush()
+
+    servico = MacroPrewarmService(db_session)
+    with patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, []))):
+        relatorio = await servico.prewarm(countries=["ZZE"])
+
+    assert relatorio["promovidos"] == 1
+    assert (await CountryRepository(db_session).get_by_iso3("ZZE")).analysis_ready is True
+
+
+async def test_a_candidate_still_missing_data_is_not_promoted(db_session: AsyncSession) -> None:
+    """Um país com indicador faltando continua fora do seletor — oferecê-lo
+    faria a análise inteira desistir, inclusive os países bons pedidos junto."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.schemas.coverage import CoverageGap
+    from app.services.macro_coverage import MacroPrewarmService
+
+    db_session.add(Country(iso3="ZZF", iso2="ZF", name="Incompletolândia", continent="Africa", analysis_ready=False))
+    await db_session.flush()
+
+    buraco = CoverageGap(
+        source="worldbank", entity_key=None, country="ZZF", indicator_code="SP.POP.TOTL", period_key="COUNTRY"
+    )
+    servico = MacroPrewarmService(db_session)
+    with (
+        patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, [buraco]))),
+        patch.object(servico._coverage_service, "check_or_collect", AsyncMock(return_value=(None, []))),
+    ):
+        relatorio = await servico.prewarm(countries=["ZZF"])
+
+    assert relatorio["promovidos"] == 0
+    assert (await CountryRepository(db_session).get_by_iso3("ZZF")).analysis_ready is False
+
+
+async def test_an_available_country_is_never_demoted(db_session: AsyncSession) -> None:
+    """Só promove. Um país que já entregou análise não sai do seletor porque uma
+    fonte ficou fora do ar esta noite — para isso existe a insistência, e
+    rebaixá-lo por uma queda transitória troca um problema pequeno por um maior.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.schemas.coverage import CoverageGap
+    from app.services.macro_coverage import MacroPrewarmService
+
+    db_session.add(Country(iso3="ZZG", iso2="ZG", name="Veteranolândia", continent="Africa", analysis_ready=True))
+    await db_session.flush()
+
+    buraco = CoverageGap(
+        source="worldbank", entity_key=None, country="ZZG", indicator_code="SP.POP.TOTL", period_key="COUNTRY"
+    )
+    servico = MacroPrewarmService(db_session)
+    with (
+        patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, [buraco]))),
+        patch.object(servico._coverage_service, "check_or_collect", AsyncMock(return_value=(None, []))),
+    ):
+        await servico.prewarm(countries=["ZZG"])
+
+    assert (await CountryRepository(db_session).get_by_iso3("ZZG")).analysis_ready is True
