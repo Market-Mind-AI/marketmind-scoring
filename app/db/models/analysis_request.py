@@ -32,6 +32,12 @@ class AnalysisRequest(Base):
         UUID(as_uuid=True), ForeignKey("product_catalog.entity_key"), nullable=True
     )
     canonical_title: Mapped[str | None] = mapped_column(nullable=True)
+    # Por qual dos quatro passos o catálogo chegou nesta entidade: `alias`,
+    # `trigram`, `llm` ou `created`. Só `created` significa produto inédito —
+    # ver a migration 039. O score acompanha só o `trigram`, que é o único que
+    # decide por número.
+    catalog_method: Mapped[str | None] = mapped_column(nullable=True)
+    catalog_match_score: Mapped[Decimal | None] = mapped_column(nullable=True)
     countries: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     estimated_price: Mapped[Decimal | None] = mapped_column(nullable=True)
     price_currency: Mapped[str | None] = mapped_column(nullable=True)

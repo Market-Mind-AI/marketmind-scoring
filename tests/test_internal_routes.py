@@ -34,9 +34,10 @@ def client() -> Generator[TestClient, None, None]:
     stubbed out: it exists to pick up analyses that died with their process,
     and left running it would do exactly that to the ones these tests create.
     """
-    with patch(
-        "app.main.AnalysisResumeService.run_forever", AsyncMock(return_value=None)
-    ), TestClient(app) as test_client:
+    with (
+        patch("app.main.AnalysisResumeService.run_forever", AsyncMock(return_value=None)),
+        TestClient(app) as test_client,
+    ):
         yield test_client
 
 
@@ -49,9 +50,7 @@ def test_a_call_without_the_token_is_refused(client: TestClient) -> None:
 
 
 def test_a_call_with_the_wrong_token_is_refused(client: TestClient) -> None:
-    response = client.post(
-        "/internal/analyses", json={"countries": ["ESP"]}, headers={"X-Internal-Token": "wrong"}
-    )
+    response = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers={"X-Internal-Token": "wrong"})
     assert response.status_code == 401
 
 
@@ -77,6 +76,43 @@ def test_registering_an_analysis_returns_something_to_track_it_by(client: TestCl
     body = response.json()
     assert body["status"] == "pending"
     assert uuid.UUID(body["request_id"])
+
+
+def test_how_the_catalogue_matched_survives_to_the_resumed_run(client: TestClient) -> None:
+    """O agente grava isto ao registrar e lê de volta ao começar o grafo, porque
+    é lá que existe trace para anexar o fato — e porque uma retomada não resolve
+    o produto outra vez. Sem o campo voltar na leitura, o trace diria "não sei"
+    de algo que se soube, e nada acusaria: o fio inteiro é silencioso.
+    """
+    request_id = client.post(
+        "/internal/analyses",
+        json={
+            "countries": ["ESP"],
+            "canonical_title": "Picanha Swift",
+            "catalog_method": "trigram",
+            "catalog_match_score": 0.87,
+        },
+        headers=_HEADERS,
+    ).json()["request_id"]
+
+    lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
+
+    assert lido["catalog_method"] == "trigram"
+    assert float(lido["catalog_match_score"]) == 0.87
+
+
+def test_an_analysis_registered_without_the_catalogue_fact_reads_back_empty(client: TestClient) -> None:
+    """Nulo, não zero: `catalog_match_score` só existe para `trigram`, que é o
+    único passo que decide por número. Zero ali seria "não se parecia nada",
+    que é uma afirmação diferente de "não se aplica"."""
+    request_id = client.post(
+        "/internal/analyses", json={"countries": ["ESP"], "catalog_method": "created"}, headers=_HEADERS
+    ).json()["request_id"]
+
+    lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
+
+    assert lido["catalog_method"] == "created"
+    assert lido["catalog_match_score"] is None
 
 
 def test_progress_records_the_note_and_the_heartbeat(client: TestClient) -> None:
@@ -170,9 +206,7 @@ def test_failing_with_a_reason_records_it(client: TestClient) -> None:
 
 
 def test_an_unknown_analysis_is_a_404(client: TestClient) -> None:
-    response = client.patch(
-        f"/internal/analyses/{uuid.uuid4()}/progress", json={"message": "x"}, headers=_HEADERS
-    )
+    response = client.patch(f"/internal/analyses/{uuid.uuid4()}/progress", json={"message": "x"}, headers=_HEADERS)
     assert response.status_code == 404
 
 
@@ -208,9 +242,7 @@ def test_evidence_is_null_when_no_country_has_a_score(client: TestClient) -> Non
 def test_narrate_answers_null_when_the_model_fails(client: TestClient) -> None:
     """Best-effort by design: the numbers are the answer, the prose is a reading
     of them, and a missing reading never invalidates the answer."""
-    with patch(
-        "app.services.explanation_client.ExplanationClient.narrate", AsyncMock(return_value=None)
-    ):
+    with patch("app.services.explanation_client.ExplanationClient.narrate", AsyncMock(return_value=None)):
         response = client.post(
             "/internal/narrate",
             json={"packet": {"countries": []}, "product_name": "air fryer"},
@@ -260,9 +292,7 @@ def test_enrich_terms_reports_which_countries_have_vocabulary(client: TestClient
     """Only what is missing is generated, so an entity that already has terms
     costs no model call — reuse is what makes a repeated analysis cheap."""
     entity_key = _resolve(client, f"air fryer {uuid.uuid4().hex[:6]}")
-    with patch(
-        "app.services.analysis_service.AnalysisService.ensure_product_enrichment", AsyncMock(return_value=None)
-    ):
+    with patch("app.services.analysis_service.AnalysisService.ensure_product_enrichment", AsyncMock(return_value=None)):
         response = client.post(
             "/internal/enrich-terms",
             json={"entity_key": entity_key, "countries": ["ESP", "PRT"]},
@@ -276,12 +306,8 @@ def test_enrich_terms_reports_which_countries_have_vocabulary(client: TestClient
 def test_ensure_coverage_returns_the_tasks_it_dispatched(client: TestClient) -> None:
     """The task list is the point: it is how "the source is down, insist" is
     told apart from "the source has no such datum, declare it"."""
-    with patch(
-        "app.services.analysis_service.AnalysisService.ensure_coverage", AsyncMock(return_value=[])
-    ):
-        response = client.post(
-            "/internal/coverage/ensure", json={"country_iso3": "ESP"}, headers=_HEADERS
-        )
+    with patch("app.services.analysis_service.AnalysisService.ensure_coverage", AsyncMock(return_value=[])):
+        response = client.post("/internal/coverage/ensure", json={"country_iso3": "ESP"}, headers=_HEADERS)
 
     assert response.status_code == 200
     body = response.json()

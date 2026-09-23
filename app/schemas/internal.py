@@ -23,6 +23,11 @@ class RegisterAnalysisRequest(BaseModel):
     estimated_price: Decimal | None = None
     price_currency: str | None = None
     user_prompt: str | None = None
+    # Como o catálogo chegou nesta entidade: `alias`, `trigram`, `llm` ou
+    # `created`. Quem resolve é quem sabe, e é ele que conta — aqui não se
+    # tenta deduzir. Ver a migration 039.
+    catalog_method: str | None = None
+    catalog_match_score: Decimal | None = None
 
 
 class RegisteredAnalysisResponse(BaseModel):
@@ -70,6 +75,10 @@ class AnalysisDetailResponse(BaseModel):
     status: str
     entity_key: uuid.UUID | None = None
     canonical_title: str | None = None
+    # Lido de volta, não redecidido: uma retomada não resolve o produto outra
+    # vez, então sem isto ela relataria "não sei" para algo que já se soube.
+    catalog_method: str | None = None
+    catalog_match_score: Decimal | None = None
     countries: list[str] = []
     user_prompt: str | None = None
     progress: str | None = None

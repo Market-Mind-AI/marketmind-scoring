@@ -23,6 +23,8 @@ class AnalysisRepository:
         estimated_price: Decimal | float | None,
         price_currency: str | None,
         user_prompt: str | None = None,
+        catalog_method: str | None = None,
+        catalog_match_score: Decimal | float | None = None,
     ) -> AnalysisRequest:
         row = AnalysisRequest(
             id=uuid.uuid4(),
@@ -33,6 +35,8 @@ class AnalysisRepository:
             estimated_price=None if estimated_price is None else Decimal(str(estimated_price)),
             price_currency=price_currency,
             user_prompt=user_prompt,
+            catalog_method=catalog_method,
+            catalog_match_score=None if catalog_match_score is None else Decimal(str(catalog_match_score)),
             created_at=utc_now(),
         )
         self._session.add(row)
@@ -58,9 +62,7 @@ class AnalysisRepository:
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
-    async def claim(
-        self, analysis_request: AnalysisRequest, *, runner: str, claim_stale_after_seconds: int
-    ) -> bool:
+    async def claim(self, analysis_request: AnalysisRequest, *, runner: str, claim_stale_after_seconds: int) -> bool:
         """Tenta assumir a execução. False quando outro processo vivo já a tem.
 
         É o que permite dois agentes lado a lado: o que perde a disputa

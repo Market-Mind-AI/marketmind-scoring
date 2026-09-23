@@ -97,6 +97,8 @@ async def register_analysis(
         estimated_price=request.estimated_price,
         price_currency=request.price_currency,
         user_prompt=request.user_prompt,
+        catalog_method=request.catalog_method,
+        catalog_match_score=request.catalog_match_score,
     )
     await session.commit()
     return RegisteredAnalysisResponse(request_id=analysis_request.id, status=analysis_request.status)
@@ -157,15 +159,15 @@ async def claim_analysis(
         "that must not be re-decided is what was already decided."
     ),
 )
-async def read_analysis(
-    request_id: uuid.UUID, session: AsyncSession = Depends(get_session)
-) -> AnalysisDetailResponse:
+async def read_analysis(request_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> AnalysisDetailResponse:
     analysis_request = await _load(session, request_id)
     return AnalysisDetailResponse(
         request_id=analysis_request.id,
         status=analysis_request.status,
         entity_key=analysis_request.entity_key,
         canonical_title=analysis_request.canonical_title,
+        catalog_method=analysis_request.catalog_method,
+        catalog_match_score=analysis_request.catalog_match_score,
         countries=list(analysis_request.countries or []),
         user_prompt=analysis_request.user_prompt,
         progress=analysis_request.progress,
@@ -204,9 +206,7 @@ async def mark_running(request_id: uuid.UUID, session: AsyncSession = Depends(ge
         "Two callers, two shapes, one row."
     ),
 )
-async def read_report(
-    request_id: uuid.UUID, session: AsyncSession = Depends(get_session)
-) -> AnalysisStatusResponse:
+async def read_report(request_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> AnalysisStatusResponse:
     # Imported here rather than at module load: app.api.routes.analyze imports
     # the analysis service, and that imports back into this module's world.
     from app.api.routes.analyze import _identidade, _load_breakdown, _status_payload
@@ -350,9 +350,7 @@ async def calibrate_weights(
         "period. Absent is reported as absent, never as an empty packet."
     ),
 )
-async def build_evidence(
-    request: EvidenceRequest, session: AsyncSession = Depends(get_session)
-) -> EvidenceResponse:
+async def build_evidence(request: EvidenceRequest, session: AsyncSession = Depends(get_session)) -> EvidenceResponse:
     mos_repo = MosRepository(session)
     mos_results = []
     for country in request.countries:
