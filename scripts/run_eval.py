@@ -81,6 +81,26 @@ def load_all() -> list[cases.DatasetFile]:
     return [cases.load(name) for name in cases.DATASETS]
 
 
+def _all_score_configs(client: Any) -> list[Any]:
+    """Every score config already in the project, across every page.
+
+    score_configs.create() is not idempotent by name (F4): calling it for a
+    name Langfuse already holds does not answer 409, it mints a second config
+    with a new id — a repeated --upload created 13 duplicates this way. The
+    only way to make upload() a no-op on a name it already created is to list
+    what exists first, not to lean on the API rejecting a repeat.
+    """
+    configs: list[Any] = []
+    page = 1
+    while True:
+        response = client.api.score_configs.get(page=page, limit=100)
+        configs.extend(response.data)
+        if response.meta.total_pages <= page:
+            break
+        page += 1
+    return configs
+
+
 def upload(client: Any, dataset_files: list[cases.DatasetFile], score_configs: list[dict]) -> list[str]:
     """Create what is missing and update every case. Never deletes."""
     report: list[str] = []
@@ -100,14 +120,41 @@ def upload(client: Any, dataset_files: list[cases.DatasetFile], score_configs: l
                 metadata={"note": case.note} if case.note else None,
             )
         report.append(f"{file.name}: {len(file.items)} cases uploaded")
+    existing_names = {config.name for config in _all_score_configs(client)}
     for config in score_configs:
+        name = config["name"]
+        if name in existing_names:
+            report.append(f"score config {name}: exists")
+            continue
         try:
             client.api.score_configs.create(**config)
-            report.append(f"score config {config['name']}: created")
+            report.append(f"score config {name}: created")
         except ApiError as exc:
             # A config that already exists is not a failure — the API answers
             # 409, so the report says that rather than the generic "created".
-            report.append(f"score config {config['name']}: skipped ({exc.status_code})")
+            report.append(f"score config {name}: skipped ({exc.status_code})")
+    return report
+
+
+def archive_duplicates(client: Any) -> list[str]:
+    """Keep the oldest score config for each name and archive the rest.
+
+    Cleans up what a pre-fix repeated --upload minted (F4): same name, a new
+    id each time. Its own mode like --upload — a listing and some archive
+    calls, no model call, no experiment — so main() returns right after it,
+    before dataset selection or the confirmation prompt.
+    """
+    report: list[str] = []
+    by_name: dict[str, list[Any]] = {}
+    for config in _all_score_configs(client):
+        by_name.setdefault(config.name, []).append(config)
+    for name, configs in by_name.items():
+        if len(configs) < 2:
+            continue
+        configs.sort(key=lambda config: config.created_at)
+        for duplicate in configs[1:]:
+            client.api.score_configs.update(duplicate.id, is_archived=True)
+            report.append(f"score config {name}: archived {duplicate.id} (created {duplicate.created_at})")
     return report
 
 
@@ -145,6 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("dataset", nargs="?", choices=list(cases.DATASETS), help="which dataset to run")
     parser.add_argument("--all", action="store_true", help="run every dataset")
     parser.add_argument("--upload", action="store_true", help="create/update datasets and score configs, then exit")
+    parser.add_argument(
+        "--archive-duplicates",
+        action="store_true",
+        help="archive every score config but the oldest for each duplicated name, then exit",
+    )
     parser.add_argument("--full", action="store_true", help=f"run every case (default: the first {SMOKE_CASES})")
     parser.add_argument("--label", default="production", help="the Langfuse prompt label to run against")
     parser.add_argument("--yes", action="store_true", help="do not ask before spending")
@@ -157,6 +209,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.upload:
         for line in upload(client, load_all(), SCORE_CONFIGS):
+            print(line)
+        return 0
+
+    if args.archive_duplicates:
+        for line in archive_duplicates(client):
             print(line)
         return 0
 
