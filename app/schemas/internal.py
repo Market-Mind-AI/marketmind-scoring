@@ -28,6 +28,7 @@ class RegisterAnalysisRequest(BaseModel):
     # tenta deduzir. Ver a migration 039.
     catalog_method: str | None = None
     catalog_match_score: Decimal | None = None
+    catalog_match_reasoning: str | None = None
 
 
 class RegisteredAnalysisResponse(BaseModel):
@@ -79,6 +80,7 @@ class AnalysisDetailResponse(BaseModel):
     # vez, então sem isto ela relataria "não sei" para algo que já se soube.
     catalog_method: str | None = None
     catalog_match_score: Decimal | None = None
+    catalog_match_reasoning: str | None = None
     countries: list[str] = []
     user_prompt: str | None = None
     progress: str | None = None

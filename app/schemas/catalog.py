@@ -36,6 +36,11 @@ class CatalogResolveResponse(BaseModel):
     # trigram = similaridade pg_trgm (0-1); alias/llm/created
     # have no match score (exact hit / nothing to compare against).
     match_score: float | None = None
+    # Por que o passo `llm` disse que é o mesmo produto. É a evidência da
+    # coincidência por SIGNIFICADO, e só esse passo a produz: `quadcopter` e
+    # `drone` não têm semelhança de escrita alguma, então nenhum número diz o
+    # que aconteceu ali — a frase diz.
+    match_reasoning: str | None = None
 
 
 class ProductAliasItem(BaseModel):

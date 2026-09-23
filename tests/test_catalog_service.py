@@ -15,11 +15,22 @@ def _sem_match() -> AsyncMock:
     return matcher
 
 
-def _match_primeiro() -> AsyncMock:
+def _match_primeiro(motivo_dado: str = "mesmo produto, nomes diferentes") -> AsyncMock:
     """Passo 3 aceitando o primeiro candidato — simula o LLM reconhecendo o
-    produto. O julgamento em si é testado em test_catalog_matcher.py."""
+    produto. O julgamento em si é testado em test_catalog_matcher.py.
+
+    Preenche `motivo` como o matcher real faz: é a evidência da coincidência
+    por significado, e é ela que chega ao trace do Langfuse."""
+
+    def _pick(*, text, candidates, motivo=None):  # noqa: ANN001, ANN202
+        if not candidates:
+            return None
+        if motivo is not None:
+            motivo["reasoning"] = motivo_dado
+        return candidates[0]
+
     matcher = AsyncMock()
-    matcher.pick.side_effect = lambda *, text, candidates: candidates[0] if candidates else None
+    matcher.pick.side_effect = _pick
     return matcher
 
 
@@ -171,6 +182,10 @@ async def test_resolve_llm_match_reuses_entity(db_session: AsyncSession) -> None
     second = await service.resolve(f"Something Totally Different {uuid.uuid4()}", source="test")
     assert second.method == "llm"
     assert second.entity_key == first.entity_key
+    # A coincidência por SIGNIFICADO não tem número — `quadcopter`~`drone` não
+    # tem semelhança de escrita alguma. O que a explica é a frase.
+    assert second.match_score is None
+    assert second.match_reasoning == "mesmo produto, nomes diferentes"
 
 
 async def test_resolve_cria_entidade_quando_llm_nao_reconhece(db_session: AsyncSession) -> None:

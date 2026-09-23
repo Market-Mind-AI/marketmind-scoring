@@ -132,7 +132,20 @@ class CatalogMatcher:
         # importar este módulo nunca exija configuração de LLM.
         self._provider = provider
 
-    async def pick(self, *, text: str, candidates: list["ProductCatalog"]) -> "ProductCatalog | None":
+    async def pick(
+        self,
+        *,
+        text: str,
+        candidates: list["ProductCatalog"],
+        motivo: dict[str, str] | None = None,
+    ) -> "ProductCatalog | None":
+        """`motivo`, quando dado, recebe em `motivo["reasoning"]` o porquê da
+        escolha — a evidência da coincidência SEMÂNTICA, que é o que este passo
+        decide e os anteriores não.
+
+        Out-param em vez de mudar o retorno porque quem chama só quer a
+        entidade; o motivo interessa a quem está explicando a execução depois,
+        e é o mesmo idioma de `terms_used` e `reuse_report`."""
         if not candidates:
             return None
 
@@ -145,9 +158,7 @@ class CatalogMatcher:
         )
 
         try:
-            decision = await provider.complete(
-                system=_SYSTEM, user=prompt, response_model=CatalogMatchDecision
-            )
+            decision = await provider.complete(system=_SYSTEM, user=prompt, response_model=CatalogMatchDecision)
         except LLMError as exc:
             # Falha para "sem correspondência" em vez de propagar: o chamador
             # então cria uma entidade nova, que é o erro recuperável. Um LLM
@@ -161,10 +172,9 @@ class CatalogMatcher:
         escolhido = decision.entity_key.strip()
         for candidate in candidates:
             if str(candidate.entity_key) == escolhido:
-                logger.info(
-                    f"Match de catálogo: {text!r} -> {candidate.canonical_title!r} "
-                    f"({decision.reasoning})"
-                )
+                if motivo is not None and decision.reasoning:
+                    motivo["reasoning"] = decision.reasoning
+                logger.info(f"Match de catálogo: {text!r} -> {candidate.canonical_title!r} ({decision.reasoning})")
                 return candidate
 
         # Chave alucinada: o modelo devolveu algo que não estava na lista.

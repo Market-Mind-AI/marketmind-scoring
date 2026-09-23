@@ -131,6 +131,10 @@ class _Resolvido:
     entity: ProductCatalog
     method: str
     match_score: float | None = None
+    # Por que o LLM disse que é o mesmo produto. Só existe no passo `llm`: é a
+    # evidência da coincidência por SIGNIFICADO, que nenhum número expressa —
+    # `quadcopter`~`drone` não tem semelhança de escrita nenhuma.
+    match_reasoning: str | None = None
     marca: Brand | None = None
     familia: ProductCatalog | None = None
 
@@ -143,6 +147,7 @@ def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
         generic_title=resolvido.familia.canonical_title if resolvido.familia is not None else None,
         method=resolvido.method,
         match_score=resolvido.match_score,
+        match_reasoning=resolvido.match_reasoning,
     )
 
 
@@ -345,7 +350,8 @@ class CatalogService:
         candidatos = await self._repo.list_match_candidates(
             category=category, priority=trigram.vetoed, brand_key=brand_key
         )
-        correspondente = await self._matcher.pick(text=text, candidates=candidatos)
+        motivo: dict[str, str] = {}
+        correspondente = await self._matcher.pick(text=text, candidates=candidatos, motivo=motivo)
         if correspondente is not None:
             await self._registrar_chave(chave, correspondente, source=source, alias_orfao=alias_orfao)
             await self._atualizar(
@@ -356,7 +362,13 @@ class CatalogService:
                 target_age_min=target_age_min,
                 target_age_max=target_age_max,
             )
-            return _Resolvido(entity=correspondente, method="llm", marca=marca, familia=familia)
+            return _Resolvido(
+                entity=correspondente,
+                method="llm",
+                match_reasoning=motivo.get("reasoning"),
+                marca=marca,
+                familia=familia,
+            )
 
         entity = await self._repo.create_entity(
             canonical_title=titulo,

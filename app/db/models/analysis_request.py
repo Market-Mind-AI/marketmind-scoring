@@ -38,6 +38,8 @@ class AnalysisRequest(Base):
     # decide por número.
     catalog_method: Mapped[str | None] = mapped_column(nullable=True)
     catalog_match_score: Mapped[Decimal | None] = mapped_column(nullable=True)
+    # Só no passo `llm` — ver a migration 040.
+    catalog_match_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     countries: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     estimated_price: Mapped[Decimal | None] = mapped_column(nullable=True)
     price_currency: Mapped[str | None] = mapped_column(nullable=True)

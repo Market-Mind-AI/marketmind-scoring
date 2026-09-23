@@ -25,6 +25,7 @@ class AnalysisRepository:
         user_prompt: str | None = None,
         catalog_method: str | None = None,
         catalog_match_score: Decimal | float | None = None,
+        catalog_match_reasoning: str | None = None,
     ) -> AnalysisRequest:
         row = AnalysisRequest(
             id=uuid.uuid4(),
@@ -37,6 +38,7 @@ class AnalysisRepository:
             user_prompt=user_prompt,
             catalog_method=catalog_method,
             catalog_match_score=None if catalog_match_score is None else Decimal(str(catalog_match_score)),
+            catalog_match_reasoning=catalog_match_reasoning,
             created_at=utc_now(),
         )
         self._session.add(row)
