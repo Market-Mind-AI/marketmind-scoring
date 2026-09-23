@@ -1,5 +1,10 @@
 # Deploy do MarketMind na Azure da BeProfit (GitOps cross-org)
 
+> **Atualizado em 23/09/2026.** A porta de entrada deixou de ser o serviço de método e passou a ser o
+> agente: `/api` vai ao `marketmind-orchestrator`, que chama o `marketmind-scoring` (antes
+> `marketmind-core`) por `/internal`. As rotas `/scoring/admin` são recusadas no ingress e só
+> respondem dentro do cluster.
+
 Plano de integração do MarketMind (org GitHub `Market-Mind-AI`) à infraestrutura
 Azure/AKS da BeProfit (org GitHub `equifina`, repo `beprofit-infra-manifests`).
 
@@ -135,7 +140,9 @@ Só vai pra ingress o que precisa ser público:
 | Path | Serviço | Exposição |
 | --- | --- | --- |
 | `/` | `marketmind-ai` (web) | Ingress |
-| `/api` | `marketmind-core` | Ingress |
+| `/api` | `marketmind-orchestrator` | Ingress |
+| `/orchestrator` | `marketmind-orchestrator` | Ingress |
+| `/scoring` | `marketmind-scoring` | Ingress (`/scoring/admin` **excluído** no regex) |
 | — | `marketmind-pytrends` | ClusterIP |
 | — | `marketmind-worldbank` | ClusterIP |
 | — | `marketmind-oecd` | ClusterIP |
@@ -225,7 +232,8 @@ tolerations:
 ### Postgres
 
 Um **Azure PostgreSQL Flexible Server** (Burstable B1ms ou B2s) com 5 databases:
-`marketmind_core`, `marketmind_pytrends`, `marketmind_worldbank`,
+`marketmind_core` (o nome do BANCO do scoring não foi renomeado — ver a nota em
+`marketmind-setup-ecossistema.md`), `marketmind_pytrends`, `marketmind_worldbank`,
 `marketmind_oecd`, `marketmind_undata`.
 
 Parâmetro de servidor: `azure.extensions = VECTOR,PG_TRGM`.
@@ -249,7 +257,7 @@ O ESO (External Secrets Operator) já está instalado no cluster dev.
 
 - Key Vault novo: `kv-marketmind-dev`
 - `SecretStore` namespaced em `marketmind` (não ClusterSecretStore — isolamento)
-- `ExternalSecret` → Secret `marketmind-core-env`, consumido via `envFromSecrets`
+- `ExternalSecret` → Secret `marketmind-scoring-env`, consumido via `envFromSecrets`
 - Stakater Reloader (`reloader.enabled: true`) reinicia o pod na rotação
 
 Menor caminho de setup: dar role `Key Vault Secrets User` ao UAMI `id-eso-dev`

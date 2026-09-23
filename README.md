@@ -118,7 +118,8 @@ API en `http://localhost:8004`, Swagger en `http://localhost:8004/docs`.
 Instancia única del workspace, consolidada aquí (los otros 4 servicios ya no
 tienen pgAdmin propio). `http://localhost:5054` — `admin@marketmind.dev` /
 `admin`. Ya viene con los 5 servidores pre-registrados (`pgadmin/servers.json` +
-`pgadmin/pgpass`): `marketmind-core`, `marketmind-pytrends`,
+`pgadmin/pgpass`): `marketmind-core` — el servidor sigue registrado con ese nombre porque la BASE DE
+DATOS no fue renombrada (ver `docs/marketmind-setup-ecossistema.md`) —, `marketmind-pytrends`,
 `marketmind-oecd`, `marketmind-worldbank`, `marketmind-undata` — los 4
 externos alcanzados mediante la misma estrategia de `host.docker.internal` +
 puertos de host descrita arriba, por lo que dependen de los mismos pasos

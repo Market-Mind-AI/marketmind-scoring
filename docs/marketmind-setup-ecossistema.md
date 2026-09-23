@@ -6,7 +6,7 @@ producto. Sigue exactamente este orden — los 4 microservicios de recolección 
 ## Prerrequisitos
 
 - Docker + Docker Compose instalados.
-- Los 5 repositorios clonados **en la misma carpeta padre** (ej. `~/Projects/marketmind-core`,
+- Los 5 repositorios clonados **en la misma carpeta padre** (ej. `~/Projects/marketmind-scoring`,
   `~/Projects/marketmind-pytrends`, `~/Projects/marketmind-worldbank`, `~/Projects/marketmind-oecd`,
   `~/Projects/marketmind-united-nations-data`) — no es obligatorio técnicamente, pero es lo que los `README.md` de
   cada uno asumen.
@@ -38,7 +38,7 @@ El Core lee estas 4 bases directo vía SQL (solo lectura). Ejecuta el script de 
 idempotente, se puede volver a ejecutar sin problema:
 
 ```bash
-cd marketmind-core
+cd marketmind-scoring
 for combo in "5432 marketmind_pytrends" "5434 marketmind_worldbank" "5433 marketmind_oecd" "5435 marketmind_united_nations_data"; do
   port=$(echo $combo | cut -d' ' -f1); db=$(echo $combo | cut -d' ' -f2)
   PGPASSWORD=admin psql -h localhost -p $port -U marketmind -d $db -f scripts/create_readonly_roles.sql
@@ -48,13 +48,13 @@ done
 (Necesita `psql` instalado en el host. Alternativa sin instalar nada: copia el archivo dentro de cada contenedor
 Postgres con `docker cp` y ejecútalo con `docker exec`.)
 
-## Paso 3 — Levantar el Core
+## Paso 3 — Levantar el motor de método (scoring)
 
 ```bash
-cd marketmind-core
+cd marketmind-scoring
 cp .env.example .env
 docker compose up -d --build
-docker compose exec marketmind-core-api alembic upgrade head
+docker compose exec marketmind-scoring-api alembic upgrade head
 ```
 
 ## Paso 4 — Confirmar que todo está conectado
@@ -73,11 +73,16 @@ ejecutado para esa fuente específicamente.
 
 | Base de datos | Usuario admin | Usuario read-only (solo en los 4 microservicios) | Puerto (host) |
 |---|---|---|---|
-| marketmind_core | `marketmind` / `admin` | — | 5436 |
+| marketmind_core *(ver nota)* | `marketmind` / `admin` | — | 5436 |
 | marketmind_pytrends | `marketmind` / `admin` | `marketmind_readonly` / `admin` | 5432 |
 | marketmind_oecd | `marketmind` / `admin` | `marketmind_readonly` / `admin` | 5433 |
 | marketmind_worldbank | `marketmind` / `admin` | `marketmind_readonly` / `admin` | 5434 |
 | marketmind_united_nations_data | `marketmind` / `admin` | `marketmind_readonly` / `admin` | 5435 |
+
+> **Nota (23/09/2026).** El servicio se llama `marketmind-scoring` desde el rename, pero su BASE DE DATOS
+> sigue llamándose `marketmind_core`, en local y en Azure (`DATABASE_NAME` en `scoring-values.yaml`).
+> Renombrarla exige migrar datos y no aporta nada funcional, así que está pendiente a propósito.
+> El nombre de arriba es el real: úsalo tal cual.
 
 ## pgAdmin
 
@@ -89,9 +94,12 @@ Solo existe **una instancia**, levantada junto con el Core — no hay pgAdmin en
   no debería pedir contraseña al hacer clic en ninguno de ellos. Si la pide, el volumen interno de pgAdmin necesita
   recrearse:
   ```bash
-  cd marketmind-core
+  cd marketmind-scoring
   docker compose down pgadmin
-  docker volume rm marketmind-core_pgadmin_data
+  # El nombre del volumen sale del nombre de la CARPETA. En una máquina que
+  # clonó el repo antes del rename (23/09/2026) sigue siendo
+  # `marketmind-core_pgadmin_data`; `docker volume ls` lo confirma.
+  docker volume rm marketmind-scoring_pgadmin_data
   docker compose up -d pgadmin
   ```
 
