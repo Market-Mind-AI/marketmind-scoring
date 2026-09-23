@@ -241,3 +241,19 @@ def test_a_placeholder_mismatch_uses_the_code_text_and_warns_once(
     fake.requests.clear()
     prompts.prompt_text("vision-instructions", default, subject="x", country_list="y")
     assert fake.requests, "the name stays known so a corrected version is picked up on the next refresh"
+
+
+def test_the_label_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """So an experiment can score a candidate version without touching runtime,
+    where the label stays production."""
+    from app.core.config import settings
+
+    stored = _stored("enrichment-system", "candidate text")
+    fake = FakeLangfuse(result=stored)
+    monkeypatch.setattr(observability, "client", lambda: fake)
+    monkeypatch.setattr(settings, "langfuse_prompt_label", "candidate")
+    prompts._known.add("enrichment-system")
+
+    prompts.prompt_text("enrichment-system", "code text")
+
+    assert fake.requests[0][1]["label"] == "candidate"

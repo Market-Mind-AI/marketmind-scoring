@@ -222,6 +222,10 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
+    # Which Langfuse label the prompts are fetched from. Runtime stays on
+    # "production"; scripts/run_eval.py points a single run at another label to
+    # score a candidate version against the same cases.
+    langfuse_prompt_label: str = "production"
 
     # There is no anthropic_vision_model here: the vision model is chosen by
     # vision_llm_model above, like every other call site. A separate setting

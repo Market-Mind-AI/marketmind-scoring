@@ -32,6 +32,7 @@ from typing import Any
 from langfuse.model import TemplateParser
 
 from app import observability
+from app.core.config import settings
 
 logger = logging.getLogger("marketmind-scoring.prompts")
 
@@ -66,7 +67,7 @@ def prompt_text(name: str, default: str, **variables: str) -> str:
     try:
         stored = client.get_prompt(
             name,
-            label=LABEL,
+            label=settings.langfuse_prompt_label,
             type="text",
             fallback=default,
             max_retries=0,
@@ -140,7 +141,7 @@ def warm(registry: Mapping[str, str]) -> int:
         try:
             stored = client.get_prompt(
                 name,
-                label=LABEL,
+                label=settings.langfuse_prompt_label,
                 type="text",
                 max_retries=0,
                 fetch_timeout_seconds=_FETCH_TIMEOUT_SECONDS,
