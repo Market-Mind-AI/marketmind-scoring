@@ -299,7 +299,12 @@ class AnalysisService:
                 logger.warning(f"Background reference-market candidates unavailable: {exc}")
 
     async def ensure_coverage(
-        self, *, country_iso3: str, entity_key: uuid.UUID | None, terms_used: dict[str, Any] | None = None
+        self,
+        *,
+        country_iso3: str,
+        entity_key: uuid.UUID | None,
+        terms_used: dict[str, Any] | None = None,
+        reuse_report: dict[str, Any] | None = None,
     ) -> list[JobTaskResult]:
         """Checks (read-only) the last 6 monthly period_keys for every gap
         this country/product needs, and only dispatches collection
@@ -309,7 +314,13 @@ class AnalysisService:
         ser coletado. É esse resultado que distingue as duas causas de um país
         continuar sem indicador (ver `_completar_paises`): task FALHADA é fonte
         fora do ar, e vale insistir; coleta que terminou sem falha e mesmo assim
-        não produziu o indicador é fonte que não tem aquele dado."""
+        não produziu o indicador é fonte que não tem aquele dado.
+
+        `reuse_report`, quando dado, recebe o OUTRO lado da conta: quantos gaps
+        de cada fonte já estavam frescos e por isso não viraram tarefa nenhuma.
+        Sem ele, uma fonte inteiramente aproveitada some do relato — e "não
+        aparece" é indistinguível de "não foi consultada", que é exatamente a
+        pergunta que o relato existe para responder."""
         gaps: list[CoverageGap] = []
 
         if entity_key is not None:
@@ -407,6 +418,9 @@ class AnalysisService:
         gaps.extend(macro_gaps(country_iso3, fontes_sem_cobertura=fontes_sem_cobertura_de(pais_macro)))
 
         if not gaps:
+            if reuse_report is not None:
+                reuse_report["reused"] = {}
+                reuse_report["not_covering"] = sorted(f.value for f in fontes_sem_cobertura_de(pais_macro))
             return []
 
         # Dedup — some sources repeat the same native code across dimensions
@@ -425,6 +439,17 @@ class AnalysisService:
         # collected even when its raw coverage row looks fresh — otherwise the
         # stale "covered" flag would strand a country whose indicator is empty.
         missing = [gap for gap, status in zip(unique_gaps, statuses, strict=True) if gap.force or not status.covered]
+        if reuse_report is not None:
+            reaproveitados: dict[str, int] = {}
+            for gap, status in zip(unique_gaps, statuses, strict=True):
+                if status.covered and not gap.force:
+                    reaproveitados[gap.source.value] = reaproveitados.get(gap.source.value, 0) + 1
+            reuse_report["reused"] = reaproveitados
+            # Uma fonte que não cobre este país não é o mesmo que uma fonte que
+            # não foi pedida: é uma resposta, e a única honesta. Ver
+            # `fontes_sem_cobertura_de` — a ausência do código do país naquela
+            # fonte É o dado.
+            reuse_report["not_covering"] = sorted(f.value for f in fontes_sem_cobertura_de(pais_macro))
         if not missing:
             return []
         _job_id, resultados = await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")

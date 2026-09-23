@@ -165,6 +165,15 @@ class EnsureCoverageResponse(BaseModel):
     # source that does not have that datum, and no amount of retrying will
     # change it.
     tasks: list[JobTaskResult]
+    # O outro lado da conta: quantos indicadores de cada fonte já estavam no
+    # banco, dentro do prazo, e por isso não viraram tarefa nenhuma. Sem isto
+    # uma fonte inteiramente aproveitada não aparece em lugar algum do relato,
+    # e "não apareceu" é indistinguível de "não foi consultada".
+    reused: dict[str, int] = {}
+    # As fontes que não cobrem ESTE país — resposta, não omissão. Lida do
+    # mapeamento em `countries`: sem o código do país naquela fonte, ela não o
+    # conhece. A OCDE não publica preço imobiliário para Argentina e Peru.
+    not_covering: list[str] = []
 
 
 class CandidatesCoverageRequest(BaseModel):

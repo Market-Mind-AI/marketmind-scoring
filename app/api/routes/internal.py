@@ -454,13 +454,19 @@ async def ensure_coverage(
     request: EnsureCoverageRequest, session: AsyncSession = Depends(get_session)
 ) -> EnsureCoverageResponse:
     terms: dict[str, Any] = {}
+    reuso: dict[str, Any] = {}
     tasks = await AnalysisService(session).ensure_coverage(
-        country_iso3=request.country_iso3, entity_key=request.entity_key, terms_used=terms
+        country_iso3=request.country_iso3,
+        entity_key=request.entity_key,
+        terms_used=terms,
+        reuse_report=reuso,
     )
     await session.commit()
     return EnsureCoverageResponse(
         country=request.country_iso3,
         tasks=tasks,
+        reused=reuso.get("reused", {}),
+        not_covering=reuso.get("not_covering", []),
         location=terms.get("location"),
         language=terms.get("language"),
         search_terms=terms.get("search_terms", []),
