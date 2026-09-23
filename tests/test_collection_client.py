@@ -1,10 +1,12 @@
 import uuid
 
+import httpx
 import pytest
 
 from app.db.models.country import Country
 from app.domain.enums import DataSource, IngestionRunStatus
 from app.services.collection_client import (
+    CollectionClient,
     CollectionDispatchError,
     CollectionRequest,
     _build_request,
@@ -215,3 +217,34 @@ class TestExtractRunStatus:
     def test_unknown_status_raises(self) -> None:
         with pytest.raises(CollectionDispatchError):
             _extract_run_status(DataSource.PYTRENDS, {"status": "not_a_real_status"})
+
+
+class TestATransportFailureSaysWhatItWas:
+    """httpx raises its timeouts with an EMPTY message, and an exception object
+    is always truthy — so `{exc or type(exc).__name__}` silently keeps the
+    empty message and the report ends at the colon. A ten-minute World Bank
+    timeout on Colombia's CPI reached the caller as a blank reason."""
+
+    async def test_freshness_names_a_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _timeout(*args: object, **kwargs: object) -> None:
+            raise httpx.ReadTimeout("")
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", _timeout)
+
+        with pytest.raises(CollectionDispatchError) as caught:
+            await CollectionClient().freshness(
+                DataSource.WORLDBANK, countries=["COL"], indicators=["FP.CPI.TOTL.ZG"], stale_after_days=30
+            )
+
+        assert "ReadTimeout" in str(caught.value)
+
+    async def test_polling_names_a_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _timeout(*args: object, **kwargs: object) -> None:
+            raise httpx.ReadTimeout("")
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", _timeout)
+
+        with pytest.raises(CollectionDispatchError) as caught:
+            await CollectionClient().poll_until_done(DataSource.WORLDBANK, uuid.uuid4())
+
+        assert "ReadTimeout" in str(caught.value)
