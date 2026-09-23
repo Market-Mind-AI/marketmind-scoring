@@ -369,6 +369,55 @@ _COUNTRY_RULE_EN = {
 _RULER_SCOPE_EN = {True: "the analyzed market's score", False: "the ranking"}
 
 
+
+# A segunda passada. Só entra quando o juiz achou afirmações que a evidência não
+# sustenta — medido em execuções reais de 23/09/2026: os números estavam certos
+# (`hallucination_rate=0.0`, 0 de 134) e mesmo assim o texto afirmava "os EUA
+# não fazem parte do ranking" e "a Espanha é uma aposta de exportação mais
+# coerente", coisas que o pacote não diz.
+#
+# É a exposição que sobra depois do invariante do projeto. Nenhum número vem do
+# modelo, e é isso que torna a checagem de número exata e gratuita; mas nada
+# impedia o modelo de inventar a CONCLUSÃO. Numa defesa, "o modelo recomendou
+# exportar com dados que não cobrem custo nem tarifa" é pior de responder que um
+# número errado.
+#
+# Reescrever, e não apagar: a frase ofensiva costuma ter uma versão honesta
+# ("a Espanha lidera o MOS" no lugar de "a Espanha é a melhor aposta").
+_REVISION_RULE_PT = """REVISÃO. Você escreveu o texto abaixo e um revisor apontou afirmações que a
+evidência NÃO sustenta. Reescreva o texto inteiro corrigindo cada uma delas.
+
+Para cada apontamento, escolha uma saída:
+  - reformule até a frase dizer apenas o que a evidência mostra (em geral existe
+    uma versão honesta: "lidera o MOS" no lugar de "é a melhor aposta");
+  - ou remova a frase.
+
+Não acrescente informação nova, não mude nenhum número e mantenha a estrutura, o
+tamanho e o idioma do texto original. Devolva SOMENTE o texto revisado.
+
+AFIRMAÇÕES APONTADAS:
+{claims}
+
+TEXTO ORIGINAL:
+{narrative}"""
+
+_REVISION_RULE_EN = """REVISION. You wrote the text below and a reviewer flagged claims the evidence
+does NOT support. Rewrite the whole text, fixing each one.
+
+For each flagged claim, pick one:
+  - rephrase it until the sentence says only what the evidence shows (there is
+    usually an honest version: "leads on MOS" instead of "is the better bet");
+  - or drop the sentence.
+
+Add no new information, change no number, and keep the structure, length and
+language of the original. Return ONLY the revised text.
+
+FLAGGED CLAIMS:
+{claims}
+
+ORIGINAL TEXT:
+{narrative}"""
+
 def _system_prompt(
     language: str, *, single_country: bool, user_prompt: str | None = None, external_champion: bool = False
 ) -> str:
@@ -590,3 +639,33 @@ class ExplanationClient:
         except Exception as exc:  # noqa: BLE001 — best-effort enrichment, never fails the analysis
             logger.warning(f"Final LLM explanation skipped (provider unavailable or errored): {exc}")
             return None
+
+    async def revise(self, *, narrative: str, claims: list[str]) -> str | None:
+        """Reescreve o texto tirando as afirmações que a evidência não sustenta.
+
+        Melhor esforço, como a narrativa: se falhar, o texto original continua
+        valendo — ele já foi entregue, e uma revisão que não sai é pior só do
+        que não ter tentado, nunca pior que apagar a explicação.
+
+        Ver `_REVISION_RULE_PT` para o porquê de reescrever em vez de apagar.
+        """
+        if not narrative or not claims:
+            return None
+        lang = (settings.ollama_llm_narrative_language or "").strip().lower()
+        is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
+        modelo = _REVISION_RULE_PT if is_pt else _REVISION_RULE_EN
+        pedido = modelo.replace("{claims}", "\n".join(f"- {c}" for c in claims)).replace(
+            "{narrative}", narrative
+        )
+        try:
+            revisto = await resolve_explanation_llm().complete(
+                system="You revise business narratives for factual support. Return only the revised text.",
+                user=pedido,
+            )
+        except Exception as exc:  # noqa: BLE001 — a revisão nunca pode custar o texto que já existe
+            logger.warning(f"Narrative revision skipped (provider unavailable or errored): {exc}")
+            return None
+        if not revisto or not str(revisto).strip():
+            logger.warning("Narrative revision returned nothing; keeping the original")
+            return None
+        return str(revisto)
