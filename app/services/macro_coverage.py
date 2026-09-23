@@ -23,6 +23,7 @@ Não substitui o retry: a análise continua sabendo se virar sozinha se algo
 estiver faltando. Reduz a frequência com que precisa.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -123,6 +124,20 @@ class Auditoria:
     paises_com_vencidos: list[str] = field(default_factory=list)
 
 
+# Quantos países aquecer ao mesmo tempo.
+#
+# Era um de cada vez, e com 24 países isso não incomodava. Com 151 passou a
+# doer: medido em 23/09/2026, ~7,5 min por país — 15 horas para encher os
+# candidatos, contra uma janela noturna de uma hora.
+#
+# O custo é quase todo do UN Data, que só devolve UM ANO por chamada: 4
+# indicadores × 11 anos são 44 requisições por país, em série. Por isso o limite
+# é BAIXO e não generoso — em 25/08/2026 essa mesma API ficou 29 minutos fora e
+# nove países saíram de um ranking. Multiplicar a carga por dez para ganhar
+# tempo seria trocar espera por indisponibilidade.
+_PAISES_EM_PARALELO = 4
+
+
 class MacroPrewarmService:
     """Mantém o dado macro dos países suportados quente, fora de qualquer
     análise. Pensado para um cron — não há agendador em processo aqui."""
@@ -175,6 +190,34 @@ class MacroPrewarmService:
                 auditoria.paises_com_vencidos.append(country.iso3)
         return auditoria
 
+    async def _aquecer_um(self, iso3: str, relatorio: dict[str, int]) -> None:
+        """Uma passagem por um país, em SESSÃO PRÓPRIA.
+
+        Sessão própria porque os países passaram a rodar em paralelo, e uma
+        `AsyncSession` não é segura sob concorrência — duas tarefas na mesma
+        sessão corrompem o estado uma da outra de um jeito que não aparece em
+        teste pequeno.
+        """
+        from app.db.session import async_session_factory
+
+        async with async_session_factory() as sessao:
+            servico = MacroPrewarmService(sessao)
+            quantos, faltando = await servico._vencidos_de(iso3)
+            relatorio["paises"] += 1
+            relatorio["ja_frescos"] += quantos - len(faltando)
+            if faltando:
+                _job_id, resultados = await servico._coverage_service.check_or_collect(
+                    faltando, requested_by="macro_prewarm"
+                )
+                relatorio["coletados"] += sum(1 for r in resultados if r.status == JobTaskStatus.DONE)
+                relatorio["falhados"] += sum(1 for r in resultados if r.status == JobTaskStatus.FAILED)
+                # Pergunta de novo, agora que coletou: é a resposta depois da
+                # coleta que diz se este país tem o dado, não a de antes.
+                _quantos, faltando = await servico._vencidos_de(iso3)
+            if not faltando and await servico._promover(iso3):
+                relatorio["promovidos"] += 1
+            await sessao.commit()
+
     async def prewarm(self, *, countries: list[str] | None = None) -> dict[str, int]:
         # Candidatos incluídos: é justamente o pré-aquecimento que lhes dá dado
         # para poderem ser medidos. Não são oferecidos por isso — quem oferece é
@@ -182,21 +225,18 @@ class MacroPrewarmService:
         alvos = countries or [c.iso3 for c in await self._country_repo.list_including_candidates()]
         relatorio = {"paises": 0, "ja_frescos": 0, "coletados": 0, "falhados": 0, "promovidos": 0}
 
-        for iso3 in alvos:
-            quantos, faltando = await self._vencidos_de(iso3)
-            relatorio["paises"] += 1
-            relatorio["ja_frescos"] += quantos - len(faltando)
-            if faltando:
-                _job_id, resultados = await self._coverage_service.check_or_collect(
-                    faltando, requested_by="macro_prewarm"
-                )
-                relatorio["coletados"] += sum(1 for r in resultados if r.status == JobTaskStatus.DONE)
-                relatorio["falhados"] += sum(1 for r in resultados if r.status == JobTaskStatus.FAILED)
-                # Pergunta de novo, agora que coletou: é a resposta depois da
-                # coleta que diz se este país tem o dado, não a de antes.
-                quantos, faltando = await self._vencidos_de(iso3)
-            if not faltando and await self._promover(iso3):
-                relatorio["promovidos"] += 1
+        limite = asyncio.Semaphore(_PAISES_EM_PARALELO)
+
+        async def _com_limite(iso3: str) -> None:
+            async with limite:
+                try:
+                    await self._aquecer_um(iso3, relatorio)
+                except Exception:  # noqa: BLE001 — um país que explode não leva os outros
+                    logger.exception(f"Pré-aquecimento de {iso3} falhou")
+                    relatorio["paises"] += 1
+                    relatorio["falhados"] += 1
+
+        await asyncio.gather(*(_com_limite(iso3) for iso3 in alvos))
 
         logger.info(f"Pré-aquecimento macro: {relatorio}")
         return relatorio

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.country import Country
 from app.repositories.country_repository import CountryRepository
+from app.services.coverage_service import CoverageService
 
 
 def test_the_route_serves_the_available_basket_and_not_the_catalogue(client: TestClient) -> None:
@@ -64,6 +65,24 @@ async def test_the_prewarm_population_does_see_candidates(db_session: AsyncSessi
     assert "ZZC" in todos
 
 
+
+def _fabrica_de(sessao):  # noqa: ANN001, ANN202
+    """Faz a fábrica de sessões devolver A SESSÃO DO TESTE.
+
+    O pré-aquecimento passou a abrir uma sessão por país, porque os países agora
+    rodam em paralelo e uma `AsyncSession` não é segura sob concorrência. Sem
+    isto o teste escreve numa sessão e o código lê de outra — e o teste falharia
+    medindo o isolamento, não a regra.
+    """
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _abrir():  # noqa: ANN202
+        yield sessao
+
+    return lambda: _abrir()
+
+
 # --- a promoção: "disponível" quer dizer medido ------------------------------
 
 
@@ -79,7 +98,10 @@ async def test_a_candidate_whose_data_arrived_becomes_available(db_session: Asyn
     await db_session.flush()
 
     servico = MacroPrewarmService(db_session)
-    with patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, []))):
+    with (
+        patch("app.db.session.async_session_factory", _fabrica_de(db_session)),
+        patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, []))),
+    ):
         relatorio = await servico.prewarm(countries=["ZZE"])
 
     assert relatorio["promovidos"] == 1
@@ -102,8 +124,9 @@ async def test_a_candidate_still_missing_data_is_not_promoted(db_session: AsyncS
     )
     servico = MacroPrewarmService(db_session)
     with (
+        patch("app.db.session.async_session_factory", _fabrica_de(db_session)),
         patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, [buraco]))),
-        patch.object(servico._coverage_service, "check_or_collect", AsyncMock(return_value=(None, []))),
+        patch.object(CoverageService, "check_or_collect", AsyncMock(return_value=(None, []))),
     ):
         relatorio = await servico.prewarm(countries=["ZZF"])
 
@@ -129,8 +152,9 @@ async def test_an_available_country_is_never_demoted(db_session: AsyncSession) -
     )
     servico = MacroPrewarmService(db_session)
     with (
+        patch("app.db.session.async_session_factory", _fabrica_de(db_session)),
         patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, [buraco]))),
-        patch.object(servico._coverage_service, "check_or_collect", AsyncMock(return_value=(None, []))),
+        patch.object(CoverageService, "check_or_collect", AsyncMock(return_value=(None, []))),
     ):
         await servico.prewarm(countries=["ZZG"])
 
