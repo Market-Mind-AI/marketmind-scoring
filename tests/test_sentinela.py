@@ -128,3 +128,32 @@ async def test_a_check_that_blows_up_is_itself_a_finding(db_session: AsyncSessio
     assert v["ok"] is False
     assert "a própria verificação falhou" in v["detalhe"]
     assert relatorio["ok"] is False, "e o relatório inteiro fica vermelho"
+
+
+async def test_a_candidate_being_filled_is_not_a_finding(db_session: AsyncSession) -> None:
+    """Medido em 23/09/2026, logo depois de carregar os 127 candidatos: a
+    sentinela virou vermelha com "1944 vencidos em 122 países" e teria mandado
+    sev1 todas as noites até o último encher.
+
+    Um candidato com dado faltando não é um achado — estar incompleto é o estado
+    normal dele. E uma falha que nunca deixa de acontecer ensina quem lê o
+    alarme a ignorar alarmes, que é o oposto do que ele serve.
+    """
+    from app.db.models.country import Country
+    from app.services.macro_coverage import MacroPrewarmService
+
+    db_session.add(Country(iso3="ZZH", iso2="ZH", name="Enchendolândia", continent="Africa", analysis_ready=False))
+    db_session.add(Country(iso3="ZZI", iso2="ZI", name="Prontolândia", continent="Africa", analysis_ready=True))
+    await db_session.flush()
+
+    vistos: list[str] = []
+
+    async def _vencidos_de(self, iso3):  # noqa: ANN001, ANN202
+        vistos.append(iso3)
+        return 17, []
+
+    with patch.object(MacroPrewarmService, "_vencidos_de", _vencidos_de):
+        await MacroPrewarmService(db_session).auditar()
+
+    assert "ZZI" in vistos, "o país oferecido é auditado"
+    assert "ZZH" not in vistos, "o candidato não"

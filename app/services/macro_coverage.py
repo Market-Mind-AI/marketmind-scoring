@@ -147,18 +147,26 @@ class MacroPrewarmService:
         return len(gaps), [gap for gap, status in zip(gaps, statuses, strict=True) if not status.covered]
 
     async def auditar(self) -> Auditoria:
-        """O dado macro dos países suportados está quente AGORA?
+        """O dado macro dos países OFERECIDOS está quente AGORA?
 
         Mesma pergunta do pré-aquecimento, sem a parte que coleta. Existe
         porque "o pré-aquecimento rodou" e "o dado está quente" são coisas
         diferentes, e só a segunda é o que o usuário recebe.
+
+        Só os oferecidos, e isso é o ponto: um CANDIDATO com dado faltando não é
+        um achado, é um candidato — estar incompleto é o estado normal dele até
+        ser enchido. Medido em 23/09/2026, logo depois de carregar os 127: a
+        sentinela virou vermelha relatando "1944 vencidos em 122 países" e teria
+        mandado alarme sev1 todas as noites até o último encher. Uma falha que
+        nunca deixa de acontecer ensina quem lê o alarme a ignorar alarmes, que
+        é o oposto do que ele serve.
 
         Uma fonte fora do ar não vira "tudo vencido": `freshness` levanta, e
         quem chama decide. Não conseguir perguntar é um resultado diferente de
         perguntar e ouvir "não tenho".
         """
         auditoria = Auditoria()
-        for country in await self._country_repo.list_including_candidates():
+        for country in await self._country_repo.list_all():
             quantos, vencidos = await self._vencidos_de(country.iso3)
             auditoria.paises += 1
             auditoria.indicadores += quantos
