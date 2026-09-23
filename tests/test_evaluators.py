@@ -237,3 +237,30 @@ def test_the_run_level_evaluator_averages_one_metric() -> None:
     mean = evaluators.mean_of("match_correct")(item_results=item_results)
 
     assert [(e.name, e.value) for e in mean] == [("match_correct_mean", 0.5)]
+
+
+def test_an_apostrophe_does_not_split_a_name() -> None:
+    assert evaluators.normalize("women's running shoes") == evaluators.normalize("womens running shoes")
+    assert evaluators.normalize("Levi’s") == evaluators.normalize("levis")
+    assert evaluators.normalize("Levi’s") == evaluators.normalize("Levi’s")
+def test_a_possessive_name_still_matches_its_accepted_spelling() -> None:
+    scores = {
+        e.name: e.value
+        for e in evaluators.identification(
+            input={},
+            output={
+                "product_found": True,
+                "product_name": "women's running shoes",
+                "category": "Footwear",
+                "brand": None,
+            },
+            expected_output={
+                "product_found": True,
+                "product_name": ["womens running shoes"],
+                "category_required": True,
+                "brand": None,
+            },
+        )
+    }
+
+    assert scores["product_name_match"] == 1.0

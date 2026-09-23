@@ -16,7 +16,8 @@ def normalize(text: str) -> str:
     """Compare names the way a person would: case, accents and punctuation aside."""
     folded = unicodedata.normalize("NFKD", (text or "").strip().lower())
     stripped = "".join(c for c in folded if not unicodedata.combining(c))
-    kept = "".join(c if c.isalnum() or c.isspace() else " " for c in stripped)
+    without_quotes = stripped.replace("'", "").replace("’", "")
+    kept = "".join(c if c.isalnum() or c.isspace() else " " for c in without_quotes)
     return " ".join(kept.split())
 
 
