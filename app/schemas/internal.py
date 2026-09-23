@@ -174,6 +174,11 @@ class EnsureCoverageResponse(BaseModel):
     # mapeamento em `countries`: sem o código do país naquela fonte, ela não o
     # conhece. A OCDE não publica preço imobiliário para Argentina e Peru.
     not_covering: list[str] = []
+    # As palavras relacionadas (que alimentam o intent score) já estavam
+    # guardadas e dentro do prazo. Contada à parte porque é UM conjunto de
+    # sementes, não N termos — somá-la aos termos de volume misturaria
+    # unidades diferentes numa contagem só.
+    related_fresh: bool = False
 
 
 class CandidatesCoverageRequest(BaseModel):

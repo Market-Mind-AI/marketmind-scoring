@@ -466,6 +466,7 @@ async def ensure_coverage(
         country=request.country_iso3,
         tasks=tasks,
         reused=reuso.get("reused", {}),
+        related_fresh=bool(reuso.get("related_fresh")),
         not_covering=reuso.get("not_covering", []),
         location=terms.get("location"),
         language=terms.get("language"),

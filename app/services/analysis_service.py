@@ -322,6 +322,8 @@ class AnalysisService:
         aparece" é indistinguível de "não foi consultada", que é exatamente a
         pergunta que o relato existe para responder."""
         gaps: list[CoverageGap] = []
+        demanda_reaproveitada = 0
+        relacionadas_frescas = False
 
         if entity_key is not None:
             entity = await self._product_repo.get_by_entity_key(entity_key)
@@ -376,6 +378,13 @@ class AnalysisService:
                 # no search_volume collection at all.
                 termos_para_volume = [*search_terms, *category_terms]
                 missing_sv = await pytrends_indicators.missing_volume_terms(termos_para_volume, location)
+                # A demanda não passa por `check_coverage` — a pergunta de
+                # frescor dela é feita aqui, por TERMO, que é a granularidade
+                # que a cobertura não sabe expressar. Então o reaproveitamento
+                # dela precisa ser contado aqui também, ou o pytrends aparece
+                # como "nada foi preciso dele" quando na verdade tudo já estava
+                # guardado e dentro do prazo.
+                demanda_reaproveitada += len(termos_para_volume) - len(missing_sv)
                 if missing_sv:
                     gaps.append(
                         CoverageGap(
@@ -393,7 +402,10 @@ class AnalysisService:
                 # related rows are absent — i.e. a genuinely new term entered the
                 # top-20 seeds. A stable/merged seed set => cache hit => no download.
                 seed_terms = pytrends_indicators.build_seed_terms(search_terms, category_terms)
-                if seed_terms and not await pytrends_indicators.related_rows_exist(seed_terms, location):
+                relacionadas_frescas = bool(seed_terms) and await pytrends_indicators.related_rows_exist(
+                    seed_terms, location
+                )
+                if seed_terms and not relacionadas_frescas:
                     gaps.append(
                         CoverageGap(
                             source=DataSource.PYTRENDS,
@@ -419,7 +431,8 @@ class AnalysisService:
 
         if not gaps:
             if reuse_report is not None:
-                reuse_report["reused"] = {}
+                reuse_report["reused"] = {"pytrends": demanda_reaproveitada} if demanda_reaproveitada else {}
+                reuse_report["related_fresh"] = relacionadas_frescas
                 reuse_report["not_covering"] = sorted(f.value for f in fontes_sem_cobertura_de(pais_macro))
             return []
 
@@ -444,7 +457,10 @@ class AnalysisService:
             for gap, status in zip(unique_gaps, statuses, strict=True):
                 if status.covered and not gap.force:
                     reaproveitados[gap.source.value] = reaproveitados.get(gap.source.value, 0) + 1
+            if demanda_reaproveitada or relacionadas_frescas:
+                reaproveitados["pytrends"] = reaproveitados.get("pytrends", 0) + demanda_reaproveitada
             reuse_report["reused"] = reaproveitados
+            reuse_report["related_fresh"] = relacionadas_frescas
             # Uma fonte que não cobre este país não é o mesmo que uma fonte que
             # não foi pedida: é uma resposta, e a única honesta. Ver
             # `fontes_sem_cobertura_de` — a ausência do código do país naquela
