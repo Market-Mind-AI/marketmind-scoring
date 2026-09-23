@@ -100,6 +100,7 @@ async def register_analysis(
         catalog_method=request.catalog_method,
         catalog_match_score=request.catalog_match_score,
         catalog_match_reasoning=request.catalog_match_reasoning,
+        catalog_query_text=request.catalog_query_text,
     )
     await session.commit()
     return RegisteredAnalysisResponse(request_id=analysis_request.id, status=analysis_request.status)
@@ -170,6 +171,7 @@ async def read_analysis(request_id: uuid.UUID, session: AsyncSession = Depends(g
         catalog_method=analysis_request.catalog_method,
         catalog_match_score=analysis_request.catalog_match_score,
         catalog_match_reasoning=analysis_request.catalog_match_reasoning,
+        catalog_query_text=analysis_request.catalog_query_text,
         countries=list(analysis_request.countries or []),
         user_prompt=analysis_request.user_prompt,
         progress=analysis_request.progress,

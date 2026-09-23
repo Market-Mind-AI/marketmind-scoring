@@ -29,6 +29,7 @@ class RegisterAnalysisRequest(BaseModel):
     catalog_method: str | None = None
     catalog_match_score: Decimal | None = None
     catalog_match_reasoning: str | None = None
+    catalog_query_text: str | None = None
 
 
 class RegisteredAnalysisResponse(BaseModel):
@@ -81,6 +82,7 @@ class AnalysisDetailResponse(BaseModel):
     catalog_method: str | None = None
     catalog_match_score: Decimal | None = None
     catalog_match_reasoning: str | None = None
+    catalog_query_text: str | None = None
     countries: list[str] = []
     user_prompt: str | None = None
     progress: str | None = None

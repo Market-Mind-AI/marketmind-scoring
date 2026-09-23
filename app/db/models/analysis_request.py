@@ -40,6 +40,9 @@ class AnalysisRequest(Base):
     catalog_match_score: Mapped[Decimal | None] = mapped_column(nullable=True)
     # Só no passo `llm` — ver a migration 040.
     catalog_match_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # O texto que o comprador digitou. O outro lado do par: sem ele, "picanha,
+    # coincidência exata" é ilegível para quem pediu "top sirloin cap".
+    catalog_query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     countries: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     estimated_price: Mapped[Decimal | None] = mapped_column(nullable=True)
     price_currency: Mapped[str | None] = mapped_column(nullable=True)
