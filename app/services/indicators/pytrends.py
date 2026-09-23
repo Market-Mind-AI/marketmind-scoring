@@ -29,9 +29,11 @@ import json
 import re
 import unicodedata
 from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
+from app.core.config import settings
 from app.domain.enums import AvailabilityStatus, IndicatorDirection
 from app.services.indicators.results import RawIndicatorResult
 from app.services.indicators.sources import pytrends_stored_related, pytrends_stored_volume
@@ -239,9 +241,34 @@ async def related_rows_exist(seed_terms: list[str], location: str) -> bool:
     if not seed_terms:
         return False
     seed_label = ", ".join(seed_terms)
+    corte = datetime.now(UTC) - timedelta(days=settings.demand_stale_after_days)
+    # Idade conta, igual ao volume de busca: relacionadas são demanda, e demanda
+    # muda de mês para mês. Sem isto, um conjunto de sementes estável mantinha
+    # para sempre as relacionadas da primeira coleta -- e como o intent score é
+    # calculado em cima delas, a análise de setembro usaria a intenção de
+    # janeiro sem nada indicar isso.
+    #
+    # `collected_at` vem com fuso do serviço que guarda (a coluna é `timestamp
+    # with time zone`), então o corte nasce com fuso também. O contrário é o
+    # `TypeError` que derrubou o `/freshness` do OECD e o do World Bank.
     return any(
-        (item.get("search_volume") or 0) > 0 for item in await pytrends_stored_related(location, seed_label)
+        (item.get("search_volume") or 0) > 0 and _coletado_em(item) >= corte
+        for item in await pytrends_stored_related(location, seed_label)
     )
+
+
+def _coletado_em(item: dict[str, Any]) -> datetime:
+    """Quando esta linha foi coletada, sempre com fuso.
+
+    Uma linha sem `collected_at` conta como coletada na origem dos tempos, ou
+    seja vencida: o lado seguro do erro é recoletar, nunca usar para sempre um
+    dado de data desconhecida.
+    """
+    bruto = item.get("collected_at")
+    if not bruto:
+        return datetime.min.replace(tzinfo=UTC)
+    momento = bruto if isinstance(bruto, datetime) else datetime.fromisoformat(str(bruto))
+    return momento if momento.tzinfo is not None else momento.replace(tzinfo=UTC)
 
 
 async def missing_volume_terms(terms: list[str], location: str) -> list[str]:

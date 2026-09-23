@@ -53,11 +53,18 @@ class CoverageService:
         stale: dict[int, bool] = {}
         for source, do_source in por_fonte.items():
             if source == DataSource.PYTRENDS:
-                # The exception, by design. Demand is per product and per
-                # keyword, so there is nothing to pre-store and no freshness to
-                # ask about — and the caller only builds a pytrends gap after
-                # asking that service which terms it is missing. Asking again
-                # here would be the same question twice.
+                # Não é "demanda nunca vence" — vence, e desde 23/09/2026 tem
+                # janela própria (`demand_stale_after_days`, 30 dias, a cadência
+                # do volume mensal do Google Ads).
+                #
+                # É que a pergunta JÁ FOI FEITA quando o gap foi montado. Um gap
+                # de pytrends só nasce depois de `missing_volume_terms` /
+                # `related_rows_exist` perguntarem ao serviço o que falta ou
+                # venceu — e eles trazem só os termos, não o país inteiro, o que
+                # aqui não teria como ser expresso. Então todo gap que chega
+                # aqui é, por construção, um que precisa coletar; repetir a
+                # pergunta seria a mesma pergunta duas vezes, e uma chamada a
+                # mais por análise.
                 stale.update({id(gap): True for gap in do_source})
                 continue
             # Cada serviço indexa o país do jeito dele, e perguntar no código

@@ -56,9 +56,7 @@ async def _post(source: DataSource, path: str, payload: dict[str, Any]) -> dict[
         raise ExternalSourceUnavailableError(f"{source.value} read failed at {path}: {exc}") from exc
 
 
-async def worldbank_series(
-    country_iso2: str, indicator_code: str, limit: int | None = None
-) -> list[tuple[int, float]]:
+async def worldbank_series(country_iso2: str, indicator_code: str, limit: int | None = None) -> list[tuple[int, float]]:
     """(year, value) newest first, nulls already dropped by the service."""
     params: dict[str, Any] = {"country_iso2": country_iso2, "indicator_code": indicator_code}
     if limit is not None:
@@ -92,9 +90,7 @@ async def oecd_series(
     return [(str(p["time_period"]), float(p["value"])) for p in body["data"]["points"]]
 
 
-async def undata_series(
-    country: str, indicator_code: str, limit: int | None = None
-) -> list[tuple[str, float]]:
+async def undata_series(country: str, indicator_code: str, limit: int | None = None) -> list[tuple[str, float]]:
     """(time_period, value) newest first.
 
     Called without a limit when two indicators have to be lined up year by year:
@@ -109,23 +105,34 @@ async def undata_series(
 
 
 async def pytrends_stored_volume(location: str, keywords: list[str]) -> dict[str, Any]:
-    """What is stored for these keywords, plus `missing` -- the ones that are not.
+    """What is stored for these keywords, plus `missing` -- the ones that are
+    not, or whose stored value is past `demand_stale_after_days`.
 
     Nothing is collected and nothing is billed. `missing` comes from the
     service rather than being worked out here: the match has to be
     case-insensitive, because that source lowercases what it stores, and a
     curated term written with capitals would look missing forever and be
     re-collected on every run at real cost.
+
+    A idade entra no pedido porque a política é daqui, não de lá: o serviço
+    responde o que tem e quando coletou; quem decide o que é velho demais é
+    quem vai usar o número.
     """
     if not keywords:
         return {"keywords": [], "missing": []}
-    body = await _post(DataSource.PYTRENDS, "/stored/search-volume", {"location": location, "keywords": keywords})
+    body = await _post(
+        DataSource.PYTRENDS,
+        "/stored/search-volume",
+        {
+            "location": location,
+            "keywords": keywords,
+            "stale_after_days": settings.demand_stale_after_days,
+        },
+    )
     return body["data"]
 
 
 async def pytrends_stored_related(location: str, seed_keyword: str) -> list[dict[str, Any]]:
     """The related keywords stored for one seed, freshest row per keyword."""
-    body = await _get(
-        DataSource.PYTRENDS, "/stored/related", {"location": location, "seed_keyword": seed_keyword}
-    )
+    body = await _get(DataSource.PYTRENDS, "/stored/related", {"location": location, "seed_keyword": seed_keyword})
     return body["data"]["keywords"]

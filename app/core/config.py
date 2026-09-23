@@ -14,10 +14,7 @@ class Settings(BaseSettings):
     # API directly, so its origin must be allowed. Comma-separated list of
     # origins; override via the CORS_ALLOW_ORIGINS env var. Use "*" to allow any
     # origin (dev only). Default covers the Astro dev/preview ports on localhost.
-    cors_allow_origins: str = (
-        "http://localhost:4321,http://127.0.0.1:4321,"
-        "http://localhost:4322,http://127.0.0.1:4322"
-    )
+    cors_allow_origins: str = "http://localhost:4321,http://127.0.0.1:4321,http://localhost:4322,http://127.0.0.1:4322"
 
     # Core's own database (product catalog, coverage, indicators, MOS, jobs)
     database_host: str = "localhost"
@@ -111,7 +108,6 @@ class Settings(BaseSettings):
     # in-process loop that used to be the alternative is gone.
     orchestrator_api_base_url: str = "http://host.docker.internal:8081"
 
-
     # How long the Core waits for an ingestion run to finish before giving up
     # on a single collection call (the run itself keeps going server-side;
     # this only bounds how long the Core polls synchronously).
@@ -160,6 +156,21 @@ class Settings(BaseSettings):
     # the window is left alone and only the individual indicators past it are
     # re-collected.
     country_indicator_ttl_days: int = 90
+
+    # Janela de frescor da DEMANDA (volume de busca e palavras relacionadas),
+    # que é coisa diferente das duas acima e por isso tem botão próprio.
+    #
+    # Até 23/09/2026 não havia janela nenhuma: `missing` no serviço de pytrends
+    # queria dizer "nunca coletado", e como só se coleta o que está em
+    # `missing`, um volume baixado uma vez valia para sempre. A demanda é
+    # justamente o único indicador que muda de mês para mês, e era o único que
+    # nunca se renovava.
+    #
+    # 30 dias porque é a cadência do próprio dado: o volume do Google Ads é
+    # mensal, e o gap já nasce com `period_key` do mês corrente. Recoletar antes
+    # disso paga por número que não mudou -- e aqui se paga por chamada, ao
+    # contrário das fontes macro.
+    demand_stale_after_days: int = 30
 
     # Fase 5 — a análise NUNCA entrega ranking parcial (decisão D3, 2026-08-27:
     # "o usuário vai pagar por essa análise"). Um país sem indicador por falha

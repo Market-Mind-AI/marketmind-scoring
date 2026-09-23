@@ -6,7 +6,9 @@ monthly series; SEARCH INTENT from volume-weighted related-keyword classificatio
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -604,9 +606,7 @@ def test_two_ways_of_preparing_it_are_two_searches() -> None:
     only the product's name, so they are two searches and both are counted."""
     from app.services.indicators.pytrends import _dedup_volume_rows
 
-    out = _dedup_volume_rows(
-        _rows(("picanha na brasa", 8_100), ("picanha preço", 8_100)), _vocabulary("picanha")
-    )
+    out = _dedup_volume_rows(_rows(("picanha na brasa", 8_100), ("picanha preço", 8_100)), _vocabulary("picanha"))
 
     assert sum(v for _k, v, _m in out) == 16_200
 
@@ -776,3 +776,53 @@ def test_grouping_two_thousand_keywords_stays_quick() -> None:
 
     assert out, "sanity: the grouping produced something"
     assert elapsed < 1.0, f"grouping took {elapsed:.2f}s; it used to block the event loop for longer than this"
+
+
+# --- Vencimento da demanda (23/09/2026) -------------------------------------
+#
+# `related_rows_exist` não tinha teste nenhum: é mockado no único lugar que o
+# usa, então a suíte inteira passava verde sem nunca executá-lo. É a mesma
+# forma de cegueira que deixou seis defeitos viverem semanas neste projeto —
+# o teste mede o que o código faz, não o ambiente em que ele roda.
+
+
+def _relacionada(volume: int, *, dias: int) -> dict:
+    """Uma linha como o serviço devolve: `collected_at` COM fuso, porque a
+    coluna é `timestamp with time zone`."""
+    return {
+        "keyword": "air fryer barata",
+        "search_volume": volume,
+        "collected_at": (datetime.now(UTC) - timedelta(days=dias)).isoformat(),
+    }
+
+
+async def test_related_keywords_collected_long_ago_count_as_absent() -> None:
+    """Relacionadas são demanda, e demanda muda de mês para mês. Sem idade, um
+    conjunto de sementes estável mantinha para sempre as relacionadas da
+    primeira coleta — e o intent score sai delas, então a análise de setembro
+    usaria a intenção de janeiro sem nada indicar."""
+    with patch(
+        "app.services.indicators.pytrends.pytrends_stored_related",
+        AsyncMock(return_value=[_relacionada(900, dias=45)]),
+    ):
+        assert await pytrends_indicators.related_rows_exist(["air fryer"], "ES") is False
+
+
+async def test_recent_related_keywords_are_not_recollected() -> None:
+    """O outro lado, que é o que custa: dentro do prazo não se pergunta à
+    DataForSEO, que cobra por chamada."""
+    with patch(
+        "app.services.indicators.pytrends.pytrends_stored_related",
+        AsyncMock(return_value=[_relacionada(900, dias=3)]),
+    ):
+        assert await pytrends_indicators.related_rows_exist(["air fryer"], "ES") is True
+
+
+async def test_a_row_with_no_collection_date_is_treated_as_stale() -> None:
+    """O lado seguro do erro: recoletar custa uma chamada, usar para sempre um
+    dado de data desconhecida custa uma análise errada."""
+    with patch(
+        "app.services.indicators.pytrends.pytrends_stored_related",
+        AsyncMock(return_value=[{"keyword": "x", "search_volume": 900}]),
+    ):
+        assert await pytrends_indicators.related_rows_exist(["air fryer"], "ES") is False
