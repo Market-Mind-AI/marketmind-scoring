@@ -461,3 +461,38 @@ def test_every_judgement_tool_needs_the_token(client: TestClient) -> None:
         ("/internal/champion", {"entity_key": str(uuid.uuid4()), "period_key": "x"}),
     ]:
         assert client.post(path, json=payload).status_code == 401, path
+
+
+def test_a_match_near_the_threshold_is_reported_as_borderline(client: TestClient) -> None:
+    """O limiar mora neste serviço, então quem rotula é ele. O agente chegou a
+    repetir o 0.4 do lado dele só para escrever "BORDERLINE", e número repetido
+    envelhece sozinho: mudar o limiar aqui deixaria o rótulo de lá mentindo sem
+    nada acusar."""
+    request_id = client.post(
+        "/internal/analyses",
+        json={"countries": ["ESP"], "catalog_method": "trigram", "catalog_match_score": 0.41},
+        headers=_HEADERS,
+    ).json()["request_id"]
+
+    lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
+
+    assert lido["catalog_match_borderline"] is True
+
+
+def test_a_comfortable_match_is_not_borderline(client: TestClient) -> None:
+    request_id = client.post(
+        "/internal/analyses",
+        json={"countries": ["ESP"], "catalog_method": "trigram", "catalog_match_score": 0.87},
+        headers=_HEADERS,
+    ).json()["request_id"]
+
+    assert client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()["catalog_match_borderline"] is False
+
+
+def test_a_match_with_no_score_is_not_borderline(client: TestClient) -> None:
+    """`alias`, `llm` e `created` não têm score — não há de que estar perto."""
+    request_id = client.post(
+        "/internal/analyses", json={"countries": ["ESP"], "catalog_method": "alias"}, headers=_HEADERS
+    ).json()["request_id"]
+
+    assert client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()["catalog_match_borderline"] is False

@@ -83,6 +83,9 @@ class AnalysisDetailResponse(BaseModel):
     catalog_match_score: Decimal | None = None
     catalog_match_reasoning: str | None = None
     catalog_query_text: str | None = None
+    # Derivado na leitura, não guardado: o limiar mora aqui e pode mudar, e o
+    # rótulo honesto é "pelo corte de hoje, isto passou raspando".
+    catalog_match_borderline: bool = False
     countries: list[str] = []
     user_prompt: str | None = None
     progress: str | None = None

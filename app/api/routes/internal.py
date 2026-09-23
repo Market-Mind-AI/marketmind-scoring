@@ -171,6 +171,11 @@ async def read_analysis(request_id: uuid.UUID, session: AsyncSession = Depends(g
         canonical_title=analysis_request.canonical_title,
         catalog_method=analysis_request.catalog_method,
         catalog_match_score=analysis_request.catalog_match_score,
+        # Calculado AQUI, e não por quem lê, porque o limiar é desta casa. O
+        # agente chegou a repetir o 0.4 do lado dele só para rotular, e um
+        # número repetido é um número que envelhece sozinho: mudar o limiar
+        # aqui deixaria o rótulo de lá mentindo sem nada acusar.
+        catalog_match_borderline=_no_limiar(analysis_request.catalog_match_score),
         catalog_match_reasoning=analysis_request.catalog_match_reasoning,
         catalog_query_text=analysis_request.catalog_query_text,
         countries=list(analysis_request.countries or []),
@@ -420,6 +425,20 @@ async def revise_narrative(
 
 
 # --- The steps that carry the analysis's own judgement ---
+
+
+# A que distância do limiar ainda é "quase não passou". Medido em 23/09/2026:
+# "cafetera italiana para espresso" casou com "cafeteira italiana moka" em
+# 41,0% contra um corte de 40% — identidade de produto decidida por um fio.
+_MARGEM_LIMIAR = 0.05
+
+
+def _no_limiar(score: Decimal | None) -> bool:
+    """Se esta coincidência passou raspando. Só o passo `trigram` tem score;
+    nos outros não há nada de que estar perto."""
+    if score is None:
+        return False
+    return float(score) < settings.catalog_trigram_similarity_threshold + _MARGEM_LIMIAR
 
 
 async def _entity(session: AsyncSession, entity_key: uuid.UUID):  # noqa: ANN202
