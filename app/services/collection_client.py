@@ -193,6 +193,18 @@ def _extract_run_status(source: DataSource, body: dict[str, Any]) -> IngestionRu
     return normalized
 
 
+def _why(exc: BaseException) -> str:
+    """O que falhou, em palavras, mesmo quando a exceção não traz nenhuma.
+
+    httpx levanta seus timeouts com mensagem VAZIA, e um objeto de exceção é
+    sempre truthy — então `{exc or type(exc).__name__}` mantém a mensagem
+    vazia e o relato termina nos dois pontos. Foi assim que um timeout de dez
+    minutos da API do World Bank no CPI da Colômbia chegou em branco a quem
+    chamou. Sem mensagem, o nome da classe é o fato.
+    """
+    return str(exc) or type(exc).__name__
+
+
 class CollectionClient:
     """One instance per call site; a fresh httpx.AsyncClient per request
     keeps this stateless. Call volume here is bounded by job_task creation
@@ -241,7 +253,7 @@ class CollectionClient:
                 response.raise_for_status()
                 body = response.json()
         except httpx.HTTPError as exc:
-            raise CollectionDispatchError(f"{source.value} freshness failed: {exc or type(exc).__name__}") from exc
+            raise CollectionDispatchError(f"{source.value} freshness failed: {_why(exc)}") from exc
 
         items = (body.get("data") or {}).get("items") or []
         return {(item["country"], item["indicator_code"]): bool(item.get("stale", True)) for item in items}
@@ -264,4 +276,4 @@ class CollectionClient:
                         )
                     await asyncio.sleep(settings.collection_poll_interval_seconds)
         except httpx.HTTPError as exc:
-            raise CollectionDispatchError(f"Failed to poll {source.value} run {ingestion_run_id}: {exc}") from exc
+            raise CollectionDispatchError(f"Failed to poll {source.value} run {ingestion_run_id}: {_why(exc)}") from exc
