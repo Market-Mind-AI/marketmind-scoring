@@ -503,13 +503,18 @@ async def candidates_coverage(
 ) -> CandidatesCoverageResponse:
     entity = await _entity(session, request.entity_key)
     cached = entity.champion_period_key == request.period_key
+    tarefas: list = []
+    reuso: dict[str, Any] = {}
     if not cached:
-        await AnalysisService(session).ensure_candidates_coverage(
-            entity, request.requested_countries, period_key=request.period_key
+        tarefas = await AnalysisService(session).ensure_candidates_coverage(
+            entity, request.requested_countries, period_key=request.period_key, reuse_report=reuso
         )
         await session.commit()
     return CandidatesCoverageResponse(
         entity_key=request.entity_key,
+        tasks=tarefas,
+        reused=reuso.get("reused", {}),
+        related_fresh=int(reuso.get("related_fresh") or 0),
         champion_cached=cached,
         champion_country=entity.champion_country if cached else None,
         champion_mos=float(entity.champion_mos) if cached and entity.champion_mos is not None else None,

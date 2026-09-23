@@ -346,7 +346,7 @@ def test_candidate_collection_is_skipped_when_the_champion_is_cached(client: Tes
 def test_candidate_collection_runs_when_there_is_no_cached_champion(client: TestClient) -> None:
     entity_key = _resolve(client, f"fresh champion {uuid.uuid4().hex[:6]}")
 
-    collected = AsyncMock(return_value=None)
+    collected = AsyncMock(return_value=[])
     with patch("app.services.analysis_service.AnalysisService.ensure_candidates_coverage", collected):
         response = client.post(
             "/internal/candidates/coverage",
@@ -356,6 +356,31 @@ def test_candidate_collection_runs_when_there_is_no_cached_champion(client: Test
 
     assert response.json()["champion_cached"] is False
     collected.assert_awaited_once()
+
+
+def test_candidate_collection_reports_what_it_did(client: TestClient) -> None:
+    """É o passo MAIS CARO do sistema — três análises seguidas de um produto
+    levaram 594s, 203s e 396s, quase todo o repetido sendo trabalho de
+    candidato refeito — e era o único que não devolvia relato nenhum. Sem isto
+    ele não aparece no trace, e uma regressão de custo ali é invisível."""
+    entity_key = _resolve(client, f"relato de candidato {uuid.uuid4().hex[:6]}")
+
+    async def _coleta(self, entity, requested, *, period_key, reuse_report=None):  # noqa: ANN001, ANN202
+        if reuse_report is not None:
+            reuse_report["reused"] = {"pytrends": 12}
+            reuse_report["related_fresh"] = 2
+        return []
+
+    with patch("app.services.analysis_service.AnalysisService.ensure_candidates_coverage", _coleta):
+        body = client.post(
+            "/internal/candidates/coverage",
+            json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": "2026-09"},
+            headers=_HEADERS,
+        ).json()
+
+    assert body["reused"] == {"pytrends": 12}
+    assert body["related_fresh"] == 2
+    assert body["tasks"] == []
 
 
 def test_a_champion_can_be_stored_as_nothing_scorable(client: TestClient) -> None:

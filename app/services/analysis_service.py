@@ -480,7 +480,9 @@ class AnalysisService:
         outputs = _DEMAND_COLLECTION_OUTPUTS.get(collection_code, ())
         return any(not _is_available(current, code) for code in outputs)
 
-    async def ensure_candidates_coverage(self, entity: Any, requested: list[str], *, period_key: str) -> None:
+    async def ensure_candidates_coverage(
+        self, entity: Any, requested: list[str], *, period_key: str, reuse_report: dict[str, Any] | None = None
+    ) -> list[JobTaskResult]:
         """Collect each reference-market candidate's FULL demand — search_volume
         AND keywords_for_keywords — exactly like a requested country, so its
         volume is measured through the identical pipeline (including the related-
@@ -488,8 +490,18 @@ class AnalysisService:
         of the requested set (so the ruler is query-independent) and persisted /
         reused via the coverage cache. Candidates that ARE requested countries
         are skipped here — already collected under their own localized terms
-        (pulled once)."""
+        (pulled once).
+
+        Devolve as tarefas despachadas, e preenche `reuse_report` com o que já
+        estava guardado. Antes não devolvia nada, e por isso o passo MAIS CARO
+        do sistema não aparecia em relato nenhum: três análises seguidas de um
+        produto levaram 594s, 203s e 396s, e quase todo o custo repetido era
+        trabalho de candidato refeito. Era também o passo que rebaixava demanda
+        idêntica em toda análise (corrigido em 23/09/2026) — invisível porque
+        nada do que ele faz chegava a ser contado."""
         gaps: list[CoverageGap] = []
+        demanda_reaproveitada = 0
+        relacionadas_frescas = 0
         for cand in _champion_candidates(entity, requested):
             iso3 = cand.get("country")
             terms = as_term_list(cand.get("search_terms"))
@@ -507,6 +519,7 @@ class AnalysisService:
             # demanda inteira dos candidatos, idêntica à da análise anterior,
             # pagando por chamada. Medido em 23/09/2026.
             faltando = await pytrends_indicators.missing_volume_terms(terms, country.iso2)
+            demanda_reaproveitada += len(terms) - len(faltando)
             if faltando:
                 gaps.append(
                     CoverageGap(
@@ -525,7 +538,9 @@ class AnalysisService:
             # que tem venceram (`related_rows_exist` já considera idade). Sem
             # isso o candidato fica sem search_intent e não pode ser pontuado
             # como "campeão" — só medido como régua.
-            if not await pytrends_indicators.related_rows_exist(seed_terms, country.iso2):
+            tem_relacionadas = await pytrends_indicators.related_rows_exist(seed_terms, country.iso2)
+            relacionadas_frescas += 1 if tem_relacionadas else 0
+            if not tem_relacionadas:
                 gaps.append(
                     CoverageGap(
                         source=DataSource.PYTRENDS,
@@ -541,14 +556,20 @@ class AnalysisService:
                         force=True,
                     )
                 )
+        if reuse_report is not None:
+            reuse_report["reused"] = {"pytrends": demanda_reaproveitada} if demanda_reaproveitada else {}
+            reuse_report["related_fresh"] = relacionadas_frescas
         if not gaps:
-            return
+            return []
         # Sem `check_coverage` aqui: todo gap que chegou a esta lista já é, por
         # construção, algo que falta ou venceu — as duas perguntas foram feitas
         # acima, por termo, que é a granularidade que a cobertura não sabe
         # expressar. Perguntar de novo seria a mesma pergunta duas vezes e uma
         # chamada HTTP a mais por análise.
-        await self._coverage_service.check_or_collect(gaps, requested_by="analysis_service:reference_candidates")
+        _job_id, resultados = await self._coverage_service.check_or_collect(
+            gaps, requested_by="analysis_service:reference_candidates"
+        )
+        return resultados
 
     async def resolve_demand_ceiling(
         self, entity: Any, countries: list[str], period_key: str

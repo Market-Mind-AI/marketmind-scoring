@@ -193,6 +193,13 @@ class CandidatesCoverageRequest(BaseModel):
 
 class CandidatesCoverageResponse(BaseModel):
     entity_key: uuid.UUID
+    # O que esta coleta fez, que antes não voltava de jeito nenhum. É o passo
+    # mais caro do sistema — três análises seguidas de um produto levaram 594s,
+    # 203s e 396s, e quase todo o custo repetido era trabalho de candidato
+    # refeito — e era o único sem nenhum relato.
+    tasks: list[JobTaskResult] = []
+    reused: dict[str, int] = {}
+    related_fresh: int = 0
     # The champion this product already has for the period, when it has one.
     # The caller needs the figure, not just the fact: a stored champion that a
     # requested market now beats must be replaced, or it is reloaded and
