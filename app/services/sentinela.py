@@ -12,10 +12,11 @@ verificação nasceu de uma falha real:
     frescor        o UN Data era perguntado em ISO3 quando indexa por ISO2, e
                    respondia vazio: tudo parecia vencido e era recoletado
                    inteiro, para sempre.
-    pré-aquecimento o job falhava no prazo de uma hora e o macro dos 24 países
-                   ficava dependente das fontes estarem de pé no minuto da
-                   análise -- em 25/08/2026 a ONU ficou 29 minutos fora e 9
-                   países saíram de um ranking.
+    macro quente   o pré-aquecimento falhava no prazo de uma hora e o macro dos
+                   24 países ficava dependente das fontes estarem de pé no
+                   minuto da análise -- em 25/08/2026 a ONU ficou 29 minutos
+                   fora e 9 países saíram de um ranking. Pergunta-se pelo dado,
+                   não pelo job: ver `_macro_quente`.
     pesos          sem eles não há MOS, e eles são versionados por período: o
                    mês virar sem calibragem é uma análise que não sai.
     análises presas uma análise `running` além do prazo é trabalho que o
@@ -29,7 +30,6 @@ diário chama com `curl --fail`, e um 503 vira Job `Failed`, que é o que a regr
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -39,11 +39,6 @@ from app.core.logging import logger
 from app.db.models.analysis_request import AnalysisRequest
 from app.db.models.indicator_weight import IndicatorWeight
 from app.utils.time import utc_now
-
-# Quanto tempo o pré-aquecimento pode ficar sem uma passagem bem-sucedida. Ele
-# roda às 04:00; 26 horas dá folga para uma noite atrasar sem alarme falso, e
-# não deixa passar duas.
-_PREWARM_MAX_HORAS = 26
 
 
 @dataclass
@@ -83,7 +78,7 @@ class Sentinela:
         for verificacao in (
             self._pesos_do_periodo,
             self._analises_presas,
-            self._prewarm_recente,
+            self._macro_quente,
         ):
             try:
                 relatorio.verificacoes.append(await verificacao())
@@ -132,22 +127,32 @@ class Sentinela:
         detalhe = "nenhuma" if ok else f"{len(presas)} além do prazo: {[str(i) for i in presas[:5]]}"
         return Verificacao("analises_presas", ok, detalhe)
 
-    async def _prewarm_recente(self) -> Verificacao:
-        """O macro dos países tem de estar quente FORA da análise. Quando este
-        job para, toda análise volta a depender das fontes estarem de pé no
-        minuto em que o usuário perguntou."""
-        from app.db.models.job import Job
+    async def _macro_quente(self) -> Verificacao:
+        """O macro dos países tem de estar quente FORA da análise. Quando o
+        pré-aquecimento para, toda análise volta a depender das fontes estarem
+        de pé no minuto em que o usuário perguntou.
 
-        limite = utc_now() - timedelta(hours=_PREWARM_MAX_HORAS)
-        ultimo = (
-            await self._session.execute(
-                select(func.max(Job.created_at)).where(Job.requested_by == "macro_prewarm")
-            )
-        ).scalar()
-        ok = ultimo is not None and ultimo >= limite
-        if ultimo is None:
-            detalhe = "nunca rodou"
+        Isto pergunta pelo DADO, e a primeira versão perguntava pelo rastro: a
+        última linha de `jobs` com `requested_by='macro_prewarm'`. Errado, e de
+        um jeito instrutivo — o pré-aquecimento só cria Job quando acha
+        trabalho (`macro_coverage`, `if not faltando: continue`), que é a
+        eficiência que se pediu dele. Uma noite perfeita não deixa rastro
+        nenhum, então quanto mais saudável o sistema, mais cedo a verificação
+        ficaria vermelha. Em 23/09/2026 o job das 04:00 terminou em verde e a
+        sentinela das 05:00 relatou "última passagem há 16.4h", apontando para
+        uma execução manual da véspera.
+
+        Às 05:00, uma hora depois do pré-aquecimento, vencido significa que ele
+        não deu conta — o TTL é de 30 dias, nada vence sozinho em uma hora.
+        """
+        from app.services.macro_coverage import MacroPrewarmService
+
+        auditoria = await MacroPrewarmService(self._session).auditar()
+        ok = auditoria.vencidos == 0
+        detalhe = f"{auditoria.indicadores} indicadores macro em {auditoria.paises} países"
+        if ok:
+            detalhe += ", todos frescos"
         else:
-            horas = (utc_now() - ultimo).total_seconds() / 3600
-            detalhe = f"última passagem há {horas:.1f}h (limite {_PREWARM_MAX_HORAS}h)"
-        return Verificacao("prewarm_recente", ok, detalhe)
+            quais = ", ".join(auditoria.paises_com_vencidos[:8])
+            detalhe += f"; {auditoria.vencidos} vencidos em {len(auditoria.paises_com_vencidos)} países ({quais})"
+        return Verificacao("macro_quente", ok, detalhe)

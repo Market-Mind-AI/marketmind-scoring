@@ -7,11 +7,13 @@ certo. Processo de pé, resultado errado — e nada via.
 
 import uuid
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.analysis_request import AnalysisRequest
-from app.db.models.job import Job
+from app.services.collection_client import CollectionDispatchError
+from app.services.macro_coverage import Auditoria, MacroPrewarmService
 from app.services.sentinela import Sentinela
 from app.utils.time import utc_now
 
@@ -62,54 +64,67 @@ async def test_an_analysis_still_within_its_deadline_is_not(db_session: AsyncSes
     assert str(viva.id) not in v["detalhe"]
 
 
-async def test_a_prewarm_that_stopped_running_is_a_finding(db_session: AsyncSession) -> None:
-    """Quando ele para, toda análise volta a depender das fontes estarem de pé
-    no minuto em que o usuário perguntou. Em 25/08/2026 a ONU ficou 29 minutos
-    fora e nove países saíram de um ranking por causa disso."""
-    antigo = Job(
-        id=uuid.uuid4(),
-        status="done",
-        requested_by="macro_prewarm",
-        request_payload={},
-        created_at=utc_now() - timedelta(days=3),
-    )
-    db_session.add(antigo)
-    await db_session.flush()
+async def test_a_perfect_night_leaves_no_trace_and_must_still_pass(db_session: AsyncSession) -> None:
+    """A regressão que motivou esta verificação, em 23/09/2026.
 
-    v = _de(await _relatorio(db_session), "prewarm_recente")
+    A primeira versão lia a última linha de `jobs` com
+    `requested_by='macro_prewarm'`. Mas o pré-aquecimento só cria Job quando
+    acha trabalho — `if not faltando: continue` — que é a eficiência que se
+    pediu dele. Naquele dia ele terminou em verde às 04:00 sem criar Job
+    nenhum, e a sentinela das 05:00 relatou "última passagem há 16.4h",
+    apontando para uma execução manual da véspera.
 
-    assert v["ok"] is False
+    Quanto mais saudável o sistema, mais cedo o alarme tocaria. Por isso o
+    banco aqui NÃO tem Job nenhum: tudo fresco tem de passar mesmo assim.
+    """
+    auditoria = Auditoria(paises=24, indicadores=406, vencidos=0)
 
-
-async def test_a_recent_prewarm_passes(db_session: AsyncSession) -> None:
-    db_session.add(
-        Job(
-            id=uuid.uuid4(),
-            status="done",
-            requested_by="macro_prewarm",
-            request_payload={},
-            created_at=utc_now(),
-        )
-    )
-    await db_session.flush()
-
-    v = _de(await _relatorio(db_session), "prewarm_recente")
+    with patch.object(MacroPrewarmService, "auditar", AsyncMock(return_value=auditoria)):
+        v = _de(await _relatorio(db_session), "macro_quente")
 
     assert v["ok"] is True
+    assert "todos frescos" in v["detalhe"]
+
+
+async def test_macro_left_stale_is_a_finding_and_names_the_countries(db_session: AsyncSession) -> None:
+    """Às 05:00, uma hora depois do pré-aquecimento, vencido significa que ele
+    não deu conta: o TTL é de 30 dias, nada vence sozinho em uma hora. Em
+    25/08/2026 a ONU ficou 29 minutos fora e nove países saíram de um ranking —
+    o nome do país é o que diz onde olhar."""
+    auditoria = Auditoria(paises=24, indicadores=406, vencidos=12, paises_com_vencidos=["ARG", "PER"])
+
+    with patch.object(MacroPrewarmService, "auditar", AsyncMock(return_value=auditoria)):
+        v = _de(await _relatorio(db_session), "macro_quente")
+
+    assert v["ok"] is False
+    assert "12 vencidos em 2 países" in v["detalhe"]
+    assert "ARG" in v["detalhe"] and "PER" in v["detalhe"]
+
+
+async def test_a_source_that_cannot_be_asked_is_a_finding_not_a_pass(db_session: AsyncSession) -> None:
+    """ "Não consegui perguntar" é diferente de "perguntei e está tudo bem", e
+    às 05:00 também significa que o pré-aquecimento das 04:00 provavelmente não
+    conseguiu coletar."""
+    quebrado = AsyncMock(side_effect=CollectionDispatchError("undata freshness failed"))
+
+    with patch.object(MacroPrewarmService, "auditar", quebrado):
+        v = _de(await _relatorio(db_session), "macro_quente")
+
+    assert v["ok"] is False
+    assert "a própria verificação falhou" in v["detalhe"]
 
 
 async def test_a_check_that_blows_up_is_itself_a_finding(db_session: AsyncSession) -> None:
     """Uma verificação que quebra não pode passar por verificação que passou —
     seria o silêncio que este arquivo existe para acabar."""
-    from unittest.mock import patch
 
-    async def _prewarm_recente(self) -> None:  # noqa: ANN001 — precisa do mesmo nome e do self
+    async def _analises_presas(self) -> None:  # noqa: ANN001 — precisa do mesmo nome e do self
         raise RuntimeError("banco fora")
 
-    with patch.object(Sentinela, "_prewarm_recente", _prewarm_recente):
+    with patch.object(Sentinela, "_analises_presas", _analises_presas):
         relatorio = await _relatorio(db_session)
 
-    v = _de(relatorio, "prewarm_recente")
+    v = _de(relatorio, "analises_presas")
     assert v["ok"] is False
     assert "a própria verificação falhou" in v["detalhe"]
     assert relatorio["ok"] is False, "e o relatório inteiro fica vermelho"

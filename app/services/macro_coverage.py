@@ -23,6 +23,7 @@ Não substitui o retry: a análise continua sabendo se virar sozinha se algo
 estiver faltando. Reduz a frequência com que precisa.
 """
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,6 +112,17 @@ def macro_gaps(country_iso3: str, *, fontes_sem_cobertura: frozenset[DataSource]
     return gaps
 
 
+@dataclass
+class Auditoria:
+    """O retrato de frescor do macro, sem juízo de valor embutido: quem lê
+    decide o que é aceitável. Ver `MacroPrewarmService.auditar`."""
+
+    paises: int = 0
+    indicadores: int = 0
+    vencidos: int = 0
+    paises_com_vencidos: list[str] = field(default_factory=list)
+
+
 class MacroPrewarmService:
     """Mantém o dado macro dos países suportados quente, fora de qualquer
     análise. Pensado para um cron — não há agendador em processo aqui."""
@@ -120,17 +132,49 @@ class MacroPrewarmService:
         self._country_repo = CountryRepository(session)
         self._coverage_service = CoverageService(session)
 
+    async def _vencidos_de(self, iso3: str) -> tuple[int, list[CoverageGap]]:
+        """Quantos gaps macro este país tem e quais estão vencidos. LEITURA
+        PURA — não coleta nada.
+
+        Extraído para que `prewarm` e `auditar` façam exatamente a mesma
+        pergunta. É a razão de `macro_gaps` existir num lugar só, pela mesma
+        lição: duas construções separadas divergem, e a divergência aparece
+        como um país que o pré-aquecimento achou quente e a análise achou frio.
+        """
+        pais = await self._country_repo.get_by_iso3(iso3)
+        gaps = macro_gaps(iso3, fontes_sem_cobertura=fontes_sem_cobertura_de(pais))
+        statuses = await self._coverage_service.check_coverage(gaps)
+        return len(gaps), [gap for gap, status in zip(gaps, statuses, strict=True) if not status.covered]
+
+    async def auditar(self) -> Auditoria:
+        """O dado macro dos países suportados está quente AGORA?
+
+        Mesma pergunta do pré-aquecimento, sem a parte que coleta. Existe
+        porque "o pré-aquecimento rodou" e "o dado está quente" são coisas
+        diferentes, e só a segunda é o que o usuário recebe.
+
+        Uma fonte fora do ar não vira "tudo vencido": `freshness` levanta, e
+        quem chama decide. Não conseguir perguntar é um resultado diferente de
+        perguntar e ouvir "não tenho".
+        """
+        auditoria = Auditoria()
+        for country in await self._country_repo.list_all():
+            quantos, vencidos = await self._vencidos_de(country.iso3)
+            auditoria.paises += 1
+            auditoria.indicadores += quantos
+            if vencidos:
+                auditoria.vencidos += len(vencidos)
+                auditoria.paises_com_vencidos.append(country.iso3)
+        return auditoria
+
     async def prewarm(self, *, countries: list[str] | None = None) -> dict[str, int]:
         alvos = countries or [c.iso3 for c in await self._country_repo.list_all()]
         relatorio = {"paises": 0, "ja_frescos": 0, "coletados": 0, "falhados": 0}
 
         for iso3 in alvos:
-            pais = await self._country_repo.get_by_iso3(iso3)
-            gaps = macro_gaps(iso3, fontes_sem_cobertura=fontes_sem_cobertura_de(pais))
-            statuses = await self._coverage_service.check_coverage(gaps)
-            faltando = [gap for gap, status in zip(gaps, statuses, strict=True) if not status.covered]
+            quantos, faltando = await self._vencidos_de(iso3)
             relatorio["paises"] += 1
-            relatorio["ja_frescos"] += len(gaps) - len(faltando)
+            relatorio["ja_frescos"] += quantos - len(faltando)
             if not faltando:
                 continue
             _job_id, resultados = await self._coverage_service.check_or_collect(faltando, requested_by="macro_prewarm")
