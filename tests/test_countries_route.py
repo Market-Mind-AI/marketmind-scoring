@@ -73,12 +73,27 @@ def _fabrica_de(sessao):  # noqa: ANN001, ANN202
     rodam em paralelo e uma `AsyncSession` não é segura sob concorrência. Sem
     isto o teste escreve numa sessão e o código lê de outra — e o teste falharia
     medindo o isolamento, não a regra.
+
+    O `commit` do código vira `flush` aqui: numa sessão de teste ele confirmaria
+    a transação que o fixture desfaz no fim, e as linhas vazariam para a
+    execução seguinte — que foi exatamente o que aconteceu antes desta linha
+    existir (`duplicate key value violates unique constraint`).
     """
     from contextlib import asynccontextmanager
 
+    class _SemCommit:
+        def __init__(self, real):  # noqa: ANN001, ANN204
+            self._real = real
+
+        def __getattr__(self, nome):  # noqa: ANN001, ANN204
+            return getattr(self._real, nome)
+
+        async def commit(self) -> None:
+            await self._real.flush()
+
     @asynccontextmanager
     async def _abrir():  # noqa: ANN202
-        yield sessao
+        yield _SemCommit(sessao)
 
     return lambda: _abrir()
 
