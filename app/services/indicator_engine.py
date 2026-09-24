@@ -84,6 +84,16 @@ def _com_share_da_marca(categoria: RawIndicatorResult, *, brand_raw: RawIndicato
             f"the brand is searched {razao:.1f}x MORE than the generic category terms "
             f"({volume_marca:,.0f} vs {volume_categoria:,.0f})"
         )
+    # DOIS números da marca aparecem no mesmo pacote e medem coisas
+    # diferentes: este, dos termos curados, e o de Demand Volume, que inclui a
+    # expansão por palavras relacionadas. Sem dizer isso, a diferença lê-se
+    # como contradição — medido em 24/09/2026, o juiz acusou "o texto diz
+    # 45.010 e a evidência mostra 109.010" para uma análise da Philips, e os
+    # dois números estavam certos.
+    comparacao += (
+        f"; {volume_marca:,.0f} counts the brand's CURATED terms only, which is why it is lower than the "
+        f"Demand Volume figure above — that one also folds in related keywords"
+    )
     return RawIndicatorResult(
         categoria.raw_value,
         categoria.direction,
