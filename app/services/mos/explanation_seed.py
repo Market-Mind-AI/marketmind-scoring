@@ -32,6 +32,7 @@ METRIC_META: dict[str, tuple[str, str, bool | None]] = {
     "gdp_per_capita_score": ("indicator", "GDP per Capita", True),
     "internet_penetration_score": ("indicator", "Internet Penetration", True),
     "mobile_connectivity_score": ("indicator", "Mobile Connectivity", True),
+    "broadband_adoption_score": ("indicator", "Broadband Adoption", True),
     "gdp_growth_score": ("indicator", "GDP Growth", True),
     "population_scale_score": ("indicator", "Population Scale", True),
     "urbanization_score": ("indicator", "Urbanization", True),
@@ -112,12 +113,26 @@ BAND_PHRASES: dict[str, dict[str, str]] = {
         "High": "Most people can discover and buy online",
         "Very High": "Nearly everyone is online and reachable digitally",
     },
+    # Reescritos em 2026-09-24 junto com a saturação da régua. Os textos antigos
+    # falavam em qualidade de conectividade ("excelente", "fraca"), que é o que
+    # o nome do indicador sugere e não o que ele mede: são assinaturas por 100
+    # habitantes, ou seja, linhas. Com a régua saturando em uma linha por
+    # pessoa, as faixas voltam a descrever o que existe -- quantas pessoas têm
+    # linha própria --, e a de cima deixa de premiar quem tem muito chip por
+    # habitante como se fosse infraestrutura melhor.
     "mobile_connectivity_score": {
-        "Very Low": "Very poor mobile connectivity limits mobile commerce",
-        "Low": "Weak mobile connectivity across most of the population",
-        "Moderate": "Moderate mobile connectivity - a growing mobile channel",
-        "High": "Strong mobile connectivity supports mobile buying",
-        "Very High": "Excellent mobile connectivity - a mobile-first market",
+        "Very Low": "Very few people hold a mobile line of their own",
+        "Low": "Mobile lines reach only part of the population",
+        "Moderate": "About half the population holds its own mobile line",
+        "High": "Most people hold their own mobile line",
+        "Very High": "At least one mobile line per person - mobile reach is saturated",
+    },
+    "broadband_adoption_score": {
+        "Very Low": "Almost no fixed broadband infrastructure in place",
+        "Low": "Fixed broadband reaches a small share of households",
+        "Moderate": "Fixed broadband reaches a fair share of households",
+        "High": "Fixed broadband is widely installed across households",
+        "Very High": "Dense fixed broadband coverage - strong access infrastructure",
     },
     "gdp_growth_score": {
         "Very Low": "The economy is contracting sharply right now",

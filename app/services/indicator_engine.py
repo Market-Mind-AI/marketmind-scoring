@@ -140,7 +140,8 @@ class IndicatorEngine:
             )  # fmt: skip
             codes = [
                 IndicatorCode.GDP_PER_CAPITA_SCORE, IndicatorCode.INTERNET_PENETRATION_SCORE,
-                IndicatorCode.MOBILE_CONNECTIVITY_SCORE, IndicatorCode.GDP_GROWTH_SCORE,
+                IndicatorCode.MOBILE_CONNECTIVITY_SCORE, IndicatorCode.BROADBAND_ADOPTION_SCORE,
+                IndicatorCode.GDP_GROWTH_SCORE,
                 IndicatorCode.POPULATION_SCALE_SCORE, IndicatorCode.URBANIZATION_SCORE,
                 IndicatorCode.POPULATION_GROWTH_SCORE, IndicatorCode.NET_MIGRATION_RATE_SCORE,
                 IndicatorCode.WORLDBANK_INFLATION_SCORE, IndicatorCode.CONSUMER_SPENDING_SCORE,
@@ -160,6 +161,7 @@ class IndicatorEngine:
         gdp_per_capita = await worldbank_indicators.compute_gdp_per_capita(wb_iso2)
         internet = await worldbank_indicators.compute_internet_penetration(wb_iso2)
         mobile = await worldbank_indicators.compute_mobile_connectivity(wb_iso2)
+        broadband = await worldbank_indicators.compute_broadband_adoption(wb_iso2)
         gdp_growth = await worldbank_indicators.compute_gdp_growth(wb_iso2)
         population = await worldbank_indicators.compute_population_scale(wb_iso2)
         urbanization = await worldbank_indicators.compute_urbanization(wb_iso2)
@@ -179,6 +181,7 @@ class IndicatorEngine:
             (IndicatorCode.GDP_PER_CAPITA_SCORE, DataSource.WORLDBANK, gdp_per_capita),
             (IndicatorCode.INTERNET_PENETRATION_SCORE, DataSource.WORLDBANK, internet),
             (IndicatorCode.MOBILE_CONNECTIVITY_SCORE, DataSource.WORLDBANK, mobile),
+            (IndicatorCode.BROADBAND_ADOPTION_SCORE, DataSource.WORLDBANK, broadband),
             (IndicatorCode.GDP_GROWTH_SCORE, DataSource.WORLDBANK, gdp_growth),
             (IndicatorCode.POPULATION_SCALE_SCORE, DataSource.WORLDBANK, population),
             (IndicatorCode.URBANIZATION_SCORE, DataSource.WORLDBANK, urbanization),

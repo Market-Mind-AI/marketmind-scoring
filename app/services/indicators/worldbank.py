@@ -14,6 +14,12 @@ _GDP_PER_CAPITA = "NY.GDP.PCAP.CD"
 _INFLATION = "FP.CPI.TOTL.ZG"
 _MOBILE = "IT.CEL.SETS.P2"
 _INTERNET = "IT.NET.USER.ZS"
+# Banda larga fixa por 100 habitantes (2026-09-24). Já estava no catálogo do
+# marketmind-worldbank desde o começo e nunca tinha sido pedido por ninguém --
+# zero observações. Entra em Digital Readiness porque mede infraestrutura de
+# acesso instalada, que é o que falta entre "usa internet" (IT.NET.USER.ZS) e
+# "tem chip" (IT.CEL.SETS.P2). Ver WEIGHT_IN_DIMENSION em dimension_mapping.py.
+_BROADBAND = "IT.NET.BBND.P2"
 _GDP_GROWTH = "NY.GDP.MKTP.KD.ZG"
 _POPULATION = "SP.POP.TOTL"
 _URBANIZATION = "SP.URB.TOTL.IN.ZS"
@@ -37,6 +43,7 @@ RAW_INDICATOR_CODES: dict[IndicatorCode, list[str]] = {
     IndicatorCode.GDP_PER_CAPITA_SCORE: [_GDP_PER_CAPITA],
     IndicatorCode.INTERNET_PENETRATION_SCORE: [_INTERNET],
     IndicatorCode.MOBILE_CONNECTIVITY_SCORE: [_MOBILE],
+    IndicatorCode.BROADBAND_ADOPTION_SCORE: [_BROADBAND],
     IndicatorCode.GDP_GROWTH_SCORE: [_GDP_GROWTH],
     IndicatorCode.POPULATION_SCALE_SCORE: [_POPULATION],
     IndicatorCode.URBANIZATION_SCORE: [_URBANIZATION],
@@ -87,7 +94,13 @@ async def compute_internet_penetration(country_iso2: str) -> RawIndicatorResult:
 
 
 async def compute_mobile_connectivity(country_iso2: str) -> RawIndicatorResult:
-    """Cap. 4 §4.3.3 — MobileRaw = m_latest, values > 100 accepted."""
+    """Cap. 4 §4.3.3 — MobileRaw = m_latest, values > 100 accepted.
+
+    O valor bruto continua sendo aceito acima de 100 de propósito: quem satura é
+    a RÉGUA (0..100 desde a migration 044), não a leitura. Guardar o bruto
+    intacto mantém o dado auditável e o raw_value útil como contexto -- 174
+    chips por 100 habitantes na Colômbia diz algo sobre o mercado, só não diz
+    que a conectividade é melhor que a de quem tem 102."""
     value = await _latest_value(country_iso2, _MOBILE)
     if value is None:
         return RawIndicatorResult(
@@ -95,6 +108,22 @@ async def compute_mobile_connectivity(country_iso2: str) -> RawIndicatorResult:
             f"worldbank_observations: no {_MOBILE} value (Cap. 4 §4.3.3)",
         )  # fmt: skip
     return RawIndicatorResult(value, IndicatorDirection.DIRECT, "m_latest", AvailabilityStatus.AVAILABLE, None)
+
+
+async def compute_broadband_adoption(country_iso2: str) -> RawIndicatorResult:
+    """BroadbandRaw = b_latest, assinaturas de banda larga fixa por 100 hab.
+
+    Direto (mais é melhor) e sem truncamento: diferente do chip, este indicador
+    não tem teto degenerado -- uma assinatura serve um domicílio inteiro, então
+    valores acima de 100 não existem na prática e nenhum país da cesta chega
+    perto disso."""
+    value = await _latest_value(country_iso2, _BROADBAND)
+    if value is None:
+        return RawIndicatorResult(
+            None, IndicatorDirection.DIRECT, "b_latest", AvailabilityStatus.UNAVAILABLE,
+            f"worldbank_observations: no {_BROADBAND} value",
+        )  # fmt: skip
+    return RawIndicatorResult(value, IndicatorDirection.DIRECT, "b_latest", AvailabilityStatus.AVAILABLE, None)
 
 
 async def compute_gdp_growth(country_iso2: str) -> RawIndicatorResult:

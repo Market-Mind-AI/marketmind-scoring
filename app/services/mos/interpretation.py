@@ -36,7 +36,15 @@ INDICATOR_MEANING: dict[IndicatorCode, str] = {
     IndicatorCode.SEARCH_INTENT_SCORE: "Do related searches show purchase intent, or just general interest?",
     IndicatorCode.GDP_PER_CAPITA_SCORE: "How much average purchasing power does this market have?",
     IndicatorCode.INTERNET_PENETRATION_SCORE: "What share of the population can discover/buy the product online?",
-    IndicatorCode.MOBILE_CONNECTIVITY_SCORE: "How connected is the population via mobile devices?",
+    IndicatorCode.MOBILE_CONNECTIVITY_SCORE: (
+        "How widely are mobile lines held? Mobile subscriptions per 100 people, saturating at one "
+        "line per person: above that the number counts SIM cards (prepaid, dual-SIM, M2M), not "
+        "reach, so every market at or past one-per-person reads as fully served."
+    ),
+    IndicatorCode.BROADBAND_ADOPTION_SCORE: (
+        "How much fixed broadband infrastructure is installed? Subscriptions per 100 people — one "
+        "line serves a household, so this reads access quality rather than device count."
+    ),
     IndicatorCode.GDP_GROWTH_SCORE: "Is the economy expanding or contracting?",
     IndicatorCode.POPULATION_SCALE_SCORE: "How large is the addressable population?",
     IndicatorCode.URBANIZATION_SCORE: "What share of the population lives in urban areas (easier logistics/retail reach)?",  # noqa: E501

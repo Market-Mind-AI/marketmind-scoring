@@ -51,6 +51,7 @@ _FIXED_BOUNDS_INDICATORS = frozenset(
         IndicatorCode.GDP_GROWTH_SCORE,
         IndicatorCode.POPULATION_SCALE_SCORE,
         IndicatorCode.MOBILE_CONNECTIVITY_SCORE,
+        IndicatorCode.BROADBAND_ADOPTION_SCORE,
         IndicatorCode.WORLDBANK_INFLATION_SCORE,
         IndicatorCode.POPULATION_GROWTH_SCORE,
         IndicatorCode.NET_MIGRATION_RATE_SCORE,
@@ -123,6 +124,13 @@ _NO_SELF_WIDEN: frozenset[IndicatorCode] = frozenset(
         # rulers fixed + a one-off recompute, every country sits on one yardstick.
         IndicatorCode.GROWTH_SCORE,
         IndicatorCode.MOBILE_CONNECTIVITY_SCORE,
+        # Broadband Adoption nasce congelado (2026-09-24) pelo mesmo motivo dos
+        # demais: se a régua se alargasse sozinha, o primeiro país fora da faixa
+        # esmagaria retroativamente todo mundo que já foi pontuado. E aqui isso
+        # importaria mais que o normal, porque o indicador entra com cobertura
+        # ainda em backfill -- a ordem em que os países chegam não pode mudar o
+        # resultado de quem já chegou.
+        IndicatorCode.BROADBAND_ADOPTION_SCORE,
         IndicatorCode.NET_MIGRATION_RATE_SCORE,
         IndicatorCode.POPULATION_GROWTH_SCORE,
         IndicatorCode.POPULATION_SCALE_SCORE,

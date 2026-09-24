@@ -186,3 +186,73 @@ class TestGovernmentExpenditureIsContextOnly:
         }
         subscores = compute_dimension_subscores(values)
         assert subscores[IndicatorDimension.ECONOMIC_READINESS] == 50.0
+
+
+class TestDigitalReadinessWeighting:
+    """Cap. 4 / migration 044 — Digital Readiness deixou de ser média simples.
+
+    O caso real que motivou: análise de café 2026-09-23, Brasil (Internet 84.5,
+    Chip 101.93 -> satura em 100, Banda larga 24.08 -> 43.8) contra Colômbia
+    (79.3 / 174.09 -> 100 / 17.22 -> 31.3). Antes a dimensão dava BRA 55.5 e
+    COL 83.0 e invertia o ranking inteiro; com a régua saturada e os pesos, dá
+    BRA acima de COL.
+    """
+
+    def _digital(self, internet: float, mobile: float, broadband: float | None) -> float:
+        values = {
+            IndicatorCode.INTERNET_PENETRATION_SCORE.value: _iv(
+                IndicatorCode.INTERNET_PENETRATION_SCORE.value, internet
+            ),
+            IndicatorCode.MOBILE_CONNECTIVITY_SCORE.value: _iv(
+                IndicatorCode.MOBILE_CONNECTIVITY_SCORE.value, mobile
+            ),
+        }
+        if broadband is not None:
+            values[IndicatorCode.BROADBAND_ADOPTION_SCORE.value] = _iv(
+                IndicatorCode.BROADBAND_ADOPTION_SCORE.value, broadband
+            )
+        return compute_dimension_subscores(values)[IndicatorDimension.DIGITAL_READINESS]
+
+    def test_weights_are_internet_then_broadband_then_mobile(self) -> None:
+        # 2.0 / 1.5 / 1.0 sobre 4.5. Só o de maior peso em 100 puxa mais do que
+        # só o de menor peso em 100.
+        so_internet = self._digital(100.0, 0.0, 0.0)
+        so_mobile = self._digital(0.0, 100.0, 0.0)
+        so_broadband = self._digital(0.0, 0.0, 100.0)
+
+        assert so_internet > so_broadband > so_mobile
+        assert round(so_internet, 2) == round(100 * 2.0 / 4.5, 2)
+        assert round(so_broadband, 2) == round(100 * 1.5 / 4.5, 2)
+        assert round(so_mobile, 2) == round(100 * 1.0 / 4.5, 2)
+
+    def test_brasil_supera_colombia_com_reguas_novas(self) -> None:
+        brasil = self._digital(84.5, 100.0, 43.8)
+        colombia = self._digital(79.3, 100.0, 31.3)
+
+        assert brasil > colombia
+        # A inversão antiga era de 27.5 pontos CONTRA o Brasil; conferimos que
+        # virou e com folga, não por arredondamento.
+        assert brasil - colombia > 5.0
+
+    def test_pais_sem_broadband_renormaliza_em_vez_de_ser_punido(self) -> None:
+        """Durante o backfill um país pode não ter o indicador. O peso dele tem
+        de ser repartido entre os outros dois, nunca contar como zero."""
+        sem = self._digital(80.0, 60.0, None)
+        com_zero = self._digital(80.0, 60.0, 0.0)
+
+        assert round(sem, 4) == round((80.0 * 2.0 + 60.0 * 1.0) / 3.0, 4)
+        assert sem > com_zero
+
+    def test_broadband_nao_e_obrigatorio_durante_o_backfill(self) -> None:
+        values = _full_values()
+        assert IndicatorCode.BROADBAND_ADOPTION_SCORE.value not in values
+        assert check_availability(values) is None
+
+    def test_demais_dimensoes_seguem_media_simples(self) -> None:
+        """A ponderação é só de Digital Readiness — todo indicador fora de
+        WEIGHT_IN_DIMENSION pesa 1.0, então Market Size continua igual."""
+        values = {
+            IndicatorCode.POPULATION_SCALE_SCORE.value: _iv(IndicatorCode.POPULATION_SCALE_SCORE.value, 90.0),
+            IndicatorCode.URBANIZATION_SCORE.value: _iv(IndicatorCode.URBANIZATION_SCORE.value, 70.0),
+        }
+        assert compute_dimension_subscores(values)[IndicatorDimension.MARKET_SIZE] == 80.0

@@ -30,6 +30,7 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
     # marketmind_mos_engine.
     IndicatorCode.INTERNET_PENETRATION_SCORE: IndicatorDimension.DIGITAL_READINESS,
     IndicatorCode.MOBILE_CONNECTIVITY_SCORE: IndicatorDimension.DIGITAL_READINESS,
+    IndicatorCode.BROADBAND_ADOPTION_SCORE: IndicatorDimension.DIGITAL_READINESS,
     IndicatorCode.GDP_PER_CAPITA_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.GDP_GROWTH_SCORE: IndicatorDimension.ECONOMIC_READINESS,
     IndicatorCode.WORLDBANK_INFLATION_SCORE: IndicatorDimension.ECONOMIC_READINESS,
@@ -49,6 +50,43 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
     IndicatorCode.TRADE_OPENNESS_SCORE: IndicatorDimension.MACRO_DEMAND_STRUCTURE,
 }
 
+# Peso RELATIVO de cada indicador DENTRO da sua dimensão. Ausente daqui = 1.0,
+# que é a média simples que valia para todas as dimensões até 2026-09-24 e
+# continua valendo para todas menos Digital Readiness.
+#
+# Por que deixou de ser média simples. Digital Readiness tratava
+# internet_penetration e mobile_connectivity como iguais, 50% cada, e os dois
+# não são igualmente confiáveis. O primeiro é IT.NET.USER.ZS, o share da
+# população que usa internet -- mede pessoas alcançáveis, que é exatamente o que
+# a dimensão quer saber. O segundo é IT.CEL.SETS.P2, assinaturas de celular por
+# 100 habitantes -- mede CHIPS, não pessoas, e acima de ~100 por 100 habitantes
+# ele deixa de medir acesso e passa a medir comportamento de chip (pré-pago,
+# dual-SIM, linhas M2M).
+#
+# O caso que expôs isso, café, 2026-09-23: o Brasil (101,93 chips/100 hab., uma
+# linha por pessoa, mercado consolidado) pontuou 26,6 e recebeu o texto
+# "conectividade móvel fraca na maior parte da população". A Colômbia (174/100,
+# muito pré-pago e dual-SIM) pontuou 86,7 e recebeu "excelente, mercado
+# mobile-first". Com 50% do peso da dimensão, essa inversão sozinha virou o
+# ranking inteiro: o Brasil vencia em 4 das 7 dimensões, incluindo as duas de
+# maior peso, e perdeu por 0,80 ponto.
+#
+# broadband_adoption entra entre os dois: IT.NET.BBND.P2 mede infraestrutura
+# domiciliar real e não tem o teto degenerado do chip, mas cobre só a parte fixa
+# do acesso, então pesa menos que a penetração de internet.
+#
+# Os pesos são relativos e renormalizados pelos indicadores DISPONÍVEIS (ver
+# compute_dimension_subscores), então um país sem broadband reparte o peso entre
+# os outros dois em vez de ser penalizado por uma ausência.
+WEIGHT_IN_DIMENSION: dict[IndicatorCode, float] = {
+    IndicatorCode.INTERNET_PENETRATION_SCORE: 2.0,
+    IndicatorCode.BROADBAND_ADOPTION_SCORE: 1.5,
+    IndicatorCode.MOBILE_CONNECTIVITY_SCORE: 1.0,
+}
+
+_DEFAULT_WEIGHT_IN_DIMENSION = 1.0
+
+
 # Mandatory = present or the country is excluded from the MOS (Cap. 5 §5.3).
 # Only two indicators are non-mandatory, and both for structural reasons (not
 # collection fragility):
@@ -66,6 +104,18 @@ DIMENSION_BY_INDICATOR: dict[IndicatorCode, IndicatorDimension] = {
 MANDATORY_INDICATORS: frozenset[IndicatorCode] = frozenset(DIMENSION_BY_INDICATOR) - {
     IndicatorCode.MEDIAN_AGE_FIT_SCORE,
     IndicatorCode.REAL_ESTATE_GROWTH_SCORE,
+    # Broadband Adoption entra NÃO obrigatório (2026-09-24) por um motivo de
+    # transição, não estrutural: IT.NET.BBND.P2 estava declarado no catálogo do
+    # marketmind-worldbank desde sempre mas nunca tinha sido coletado -- zero
+    # observações para os 31 países. Torná-lo obrigatório de saída excluiria
+    # TODA análise até o backfill terminar.
+    #
+    # Deve virar obrigatório assim que a cobertura fechar, para restaurar o
+    # princípio de 2026-07-11 (todo país carrega o MESMO conjunto de
+    # indicadores). Enquanto isso o peso relativo é renormalizado pelos
+    # disponíveis, então um país sem broadband não fica com a dimensão furada --
+    # fica com a dimensão medida pelos dois indicadores que ele tem.
+    IndicatorCode.BROADBAND_ADOPTION_SCORE,
 }
 
 
@@ -97,11 +147,26 @@ def compute_dimension_subscores(indicator_values: dict[str, IndicatorValue]) -> 
     trend_score comes from the WORLDWIDE breakdown, search_intent is a
     composition, and growth/stability are scale-invariant ratios.
     regional_demand is intentionally excluded (self-scaled per country, not
-    comparable — see DIMENSION_BY_INDICATOR); it stays as narrative context."""
-    by_dimension: dict[IndicatorDimension, list[float]] = {}
+    comparable — see DIMENSION_BY_INDICATOR); it stays as narrative context.
+
+    Desde 2026-09-24 a média é PONDERADA por WEIGHT_IN_DIMENSION. Todo indicador
+    não listado lá pesa 1.0, então toda dimensão exceto Digital Readiness
+    continua sendo exatamente a média simples de antes. O peso é renormalizado
+    pelos indicadores efetivamente presentes, e não pelo conjunto teórico da
+    dimensão: um país sem Broadband Adoption reparte aquele peso entre os
+    outros dois em vez de ficar com a dimensão diluída por uma ausência."""
+    by_dimension: dict[IndicatorDimension, list[tuple[float, float]]] = {}
     for code, dimension in DIMENSION_BY_INDICATOR.items():
         iv = indicator_values.get(code.value)
         if iv is None or iv.normalized_score is None:
             continue
-        by_dimension.setdefault(dimension, []).append(float(iv.normalized_score))
-    return {dimension: sum(scores) / len(scores) for dimension, scores in by_dimension.items() if scores}
+        weight = WEIGHT_IN_DIMENSION.get(code, _DEFAULT_WEIGHT_IN_DIMENSION)
+        by_dimension.setdefault(dimension, []).append((float(iv.normalized_score), weight))
+
+    subscores: dict[IndicatorDimension, float] = {}
+    for dimension, pairs in by_dimension.items():
+        total_weight = sum(weight for _score, weight in pairs)
+        if total_weight <= 0:
+            continue
+        subscores[dimension] = sum(score * weight for score, weight in pairs) / total_weight
+    return subscores
