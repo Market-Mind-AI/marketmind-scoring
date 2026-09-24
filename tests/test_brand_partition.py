@@ -121,24 +121,60 @@ def _mercado(termo: str) -> dict:
     return {"USA": {"primary_name": termo, "search_terms": [termo], "excluded_terms": [], "confidence": 0.9}}
 
 
-async def test_vocabulario_da_marca_nao_vai_para_a_familia(db_session: AsyncSession) -> None:
+async def test_vocabulario_da_marca_nao_vai_para_o_produto(db_session: AsyncSession) -> None:
     """O estrago medido no relatório da Cardhu: a entidade chamada `single malt
     Scotch whisky` guardava 24 mercados de vocabulário 100% Cardhu — o rótulo
-    dizia a categoria e o número media a marca. Os termos curados são da marca
-    e ficam na entidade da marca; a família nasce limpa."""
+    dizia a categoria e o número media a marca.
+
+    A proteção continua, em outro lugar. Desde 24/09/2026 o catálogo tem UM
+    produto e a marca é vínculo, então os termos curados da marca vão para
+    `brand_markets`, chaveados por (produto, marca, país), e o produto nasce
+    limpo. "juan valdez café" e "café" são buscas diferentes no Google Ads e
+    nunca podem dar o mesmo número.
+    """
     sufixo = uuid.uuid4().hex[:8]
     service = CatalogService(db_session, matcher=_sem_match())
     repo = ProductRepository(db_session)
     nome = f"single malt scotch whisky {sufixo}"
 
-    marca = await service.resolve(
+    resolvida = await service.resolve(
         nome, source="test", brand=f"Cardhu{sufixo}", localized_markets=_mercado(f"cardhu {sufixo}")
     )
-    entidade = await repo.get_by_entity_key(marca.entity_key)
-    familia = await repo.get_by_entity_key(entidade.generic_entity_key)
+    produto = await repo.get_by_entity_key(resolvida.entity_key)
+    marca = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
 
-    assert entidade.localized_markets, "os termos curados são da marca"
-    assert not familia.localized_markets, "a família não herda vocabulário de marca nenhuma"
+    assert not produto.localized_markets, "o produto não herda vocabulário de marca nenhuma"
+    da_marca = await repo.markets_for(produto, marca.brand_key)
+    assert da_marca, "os termos curados são da marca, e ficam com ela"
+    assert await repo.markets_for(produto, None) == {}, "sem marca, o produto ainda não tem vocabulário"
+
+
+async def test_duas_marcas_do_mesmo_produto_nao_se_misturam(db_session: AsyncSession) -> None:
+    """A medição de 27/08/2026, agora com o modelo novo: `single malt Scotch
+    whisky` + Cardhu e + Glenfiddich dividem o MESMO produto — é isso que o
+    catálogo passou a exigir — e mesmo assim cada uma mede o próprio
+    vocabulário. Sem isso, a segunda marca herdaria a demanda da primeira."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    repo = ProductRepository(db_session)
+    nome = f"single malt scotch whisky {sufixo}"
+
+    uma = await service.resolve(
+        nome, source="test", brand=f"Cardhu{sufixo}", localized_markets=_mercado(f"cardhu {sufixo}")
+    )
+    outra = await service.resolve(
+        nome, source="test", brand=f"Glen{sufixo}", localized_markets=_mercado(f"glen {sufixo}")
+    )
+
+    assert uma.entity_key == outra.entity_key, "é o mesmo produto"
+    produto = await repo.get_by_entity_key(uma.entity_key)
+    cardhu = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
+    glen = await repo.get_or_create_brand(name=f"Glen{sufixo}", source="test")
+    termos_cardhu = await repo.markets_for(produto, cardhu.brand_key)
+    termos_glen = await repo.markets_for(produto, glen.brand_key)
+
+    assert termos_cardhu != termos_glen, "cada marca mede o que se busca por ela"
+    assert termos_cardhu, termos_glen
 
 
 async def test_segunda_resolucao_da_mesma_marca_sai_pelo_alias(db_session: AsyncSession) -> None:
@@ -156,28 +192,21 @@ async def test_segunda_resolucao_da_mesma_marca_sai_pelo_alias(db_session: Async
     assert segunda.entity_key == primeira.entity_key
 
 
-async def test_alias_de_marca_apontando_para_a_generica_e_repontado(db_session: AsyncSession) -> None:
-    """Estado legado real: a regra antiga gravava o alias `marca + nome`
-    apontando para a entidade GENÉRICA. Como `alias_normalized` é único global,
-    deixá-lo lá impediria a entidade da marca de ter caminho O(1), e cada
-    resolução criaria uma duplicata nova. O alias é repontado para a entidade
-    certa."""
+async def test_a_marca_resolve_para_o_mesmo_produto_do_nome_generico(db_session: AsyncSession) -> None:
+    """A inversão que isto impede, medida em 24/09/2026: pedir `coffee` devolvia
+    a entidade da marca e pedir `Juan Valdez coffee` devolvia a genérica, e cada
+    acerto gravava um alias que tornava o erro permanente. O mesmo produto
+    existia em dois lugares, e cada lugar comprava o próprio vocabulário na
+    DataForSEO — BOL, BRA e COL foram coletados duas vezes."""
     sufixo = uuid.uuid4().hex[:8]
     service = CatalogService(db_session, matcher=_sem_match())
-    repo = ProductRepository(db_session)
     nome = f"air fryer {sufixo}"
-    marca_nome = f"Philips{sufixo}"
 
     generica = await service.resolve(nome, source="test")
-    chave = normalize_alias(f"{marca_nome} {nome}")
-    await repo.create_alias(alias_normalized=chave, entity_key=generica.entity_key, source="brand")
-    await db_session.commit()
+    com_marca = await service.resolve(nome, source="test", brand=f"Philips{sufixo}")
 
-    resolvida = await service.resolve(nome, source="test", brand=marca_nome)
-    assert resolvida.entity_key != generica.entity_key, "a marca não pode resolver para a entidade genérica"
-
-    donos = await repo.existing_alias_owners({chave})
-    assert donos[chave] == resolvida.entity_key, "o alias legado passou a apontar para a entidade da marca"
+    assert com_marca.entity_key == generica.entity_key, "um produto, com ou sem marca"
+    assert com_marca.brand == f"Philips{sufixo}", "a marca vem ao lado, não dentro da identidade"
 
 
 async def test_marca_sem_forma_normalizada_resolve_como_generico(db_session: AsyncSession) -> None:
@@ -228,22 +257,21 @@ async def test_lista_de_outras_marcas_exclui_a_propria(db_session: AsyncSession)
     assert await repo.list_other_brand_names(None) == []
 
 
-async def test_resposta_expoe_marca_e_categoria_separadas(db_session: AsyncSession) -> None:
-    """O relatório precisa das duas partes separadas — "Cardhu · single malt
-    Scotch whisky" — e fatiar o título para obter isso seria frágil. A resolução
-    devolve marca e título da família junto com o título da entidade."""
+async def test_resposta_expoe_o_produto_e_a_marca_separados(db_session: AsyncSession) -> None:
+    """O relatório precisa das duas partes — "Cardhu · single malt Scotch
+    whisky" — e fatiar o título para obter isso seria frágil. Desde 24/09/2026 o
+    título é o do PRODUTO e a marca vem ao lado: é ela que a análise grava como
+    vínculo, e é o par que a narrativa final explica."""
     sufixo = uuid.uuid4().hex[:8]
     service = CatalogService(db_session, matcher=_sem_match())
     nome = f"single malt scotch whisky {sufixo}"
 
     com_marca = await service.resolve(nome, source="test", brand=f"Cardhu{sufixo}")
     assert com_marca.brand == f"Cardhu{sufixo}"
-    assert com_marca.generic_title == nome
-    assert com_marca.canonical_title == f"Cardhu{sufixo} {nome}"
+    assert com_marca.canonical_title == nome, "o título do catálogo é o do produto"
 
-    # Produto genérico: nada de marca, e ele é a própria família.
     generico = await service.resolve(f"air fryer {sufixo}", source="test")
-    assert generico.brand is None and generico.generic_title is None
+    assert generico.brand is None
 
 
 async def test_lista_de_todas_as_marcas_inclui_a_propria(db_session: AsyncSession) -> None:

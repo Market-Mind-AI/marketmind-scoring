@@ -43,6 +43,14 @@ class AnalysisRequest(Base):
     # O texto que o comprador digitou. O outro lado do par: sem ele, "picanha,
     # coincidência exata" é ilegível para quem pediu "top sirloin cap".
     catalog_query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A marca desta análise. NULO é uma resposta, não uma ausência: significa
+    # que se analisou o PRODUTO, sem marca — e é isso que dá a rastreabilidade
+    # de quem ficou vinculado a marca e quem não (migration 045). A chave
+    # sobrevive a um rename da marca; o nome preserva o que o comprador viu.
+    brand_key: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("brands.brand_key"), nullable=True
+    )
+    brand_name: Mapped[str | None] = mapped_column(nullable=True)
     countries: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     estimated_price: Mapped[Decimal | None] = mapped_column(nullable=True)
     price_currency: Mapped[str | None] = mapped_column(nullable=True)

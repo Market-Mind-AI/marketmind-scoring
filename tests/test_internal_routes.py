@@ -365,7 +365,7 @@ def test_candidate_collection_reports_what_it_did(client: TestClient) -> None:
     ele não aparece no trace, e uma regressão de custo ali é invisível."""
     entity_key = _resolve(client, f"relato de candidato {uuid.uuid4().hex[:6]}")
 
-    async def _coleta(self, entity, requested, *, period_key, reuse_report=None):  # noqa: ANN001, ANN202
+    async def _coleta(self, entity, requested, *, period_key, marca=None, reuse_report=None):  # noqa: ANN001, ANN202
         if reuse_report is not None:
             reuse_report["reused"] = {"pytrends": 12}
             reuse_report["related_fresh"] = 2

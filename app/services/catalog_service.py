@@ -144,6 +144,7 @@ def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
         entity_key=resolvido.entity.entity_key,
         canonical_title=resolvido.entity.canonical_title,
         brand=resolvido.marca.name if resolvido.marca is not None else None,
+        brand_key=resolvido.marca.brand_key if resolvido.marca is not None else None,
         generic_title=resolvido.familia.canonical_title if resolvido.familia is not None else None,
         method=resolvido.method,
         match_score=resolvido.match_score,
@@ -169,37 +170,29 @@ class CatalogService:
         target_age_min: int | None = None,
         target_age_max: int | None = None,
     ) -> CatalogResolveResponse:
-        """`text` é o NOME GENÉRICO do produto, sem marca. A marca vem separada
-        e PARTICIONA a identidade: a unidade do catálogo passou a ser o par
-        (nome genérico, marca), com a partição genérica sendo `brand_key NULL`.
+        """`text` é o NOME GENÉRICO do produto, sem marca. A marca vem separada,
+        e desde 24/09/2026 ela NÃO cria entidade: o catálogo tem um produto por
+        identidade — `coffee`, nunca `Juan Valdez coffee` — e a marca é um
+        vínculo de quem pergunta, gravado na análise.
 
-        POR QUE PARTIÇÃO E NÃO CONCATENAÇÃO. Até 25/08 os dois chamadores
-        concatenavam `marca + nome` aqui, e isso decidia identidade com um token
-        que todos os produtos daquela marca compartilham: `air purifier` x
-        `air fryer` mede 0.278, longe do limiar, mas `philips air purifier` x o
-        alias `philips airfryer` mede 0.520 — e o purificador virava air fryer.
-        O commit 28ca6be tirou a marca da decisão, e aí apareceu o outro lado
-        do mesmo problema: sem a marca, `single malt Scotch whisky` + Cardhu e
-        `single malt Scotch whisky` + Glenfiddich resolvem para a MESMA
-        entidade pelo alias exato, e a segunda marca herda o vocabulário e a
-        demanda da primeira (medido no banco vivo em 27/08).
+        POR QUE MUDOU. A marca particionava a identidade, e o mesmo produto
+        passava a existir em dois lugares. Medido em 24/09/2026: três análises
+        do mesmo café geraram coleta na DataForSEO em BOL, BRA e COL DUAS
+        VEZES, uma por entidade, porque cada uma comprava o próprio
+        vocabulário. E o resolvedor trocava os dois — pedir `coffee` devolvia a
+        entidade da marca e pedir `Juan Valdez coffee` devolvia a genérica —,
+        cada acerto gravando um alias que tornava o erro permanente.
 
-        A partição resolve os dois: os passos 2 e 3 continuam medindo só o nome
-        genérico — a marca nunca entra na comparação de semelhança —, mas
-        medem dentro de uma partição só. Dentro da Philips a conta volta a ser
-        `air purifier` x `airfryer` = 0.278 e os dois produtos seguem
-        separados; entre marcas, nada se encontra.
+        O QUE A PARTIÇÃO PROTEGIA CONTINUA PROTEGIDO, em outro lugar. Ela
+        nasceu de uma medição de 27/08/2026: sem ela, `single malt Scotch
+        whisky` + Cardhu e + Glenfiddich caíam na mesma entidade e a segunda
+        marca herdava o vocabulário e a demanda da primeira. Agora o
+        vocabulário é que tem dono — (produto, marca, país) em `brand_markets`
+        — então as duas marcas dividem o produto e nada mais. "Juan Valdez
+        coffee" e "coffee" nunca medem a mesma coisa, porque a busca no Google
+        Ads é outra.
 
-        UM PEDIDO COM MARCA RESOLVE DUAS ENTIDADES: a família genérica e a
-        filha da marca. A família precisa existir porque é ela que dá o
-        contexto de categoria ("a Cardhu é fraca aqui, mas a busca por whisky é
-        altíssima"), e a `CHECK` da migration 031 exige que toda entidade de
-        marca tenha família. O vocabulário curado vai TODO para a entidade da
-        marca — os `search_terms` que a identificação produziu são da marca, e
-        misturá-los na família é exatamente a poluição que isto conserta.
-
-        O que volta na resposta é a entidade da MARCA: é ela que a análise mede
-        e é o nome dela que o relatório mostra.
+        O que volta na resposta é o PRODUTO, com a marca ao lado.
         """
         marca: Brand | None = None
         if brand and brand.strip():
@@ -211,46 +204,27 @@ class CatalogService:
                 # produto resolve como genérico em vez de falhar.
                 logger.info(f"Marca {brand!r} não tem forma normalizada; resolvendo como produto genérico")
 
-        if marca is None:
-            resolvido = await self._resolver_particao(
-                text,
-                marca=None,
-                familia=None,
-                source=source,
-                category=category,
-                localized_markets=localized_markets,
-                reference_candidates=reference_candidates,
-                target_age_min=target_age_min,
-                target_age_max=target_age_max,
-            )
-            await self._session.commit()
-            return _resposta(resolvido)
-
-        # A família primeiro, e sem nada do vocabulário da marca: ela é a
-        # categoria, e quem preenche os termos genéricos dela é o enriquecimento
-        # (que roda com `brand=None` e produz termos sem marca).
-        familia = await self._resolver_particao(
+        # UM produto, com ou sem marca. O vocabulário curado é que se separa:
+        # sem marca ele é do produto; com marca vai para `brand_markets` e não
+        # encosta no produto, senão a marca contamina a categoria — que é
+        # exatamente o estrago de 27/08/2026.
+        resolvido = await self._resolver_particao(
             text,
             marca=None,
             familia=None,
             source=source,
             category=category,
-            localized_markets=None,
-            reference_candidates=None,
-            target_age_min=target_age_min,
-            target_age_max=target_age_max,
-        )
-        resolvido = await self._resolver_particao(
-            text,
-            marca=marca,
-            familia=familia.entity,
-            source=source,
-            category=category,
-            localized_markets=localized_markets,
+            localized_markets=None if marca is not None else localized_markets,
             reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
         )
+        if marca is not None:
+            resolvido.marca = marca
+            if localized_markets:
+                await self._repo.save_brand_markets(
+                    resolvido.entity.entity_key, marca.brand_key, localized_markets
+                )
         await self._session.commit()
         return _resposta(resolvido)
 

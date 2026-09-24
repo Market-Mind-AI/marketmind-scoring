@@ -1,5 +1,7 @@
 from app.db.models.analysis_request import AnalysisRequest
 from app.db.models.brand import Brand
+from app.db.models.brand_champion import BrandChampion
+from app.db.models.brand_market import BrandMarket
 from app.db.models.country import Country
 from app.db.models.indicator_value import IndicatorValue
 from app.db.models.indicator_weight import IndicatorWeight
@@ -25,6 +27,8 @@ __all__ = [
     "MetricExplanation",
     "MonthlySnapshot",
     "MosResult",
+    "BrandChampion",
+    "BrandMarket",
     "NormalizationReference",
     "ProductAlias",
     "ProductCatalog",

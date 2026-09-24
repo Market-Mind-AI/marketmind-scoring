@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import require_internal_token
 from app.core.config import settings
 from app.core.logging import logger
+from app.db.models.brand import Brand
 from app.db.session import get_session
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.mos_repository import MosRepository
@@ -102,6 +103,8 @@ async def register_analysis(
         catalog_match_score=request.catalog_match_score,
         catalog_match_reasoning=request.catalog_match_reasoning,
         catalog_query_text=request.catalog_query_text,
+        brand_key=request.brand_key,
+        brand_name=request.brand_name,
     )
     await session.commit()
     return RegisteredAnalysisResponse(request_id=analysis_request.id, status=analysis_request.status)
@@ -178,6 +181,8 @@ async def read_analysis(request_id: uuid.UUID, session: AsyncSession = Depends(g
         catalog_match_borderline=_no_limiar(analysis_request.catalog_match_score),
         catalog_match_reasoning=analysis_request.catalog_match_reasoning,
         catalog_query_text=analysis_request.catalog_query_text,
+        brand_key=analysis_request.brand_key,
+        brand_name=analysis_request.brand_name,
         countries=list(analysis_request.countries or []),
         user_prompt=analysis_request.user_prompt,
         progress=analysis_request.progress,
@@ -395,6 +400,7 @@ async def narrate(request: NarrateRequest, session: AsyncSession = Depends(get_s
     narrative = await ExplanationClient(session).narrate(
         packet=request.packet,
         product_name=request.product_name,
+        brand=request.brand,
         user_prompt=request.user_prompt,
     )
     return NarrateResponse(narrative=narrative)
@@ -441,6 +447,18 @@ def _no_limiar(score: Decimal | None) -> bool:
     return float(score) < settings.catalog_trigram_similarity_threshold + _MARGEM_LIMIAR
 
 
+async def _marca(session: AsyncSession, brand_key: uuid.UUID | None):  # noqa: ANN202
+    """A marca desta análise, ou None.
+
+    Resolvida aqui e passada adiante em vez de cada serviço buscar a sua: é ela
+    que decide QUAL vocabulário a análise mede, e essa decisão precisa ser a
+    mesma no enriquecimento, na cobertura e na régua de demanda.
+    """
+    if brand_key is None:
+        return None
+    return await session.get(Brand, brand_key)
+
+
 async def _entity(session: AsyncSession, entity_key: uuid.UUID):  # noqa: ANN202
     entity = await ProductRepository(session).get_by_entity_key(entity_key)
     if entity is None:
@@ -469,11 +487,13 @@ async def enrich_terms(
     request: EnrichTermsRequest, session: AsyncSession = Depends(get_session)
 ) -> EnrichTermsResponse:
     entity = await _entity(session, request.entity_key)
-    await AnalysisService(session).ensure_product_enrichment(
-        entity, request.countries, com_candidatos=request.with_candidates
+    servico = AnalysisService(session)
+    marca = await _marca(session, request.brand_key)
+    await servico.ensure_product_enrichment(
+        entity, request.countries, marca=marca, com_candidatos=request.with_candidates
     )
     await session.commit()
-    markets = entity.localized_markets or {}
+    markets = await servico.vocabulario(entity, marca)
     return EnrichTermsResponse(
         entity_key=request.entity_key,
         countries_with_terms=sorted(markets.keys()),
@@ -506,6 +526,7 @@ async def ensure_coverage(
     tasks = await AnalysisService(session).ensure_coverage(
         country_iso3=request.country_iso3,
         entity_key=request.entity_key,
+        marca=await _marca(session, request.brand_key),
         terms_used=terms,
         reuse_report=reuso,
     )
@@ -546,12 +567,19 @@ async def candidates_coverage(
     request: CandidatesCoverageRequest, session: AsyncSession = Depends(get_session)
 ) -> CandidatesCoverageResponse:
     entity = await _entity(session, request.entity_key)
-    cached = entity.champion_period_key == request.period_key
+    marca_cache = await _marca(session, request.brand_key)
+    cached, _pais, _mos = await ProductRepository(session).champion_for(
+        entity, marca_cache.brand_key if marca_cache is not None else None, request.period_key
+    )
     tarefas: list = []
     reuso: dict[str, Any] = {}
     if not cached:
         tarefas = await AnalysisService(session).ensure_candidates_coverage(
-            entity, request.requested_countries, period_key=request.period_key, reuse_report=reuso
+            entity,
+            request.requested_countries,
+            period_key=request.period_key,
+            marca=await _marca(session, request.brand_key),
+            reuse_report=reuso,
         )
         await session.commit()
     return CandidatesCoverageResponse(
@@ -585,7 +613,7 @@ async def demand_ceiling(
 ) -> DemandCeilingResponse:
     entity = await _entity(session, request.entity_key)
     ceiling, ruler = await AnalysisService(session).resolve_demand_ceiling(
-        entity, request.countries, request.period_key
+        entity, request.countries, request.period_key, marca=await _marca(session, request.brand_key)
     )
     return DemandCeilingResponse(demand_ceiling=ceiling, demand_ruler=ruler)
 
@@ -646,11 +674,13 @@ async def set_champion(
     request: SetChampionRequest, session: AsyncSession = Depends(get_session)
 ) -> AnalysisStateResponse:
     entity = await _entity(session, request.entity_key)
+    marca = await _marca(session, request.brand_key)
     await ProductRepository(session).set_champion(
         entity,
         country=request.country,
         mos=None if request.mos is None else Decimal(str(request.mos)),
         period_key=request.period_key,
+        brand_key=marca.brand_key if marca is not None else None,
     )
     await session.commit()
     return AnalysisStateResponse(request_id=request.entity_key, status="stored")

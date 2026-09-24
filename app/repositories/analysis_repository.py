@@ -27,6 +27,8 @@ class AnalysisRepository:
         catalog_match_score: Decimal | float | None = None,
         catalog_match_reasoning: str | None = None,
         catalog_query_text: str | None = None,
+        brand_key: uuid.UUID | None = None,
+        brand_name: str | None = None,
     ) -> AnalysisRequest:
         row = AnalysisRequest(
             id=uuid.uuid4(),
@@ -41,6 +43,8 @@ class AnalysisRepository:
             catalog_match_score=None if catalog_match_score is None else Decimal(str(catalog_match_score)),
             catalog_match_reasoning=catalog_match_reasoning,
             catalog_query_text=catalog_query_text,
+            brand_key=brand_key,
+            brand_name=brand_name,
             created_at=utc_now(),
         )
         self._session.add(row)

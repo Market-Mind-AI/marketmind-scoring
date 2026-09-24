@@ -30,6 +30,11 @@ class RegisterAnalysisRequest(BaseModel):
     catalog_match_score: Decimal | None = None
     catalog_match_reasoning: str | None = None
     catalog_query_text: str | None = None
+    # A marca desta análise. Nulo é uma resposta — "foi do produto" —, e é o
+    # par (produto, marca) que dá a rastreabilidade de quem foi analisado com
+    # marca e quem não.
+    brand_key: uuid.UUID | None = None
+    brand_name: str | None = None
 
 
 class RegisteredAnalysisResponse(BaseModel):
@@ -86,6 +91,8 @@ class AnalysisDetailResponse(BaseModel):
     # Derivado na leitura, não guardado: o limiar mora aqui e pode mudar, e o
     # rótulo honesto é "pelo corte de hoje, isto passou raspando".
     catalog_match_borderline: bool = False
+    brand_key: uuid.UUID | None = None
+    brand_name: str | None = None
     countries: list[str] = []
     user_prompt: str | None = None
     progress: str | None = None
@@ -120,6 +127,10 @@ class EvidenceResponse(BaseModel):
 class NarrateRequest(BaseModel):
     packet: dict[str, Any]
     product_name: str
+    # A marca, quando a análise tem uma. O texto final fala de PRODUTO + MARCA:
+    # os números vieram do vocabulário da marca, e chamá-los de "café" seria
+    # atribuir à categoria o que se mediu da Juan Valdez.
+    brand: str | None = None
     user_prompt: str | None = None
 
 
@@ -151,6 +162,9 @@ class EnrichTermsRequest(BaseModel):
     # candidates: the demand ruler belongs to the brand, and the category is
     # context that is never scored.
     with_candidates: bool = True
+    # A marca desta análise, quando há. É ela que decide QUAL vocabulário
+    # medir — sem ela uma análise de marca mediria a categoria.
+    brand_key: uuid.UUID | None = None
 
 
 class EnrichTermsResponse(BaseModel):
@@ -165,6 +179,9 @@ class EnrichTermsResponse(BaseModel):
 class EnsureCoverageRequest(BaseModel):
     country_iso3: str = Field(..., min_length=3, max_length=3)
     entity_key: uuid.UUID | None = None
+    # A marca desta análise, quando há. É ela que decide QUAL vocabulário
+    # medir — sem ela uma análise de marca mediria a categoria.
+    brand_key: uuid.UUID | None = None
 
 
 class EnsureCoverageResponse(BaseModel):
@@ -206,6 +223,9 @@ class CandidatesCoverageRequest(BaseModel):
     entity_key: uuid.UUID
     requested_countries: list[str] = Field(..., min_length=1)
     period_key: str = Field(..., min_length=1)
+    # A marca desta análise, quando há. É ela que decide QUAL vocabulário
+    # medir — sem ela uma análise de marca mediria a categoria.
+    brand_key: uuid.UUID | None = None
 
 
 class CandidatesCoverageResponse(BaseModel):
@@ -235,6 +255,9 @@ class DemandCeilingRequest(BaseModel):
     entity_key: uuid.UUID
     countries: list[str] = Field(..., min_length=1)
     period_key: str = Field(..., min_length=1)
+    # A marca desta análise, quando há. É ela que decide QUAL vocabulário
+    # medir — sem ela uma análise de marca mediria a categoria.
+    brand_key: uuid.UUID | None = None
 
 
 class DemandCeilingResponse(BaseModel):
@@ -276,3 +299,6 @@ class SetChampionRequest(BaseModel):
     # attempted again on every later analysis.
     country: str | None = None
     mos: float | None = None
+    # A marca desta análise, quando há. É ela que decide QUAL vocabulário
+    # medir — sem ela uma análise de marca mediria a categoria.
+    brand_key: uuid.UUID | None = None

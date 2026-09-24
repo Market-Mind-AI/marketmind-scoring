@@ -238,8 +238,28 @@ class AnalysisService:
                 )
                 await self._session.commit()
 
+    async def vocabulario(self, entity: Any, marca: Any | None) -> dict[str, dict[str, Any]]:
+        """Os termos de busca desta análise: do produto, ou DESTA marca.
+
+        O único ponto do pipeline que decide isso. Sem marca são os do produto;
+        com marca, os dela — porque "juan valdez café" e "café" são buscas
+        diferentes no Google Ads e nunca podem dar o mesmo número.
+        """
+        # Sem marca a resposta está na própria entidade, e ler dali em vez de
+        # ir ao repositório não é atalho: é o que mantém o caminho comum — a
+        # análise de produto — sem uma consulta que não tem o que buscar.
+        if marca is None:
+            return dict(getattr(entity, "localized_markets", None) or {})
+        return await self._product_repo.markets_for(entity, marca.brand_key)
+
+    async def _gravar_vocabulario(self, entity: Any, marca: Any | None, mercados: dict[str, dict[str, Any]]) -> None:
+        if marca is not None:
+            await self._product_repo.save_brand_markets(entity.entity_key, marca.brand_key, mercados)
+            return
+        entity.localized_markets = _merge_localized_markets(entity.localized_markets, mercados)
+
     async def ensure_product_enrichment(
-        self, entity: Any, countries: list[str], *, com_candidatos: bool = True
+        self, entity: Any, countries: list[str], *, marca: Any | None = None, com_candidatos: bool = True
     ) -> None:
         """Fill the entity's per-country search vocabulary + reference candidates,
         calling the LLM ONLY for what's missing (a country without terms; empty
@@ -251,17 +271,23 @@ class AnalysisService:
         pontuada — pedi-los ali seria uma chamada de LLM paga por um número que
         ninguém usa."""
         product_name = entity.canonical_title or ""
+        nome_marca = marca.name if marca is not None else None
 
-        missing = [c for c in countries if not _has_terms((entity.localized_markets or {}).get(c))]
+        mercados = await self.vocabulario(entity, marca)
+        missing = [c for c in countries if not _has_terms(mercados.get(c))]
         if missing:
             try:
                 # Sem dica de idioma. Pedir que o modelo DIGA o idioma e ao
                 # mesmo tempo dizer a ele qual é fecha um círculo: a resposta
                 # passa a ser o que mandamos, e a tabela que mandávamos é
                 # justamente a que deixou de existir.
+                #
+                # A MARCA vai junto quando existe, e é ela que muda o que o
+                # modelo escreve: "juan valdez café" em vez de "café". Sem isso
+                # a análise de marca mediria a categoria.
                 fill = [(iso3, None) for iso3 in missing]
                 markets = await self._enrichment_client.localized_markets(
-                    product_name=product_name, brand=None, category=entity.category, countries=fill
+                    product_name=product_name, brand=nome_marca, category=entity.category, countries=fill
                 )
                 incoming = {
                     m.country: _market_to_dict(m)
@@ -269,16 +295,16 @@ class AnalysisService:
                     if m.country in set(missing) and _has_terms(_market_to_dict(m))
                 }
                 if incoming:
-                    entity.localized_markets = _merge_localized_markets(entity.localized_markets, incoming)
+                    await self._gravar_vocabulario(entity, marca, incoming)
+                    mercados.update(incoming)
             except EnrichmentError as exc:
                 logger.warning(f"Background localized_markets enrichment failed, using deterministic fallback: {exc}")
             # Deterministic fallback so coverage/compute never strand a country.
-            current_lm = dict(entity.localized_markets or {})
-            still_missing = [c for c in countries if not _has_terms(current_lm.get(c))]
+            still_missing = [c for c in countries if not _has_terms(mercados.get(c))]
             if still_missing:
-                for iso3 in still_missing:
-                    current_lm[iso3] = _fallback_market(iso3, product_name, None)
-                entity.localized_markets = current_lm
+                reserva = {iso3: _fallback_market(iso3, product_name, nome_marca) for iso3 in still_missing}
+                await self._gravar_vocabulario(entity, marca, reserva)
+                mercados.update(reserva)
 
         if com_candidatos and not entity.reference_candidates:
             try:
@@ -303,6 +329,7 @@ class AnalysisService:
         *,
         country_iso3: str,
         entity_key: uuid.UUID | None,
+        marca: Any | None = None,
         terms_used: dict[str, Any] | None = None,
         reuse_report: dict[str, Any] | None = None,
     ) -> list[JobTaskResult]:
@@ -335,7 +362,12 @@ class AnalysisService:
             #   - keywords_for_keywords: related keywords for the intent score.
             # Both are current-month collections (no per-period series to
             # re-collect). location is the ISO2 Google Ads expects.
-            market = (entity.localized_markets or {}).get(country_iso3) if entity is not None else None
+            # O vocabulário DESTA análise: da marca quando há marca, do produto
+            # quando não. É o que faz "Juan Valdez coffee" e "coffee" medirem
+            # coisas diferentes, que é toda a razão de a marca existir como
+            # vínculo em vez de como entidade.
+            mercados = await self.vocabulario(entity, marca) if entity is not None else {}
+            market = mercados.get(country_iso3)
             search_terms = as_term_list((market or {}).get("search_terms")) or as_term_list(
                 (market or {}).get("primary_name")
             )
@@ -345,14 +377,18 @@ class AnalysisService:
             # `keywords_for_keywords`, que só aceitam 20, são divididos 14/6 pelo
             # MESMO construtor que o indicator_engine usa para ler — rótulos
             # diferentes deixariam o intent órfão.
+            #
+            # A categoria é o MESMO produto sem marca — desde 24/09/2026 não há
+            # entidade-família para buscar, só o outro vocabulário da mesma
+            # entidade. Numa análise sem marca não há o que acrescentar: os
+            # termos já SÃO os da categoria.
             category_terms: list[str] = []
-            if entity is not None and entity.generic_entity_key is not None:
-                familia = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
-                if familia is not None:
-                    mercado_familia = (familia.localized_markets or {}).get(country_iso3) or {}
-                    category_terms = as_term_list(mercado_familia.get("search_terms")) or as_term_list(
-                        mercado_familia.get("primary_name")
-                    )
+            if entity is not None and marca is not None:
+                do_produto = await self.vocabulario(entity, None)
+                mercado_categoria = do_produto.get(country_iso3) or {}
+                category_terms = as_term_list(mercado_categoria.get("search_terms")) or as_term_list(
+                    mercado_categoria.get("primary_name")
+                )
             location = country.iso2 if country is not None else None
             # O idioma vem de quem escreveu os termos, não de um cadastro. Ver
             # _idioma_do_mercado.
@@ -481,7 +517,13 @@ class AnalysisService:
         return any(not _is_available(current, code) for code in outputs)
 
     async def ensure_candidates_coverage(
-        self, entity: Any, requested: list[str], *, period_key: str, reuse_report: dict[str, Any] | None = None
+        self,
+        entity: Any,
+        requested: list[str],
+        *,
+        period_key: str,
+        marca: Any | None = None,
+        reuse_report: dict[str, Any] | None = None,
     ) -> list[JobTaskResult]:
         """Collect each reference-market candidate's FULL demand — search_volume
         AND keywords_for_keywords — exactly like a requested country, so its
@@ -572,7 +614,7 @@ class AnalysisService:
         return resultados
 
     async def resolve_demand_ceiling(
-        self, entity: Any, countries: list[str], period_key: str
+        self, entity: Any, countries: list[str], period_key: str, *, marca: Any | None = None
     ) -> tuple[float | None, dict[str, Any]]:
         """The Demand Volume ruler ceiling + mode, for narration:
         - reference — the LARGEST real Google-search volume among the product's
@@ -595,7 +637,10 @@ class AnalysisService:
             # A candidate that is also requested was collected under its own
             # localized_markets terms (same coverage key); measure it with those
             # to avoid reading a never-collected reference-term series.
-            market = (entity.localized_markets or {}).get(iso3, {}) if iso3 in countries else cand
+            # O vocabulário DESTA análise — da marca quando há marca. Medir o
+            # país pedido com os termos do candidato daria dois números para a
+            # mesma coisa.
+            market = (await self.vocabulario(entity, marca)).get(iso3, {}) if iso3 in countries else cand
             terms = as_term_list(market.get("search_terms"))
             country = await self._country_repo.get_by_iso3(iso3)
             if not (terms and country is not None and country.iso2 is not None):

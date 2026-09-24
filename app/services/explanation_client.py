@@ -419,8 +419,33 @@ FLAGGED CLAIMS:
 ORIGINAL TEXT:
 {narrative}"""
 
+
+# Quando a análise tem marca. Os números vieram do vocabulário DELA — "juan
+# valdez café", não "café" —, então chamar o resultado de "o mercado de café"
+# atribui à categoria o que se mediu de uma marca só. O contrário também
+# engana: sem dizer a categoria, o leitor não sabe contra o que comparar.
+_BRAND_RULE_PT = """Esta análise é de uma MARCA dentro de um produto: {brand} · {product}.
+
+A demanda foi medida com os termos de busca da marca, não os da categoria. Então:
+- fale do par o tempo todo ("{brand} no Brasil"), nunca só da categoria;
+- não atribua ao produto em geral um número que é da marca;
+- quando o texto comparar com a categoria, diga explicitamente que é comparação."""
+
+_BRAND_RULE_EN = """This analysis is of a BRAND within a product: {brand} · {product}.
+
+Demand was measured with the brand's search terms, not the category's. So:
+- speak of the pair throughout ("{brand} in Brazil"), never of the category alone;
+- never attribute to the product at large a figure that belongs to the brand;
+- when the text compares against the category, say plainly that it is a comparison."""
+
 def _system_prompt(
-    language: str, *, single_country: bool, user_prompt: str | None = None, external_champion: bool = False
+    language: str,
+    *,
+    single_country: bool,
+    user_prompt: str | None = None,
+    external_champion: bool = False,
+    brand: str | None = None,
+    product: str | None = None,
 ) -> str:
     lang = (language or "").strip().lower()
     is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
@@ -450,6 +475,9 @@ def _system_prompt(
     base = f"{base}\n\n{_DEMAND_TERMS_RULE_PT if is_pt else _DEMAND_TERMS_RULE_EN}"
     if external_champion:
         base = f"{base}\n\n{_CHAMPION_RULE_PT if is_pt else _CHAMPION_RULE_EN}"
+    if brand:
+        modelo = _BRAND_RULE_PT if is_pt else _BRAND_RULE_EN
+        base = f"{base}\n\n" + modelo.replace("{brand}", brand).replace("{product}", product or "")
     user_text = (user_prompt or "").strip()
     if user_text:
         block = (_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", user_text)
@@ -602,6 +630,7 @@ class ExplanationClient:
         *,
         packet: dict[str, Any],
         product_name: str,
+        brand: str | None = None,
         user_prompt: str | None = None,
     ) -> str | None:
         """Best-effort: turn a deterministic evidence packet into a business
@@ -624,10 +653,16 @@ class ExplanationClient:
                 single_country=single,
                 user_prompt=user_prompt,
                 external_champion=external_champion,
+                brand=brand,
+                product=product_name,
             )
             user = json.dumps(
                 {
                     "product_name": product_name,
+                    # Dito separado, nunca concatenado: o relatório mostra
+                    # "Juan Valdez · café" e fatiar um título para obter as duas
+                    # partes seria frágil. Nulo quando a análise é do produto.
+                    "brand": brand,
                     "user_prompt": (user_prompt or "").strip() or None,
                     "demand_ruler": packet.get("demand_ruler"),
                     "glossary": packet.get("glossary"),

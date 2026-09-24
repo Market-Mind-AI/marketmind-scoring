@@ -47,10 +47,10 @@ async def backfill_terms(session: AsyncSession = Depends(get_session)) -> Backfi
     description=(
         "Conserta o estado legado que a partição da identidade (migration 031) impede de acontecer de "
         "novo mas não desfaz: uma entidade com título genérico e vocabulário de uma marca só. Produz três "
-        "entidades — a família LIMPA (dona do alias genérico), a entidade da marca (com todo o vocabulário "
-        "curado, termos excluídos, categoria e campeão) e a original APOSENTADA via merged_into, que "
-        "mantém indicator_values e mos_results para os relatórios já entregues continuarem abrindo. "
-        "Não recoleta nada: as linhas de demanda seguem em cache no coletor. "
+        "vocabulário: a entidade CONTINUA sendo o produto e os termos curados vão para a marca, "
+        "chaveados por (produto, marca, país). Não cria entidade nova, não aposenta ninguém e não "
+        "recoleta nada — as linhas de demanda seguem em cache no coletor. O campeão é apagado: ele foi "
+        "eleito com a demanda da marca e não vale para o produto. "
         "Ver app/services/brand_split_service.py."
     ),
 )

@@ -12,6 +12,8 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.models.brand import Brand
+from app.db.models.brand_champion import BrandChampion
+from app.db.models.brand_market import BrandMarket
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.db.models.product_excluded_term import ProductExcludedTerm
@@ -61,6 +63,52 @@ class ProductRepository:
         result = await self._session.execute(stmt)
         row = result.first()
         return None if row is None else (row[0], row[1])
+
+    async def markets_for(
+        self, entity: ProductCatalog, brand_key: uuid.UUID | None
+    ) -> dict[str, dict[str, Any]]:
+        """O vocabulário de busca deste produto, para ESTA marca (ou sem marca).
+
+        O único lugar que decide de onde os termos vêm. Sem marca, são os do
+        produto (`localized_markets`); com marca, as linhas de `brand_markets`.
+        O formato é o mesmo dos dois lados de propósito — quem lê não precisa
+        saber qual caminho foi.
+
+        A separação não é organização: "juan valdez café" e "café" são buscas
+        diferentes no Google Ads e nunca podem dar o mesmo número. Guardar os
+        dois no mesmo lugar foi o estrago medido em 27/08/2026, quando duas
+        marcas de whisky dividiram a mesma entidade e a segunda herdou a
+        demanda da primeira.
+        """
+        if brand_key is None:
+            return dict(entity.localized_markets or {})
+        linhas = await self._session.execute(
+            select(BrandMarket).where(
+                BrandMarket.entity_key == entity.entity_key, BrandMarket.brand_key == brand_key
+            )
+        )
+        return {linha.country: dict(linha.market) for linha in linhas.scalars().all()}
+
+    async def save_brand_markets(
+        self, entity_key: uuid.UUID, brand_key: uuid.UUID, markets: dict[str, dict[str, Any]]
+    ) -> None:
+        """Grava (ou atualiza) o vocabulário de uma marca, país a país.
+
+        Mercado vazio é ignorado em vez de gravado: uma linha sem termos não
+        diz "não tem", diz "ninguém escreveu ainda", e as duas coisas precisam
+        continuar distinguíveis para o enriquecimento saber o que fazer.
+        """
+        for country, market in (markets or {}).items():
+            if not market or not market.get("search_terms"):
+                continue
+            existente = await self._session.get(BrandMarket, (entity_key, brand_key, country))
+            if existente is None:
+                self._session.add(
+                    BrandMarket(entity_key=entity_key, brand_key=brand_key, country=country, market=market)
+                )
+            else:
+                existente.market = market
+        await self._session.flush()
 
     async def get_by_entity_key(self, entity_key: uuid.UUID) -> ProductCatalog | None:
         stmt = (
@@ -522,6 +570,31 @@ class ProductRepository:
         result = await self._session.execute(stmt)
         return {alias: key for alias, key in result.all()}
 
+    async def champion_for(
+        self, entity: ProductCatalog, brand_key: uuid.UUID | None, period_key: str
+    ) -> tuple[bool, str | None, Decimal | None]:
+        """(já calculado neste período?, país, mos) para ESTA marca.
+
+        Sem marca, o campeão é o do produto. Com marca, o dela — o produto
+        passou a ser um só, e compartilhar campeão entre marcas faria o melhor
+        mercado de uma virar o da outra.
+
+        Essa contaminação se autoconfirma, e é por isso que ela tem tabela
+        própria: campeão conhecido faz a análise PULAR a coleta dos mercados de
+        referência. Um campeão herdado nunca seria corrigido, porque existir já
+        impede a medição que o desmentiria.
+        """
+        if brand_key is None:
+            return (
+                entity.champion_period_key == period_key,
+                entity.champion_country,
+                entity.champion_mos,
+            )
+        linha = await self._session.get(BrandChampion, (entity.entity_key, brand_key, period_key))
+        if linha is None:
+            return False, None, None
+        return True, linha.country, linha.mos
+
     async def set_champion(
         self,
         entity: ProductCatalog,
@@ -529,6 +602,7 @@ class ProductRepository:
         country: str | None,
         mos: Decimal | None,
         period_key: str,
+        brand_key: uuid.UUID | None = None,
     ) -> None:
         """Record the product's standout reference market for a period.
 
@@ -538,6 +612,22 @@ class ProductRepository:
         every analysis. Distinguishing it from "never computed" is the whole
         reason champion_period_key exists separately from champion_country.
         """
+        if brand_key is not None:
+            linha = await self._session.get(BrandChampion, (entity.entity_key, brand_key, period_key))
+            if linha is None:
+                self._session.add(
+                    BrandChampion(
+                        entity_key=entity.entity_key,
+                        brand_key=brand_key,
+                        period_key=period_key,
+                        country=country,
+                        mos=mos,
+                    )
+                )
+            else:
+                linha.country, linha.mos, linha.computed_at = country, mos, utc_now()
+            await self._session.flush()
+            return
         entity.champion_country = country
         entity.champion_mos = mos
         entity.champion_period_key = period_key

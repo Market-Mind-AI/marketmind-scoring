@@ -18,12 +18,14 @@ class CatalogResolveRequest(BaseModel):
 
 class CatalogResolveResponse(BaseModel):
     entity_key: uuid.UUID
-    # Com marca, o título carrega a marca ("Cardhu single malt Scotch whisky"):
-    # é a identidade da entidade que a análise mede, e é isso que o relatório
-    # mostra. `brand` e `generic_title` vêm separados para o frontend poder
-    # exibir "Produto: X · Marca: Y" sem ter que fatiar string.
+    # O título é o do PRODUTO. Desde 24/09/2026 a marca não entra na identidade
+    # do catálogo: ela vem ao lado, e a análise fica ligada às duas coisas. O
+    # frontend exibe "Produto: X · Marca: Y" sem ter que fatiar string.
     canonical_title: str
     brand: str | None = None
+    # A chave da marca, que é o que a análise grava. O nome sozinho não serve:
+    # ele muda, e o vínculo tem de sobreviver a um rename.
+    brand_key: uuid.UUID | None = None
     generic_title: str | None = Field(
         default=None,
         description=(

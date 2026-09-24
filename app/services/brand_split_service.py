@@ -39,29 +39,25 @@ demanda que o coletor já tem em cache — sem custo novo no DataForSEO.
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import EntityNotFoundError, MarketMindCoreError
 from app.core.logging import logger
 from app.db.models.product_alias import ProductAlias
-from app.db.models.product_excluded_term import ProductExcludedTerm
 from app.repositories.product_repository import ProductRepository
 from app.utils.text import normalize_alias
 
 
 @dataclass
 class SplitReport:
-    brand_entity_key: uuid.UUID
-    generic_entity_key: uuid.UUID
-    retired_entity_key: uuid.UUID
-    brand: str
-    brand_title: str
+    """O que o reparo moveu. Uma entidade só, porque desde 24/09/2026 a marca
+    não cria entidade — o que se separa é o vocabulário."""
+
+    entity_key: uuid.UUID
     generic_title: str
-    aliases_para_marca: int = 0
-    aliases_para_familia: int = 0
-    termos_excluidos_movidos: int = 0
+    brand: str
     mercados_movidos: list[str] = field(default_factory=list)
+    aliases_criados: int = 0
 
 
 class BrandSplitService:
@@ -70,13 +66,21 @@ class BrandSplitService:
         self._repo = ProductRepository(session)
 
     async def split(self, *, entity_key: uuid.UUID, brand: str, generic_title: str | None = None) -> SplitReport:
+        """Devolve a entidade à categoria, e o vocabulário à marca.
+
+        Desde 24/09/2026 não há entidade de marca para criar: o catálogo tem um
+        produto por identidade e a marca é vínculo. Então o reparo deixou de
+        fatiar a entidade em duas e passou a mover só o que estava no lugar
+        errado — os termos curados, que são da marca e estavam pendurados no
+        nome da categoria.
+
+        A entidade CONTINUA sendo o produto. Não é aposentada, não há alias
+        para repontar, e o histórico pendurado nela (indicator_values,
+        mos_results) segue de pé sem nenhum ponteiro novo.
+        """
         poluida = await self._repo.get_by_entity_key(entity_key)
         if poluida is None:
             raise EntityNotFoundError(f"Entity {entity_key} not found")
-        if poluida.brand_key is not None:
-            raise MarketMindCoreError(
-                f"Entity {entity_key} já está numa partição de marca; separar de novo criaria uma terceira entidade"
-            )
         if poluida.merged_into is not None:
             raise MarketMindCoreError(f"Entity {entity_key} já foi aposentada em {poluida.merged_into}")
         if not normalize_alias(brand):
@@ -84,82 +88,46 @@ class BrandSplitService:
 
         marca = await self._repo.get_or_create_brand(name=brand, source="brand_split")
         titulo_generico = (generic_title or poluida.canonical_title).strip()
-        titulo_marca = f"{marca.name} {titulo_generico}".strip()
+        mercados = dict(poluida.localized_markets or {})
 
-        # A família nasce limpa: sem localized_markets, sem reference_candidates.
-        # O vocabulário que existe hoje é da marca, e é para lá que ele vai.
-        familia = await self._repo.create_entity(canonical_title=titulo_generico, category=poluida.category)
-        entidade_marca = await self._repo.create_entity(
-            canonical_title=titulo_marca,
-            category=poluida.category,
-            localized_markets=poluida.localized_markets,
-            reference_candidates=poluida.reference_candidates,
-            target_age_min=poluida.target_age_min,
-            target_age_max=poluida.target_age_max,
-            brand_key=marca.brand_key,
-            generic_entity_key=familia.entity_key,
-        )
-        # O campeão foi eleito com a demanda da marca, então é dela.
-        if poluida.champion_period_key is not None:
-            await self._repo.set_champion(
-                entidade_marca,
-                country=poluida.champion_country,
-                mos=poluida.champion_mos,
-                period_key=poluida.champion_period_key,
-            )
+        # O vocabulário vai para a marca, chaveado por (produto, marca, país).
+        await self._repo.save_brand_markets(poluida.entity_key, marca.brand_key, mercados)
 
         report = SplitReport(
-            brand_entity_key=entidade_marca.entity_key,
-            generic_entity_key=familia.entity_key,
-            retired_entity_key=poluida.entity_key,
-            brand=marca.name,
-            brand_title=titulo_marca,
+            entity_key=poluida.entity_key,
             generic_title=titulo_generico,
-            mercados_movidos=sorted((poluida.localized_markets or {}).keys()),
+            brand=marca.name,
+            mercados_movidos=sorted(mercados.keys()),
         )
 
-        chave_generica = normalize_alias(titulo_generico)
-        for alias in list(poluida.aliases):
-            destino = familia.entity_key if alias.alias_normalized == chave_generica else entidade_marca.entity_key
-            alias.entity_key = destino
-            if destino == familia.entity_key:
-                report.aliases_para_familia += 1
-            else:
-                report.aliases_para_marca += 1
-
-        # As DUAS chaves de identidade têm que existir depois do reparo, senão
-        # ele deixa a próxima resolução criar duplicata — o erro que ele existe
-        # para consertar. `marca + nome` pode não existir ainda (a regra antiga
-        # só a gravava quando a marca chegava pela identificação) e o alias
-        # genérico pode ter ficado de fora se a entidade nasceu por outro
-        # caminho. ON CONFLICT DO NOTHING, então quem já tem dono é respeitado.
-        report.aliases_para_marca += await self._repo.create_aliases_bulk(
-            aliases={normalize_alias(titulo_marca): entidade_marca.entity_key}, source="brand_split"
-        )
-        report.aliases_para_familia += await self._repo.create_aliases_bulk(
-            aliases={chave_generica: familia.entity_key}, source="brand_split"
+        # O nome volta a ser o da categoria, e o alias dele tem de existir: sem
+        # ele a próxima resolução do genérico cria duplicata, que é o erro que
+        # este reparo existe para consertar.
+        poluida.canonical_title = titulo_generico
+        report.aliases_criados += await self._repo.create_aliases_bulk(
+            aliases={normalize_alias(titulo_generico): poluida.entity_key}, source="brand_split"
         )
 
-        # Os termos excluídos são o lado negativo do MESMO vocabulário curado.
-        movidos = await self._session.execute(
-            update(ProductExcludedTerm)
-            .where(ProductExcludedTerm.entity_key == poluida.entity_key)
-            .values(entity_key=entidade_marca.entity_key)
-        )
-        report.termos_excluidos_movidos = movidos.rowcount or 0
+        # Os termos excluídos ficam onde estão: pendurados no produto, eles
+        # vetam a fusão de produtos VIZINHOS, que é pergunta do produto e não
+        # da marca.
 
-        # Aposentada, não apagada: o histórico já entregue continua pendurado
-        # nela (indicator_values, mos_results) e segue abrindo.
-        poluida.merged_into = entidade_marca.entity_key
+        # O campeão foi eleito com a demanda DA MARCA, então não vale para o
+        # produto. Apagado em vez de herdado: um campeão errado é pior que
+        # nenhum, porque faz a próxima análise pular a coleta que o corrigiria.
+        poluida.champion_country = None
+        poluida.champion_mos = None
+        poluida.champion_period_key = None
+        poluida.champion_computed_at = None
+
         poluida.localized_markets = None
         poluida.reference_candidates = None
         await self._session.flush()
         await self._session.commit()
 
         logger.warning(
-            f"Entidade {poluida.entity_key} separada: marca {report.brand!r} -> {entidade_marca.entity_key} "
-            f"({report.aliases_para_marca} aliases, {len(report.mercados_movidos)} mercados), "
-            f"família {titulo_generico!r} -> {familia.entity_key} ({report.aliases_para_familia} alias)"
+            f"Entidade {poluida.entity_key} devolvida à categoria {titulo_generico!r}: "
+            f"{len(report.mercados_movidos)} mercados foram para a marca {report.brand!r}"
         )
         return report
 
