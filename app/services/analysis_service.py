@@ -72,7 +72,7 @@ from app.utils.text import as_term_list
 _MAX_REFERENCE_CANDIDATES = 3
 
 
-def _top_reference_candidates(entity: Any) -> list[dict[str, Any]]:
+def _top_reference_candidates(candidatos: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The bounded shortlist for the DEMAND CEILING.
 
     Truncates the RAW ranked list, before any requested-country filtering, and
@@ -83,10 +83,10 @@ def _top_reference_candidates(entity: Any) -> list[dict[str, Any]]:
 
     Use _champion_candidates for anything that should skip requested countries.
     """
-    return list(entity.reference_candidates or [])[:_MAX_REFERENCE_CANDIDATES]
+    return list(candidatos or [])[:_MAX_REFERENCE_CANDIDATES]
 
 
-def _champion_candidates(entity: Any, requested: list[str]) -> list[dict[str, Any]]:
+def _champion_candidates(candidatos: list[dict[str, Any]], requested: list[str]) -> list[dict[str, Any]]:
     """The bounded shortlist for the OFF-REQUEST CHAMPION, and for collecting it.
 
     Same bound, different set: the highest-ranked candidates the caller did NOT
@@ -107,7 +107,7 @@ def _champion_candidates(entity: Any, requested: list[str]) -> list[dict[str, An
     requested_set = {c.upper() for c in requested}
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for cand in entity.reference_candidates or []:
+    for cand in candidatos or []:
         iso3 = (cand.get("country") or "").upper()
         if not iso3 or iso3 in requested_set or iso3 in seen:
             continue
@@ -252,6 +252,23 @@ class AnalysisService:
             return dict(getattr(entity, "localized_markets", None) or {})
         return await self._product_repo.markets_for(entity, marca.brand_key)
 
+    async def candidatos_de_referencia(self, entity: Any, marca: Any | None) -> list[dict[str, Any]]:
+        """Os mercados de referência desta análise: do produto, ou DESTA marca.
+
+        Sem marca a resposta está na própria entidade — mesma razão de
+        `vocabulario`: o caminho comum não precisa de uma consulta que não tem o
+        que buscar.
+        """
+        if marca is None:
+            return list(getattr(entity, "reference_candidates", None) or [])
+        return await self._product_repo.reference_candidates_for(entity, marca.brand_key)
+
+    async def _gravar_candidatos(self, entity: Any, marca: Any | None, candidatos: list[dict[str, Any]]) -> None:
+        if marca is None:
+            entity.reference_candidates = candidatos
+            return
+        await self._product_repo.save_reference_candidates(entity, marca.brand_key, candidatos)
+
     async def _gravar_vocabulario(self, entity: Any, marca: Any | None, mercados: dict[str, dict[str, Any]]) -> None:
         if marca is not None:
             await self._product_repo.save_brand_markets(entity.entity_key, marca.brand_key, mercados)
@@ -306,7 +323,8 @@ class AnalysisService:
                 await self._gravar_vocabulario(entity, marca, reserva)
                 mercados.update(reserva)
 
-        if com_candidatos and not entity.reference_candidates:
+        candidatos_atuais = await self.candidatos_de_referencia(entity, marca)
+        if com_candidatos and not candidatos_atuais:
             try:
                 supported = [c.iso3 for c in await self._country_repo.list_all()]
                 supported_set = set(supported)
@@ -320,7 +338,7 @@ class AnalysisService:
                         candidates.append({"country": cand.country, **entry})
                         seen.add(cand.country)
                 if candidates:
-                    entity.reference_candidates = candidates
+                    await self._gravar_candidatos(entity, marca, candidates)
             except ReferenceMarketError as exc:
                 logger.warning(f"Background reference-market candidates unavailable: {exc}")
 
@@ -544,7 +562,8 @@ class AnalysisService:
         gaps: list[CoverageGap] = []
         demanda_reaproveitada = 0
         relacionadas_frescas = 0
-        for cand in _champion_candidates(entity, requested):
+        candidatos = await self.candidatos_de_referencia(entity, marca)
+        for cand in _champion_candidates(candidatos, requested):
             iso3 = cand.get("country")
             terms = as_term_list(cand.get("search_terms"))
             if not (iso3 and terms) or iso3 in requested:
@@ -630,7 +649,8 @@ class AnalysisService:
         - fixed — None (no candidate had volume), so the engine uses the 2M bound.
         Volumes are read from already-collected data via compute_trend_score."""
         measured: list[dict[str, Any]] = []
-        for cand in _top_reference_candidates(entity):
+        candidatos = await self.candidatos_de_referencia(entity, marca)
+        for cand in _top_reference_candidates(candidatos):
             iso3 = cand.get("country")
             if not iso3:
                 continue
@@ -667,7 +687,13 @@ class AnalysisService:
         return None, {"mode": "fixed"}
 
     async def score_reference_candidates(
-        self, *, entity: Any, requested: list[str], period_key: str, demand_ceiling: float | None
+        self,
+        *,
+        entity: Any,
+        requested: list[str],
+        period_key: str,
+        demand_ceiling: float | None,
+        marca: Any | None = None,
     ) -> list[MosResult]:
         """Best-effort MOS for the product's reference-candidate markets the user
         did NOT request, so the best-MOS market (the "champion") can be surfaced
@@ -682,7 +708,8 @@ class AnalysisService:
         requested_set = set(requested)
         attempted: list[str] = []
         seen: set[str] = set()
-        for cand in _champion_candidates(entity, requested):
+        candidatos = await self.candidatos_de_referencia(entity, marca)
+        for cand in _champion_candidates(candidatos, requested):
             iso3 = cand.get("country")
             terms = as_term_list(cand.get("search_terms"))
             if not (iso3 and terms) or iso3 in requested_set or iso3 in seen:

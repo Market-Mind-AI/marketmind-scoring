@@ -14,6 +14,7 @@ from app.core.logging import logger
 from app.db.models.brand import Brand
 from app.db.models.brand_champion import BrandChampion
 from app.db.models.brand_market import BrandMarket
+from app.db.models.brand_reference_candidate import BrandReferenceCandidate
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.db.models.product_excluded_term import ProductExcludedTerm
@@ -108,6 +109,41 @@ class ProductRepository:
                 )
             else:
                 existente.market = market
+        await self._session.flush()
+
+    async def reference_candidates_for(
+        self, entity: ProductCatalog, brand_key: uuid.UUID | None
+    ) -> list[dict[str, Any]]:
+        """Os mercados de referência desta análise: do produto, ou DESTA marca.
+
+        O maior volume real entre eles é o teto da régua de Demand Volume. Onde
+        o café é mais procurado não é onde a Juan Valdez é mais procurada, e
+        usar a régua da categoria para medir a marca desloca todos os scores de
+        demanda dela de uma vez.
+        """
+        if brand_key is None:
+            return list(entity.reference_candidates or [])
+        linha = await self._session.get(BrandReferenceCandidate, (entity.entity_key, brand_key))
+        return list(linha.candidates) if linha is not None else []
+
+    async def save_reference_candidates(
+        self, entity: ProductCatalog, brand_key: uuid.UUID | None, candidates: list[dict[str, Any]]
+    ) -> None:
+        if not candidates:
+            return
+        if brand_key is None:
+            entity.reference_candidates = candidates
+            await self._session.flush()
+            return
+        linha = await self._session.get(BrandReferenceCandidate, (entity.entity_key, brand_key))
+        if linha is None:
+            self._session.add(
+                BrandReferenceCandidate(
+                    entity_key=entity.entity_key, brand_key=brand_key, candidates=candidates
+                )
+            )
+        else:
+            linha.candidates = candidates
         await self._session.flush()
 
     async def get_by_entity_key(self, entity_key: uuid.UUID) -> ProductCatalog | None:

@@ -506,8 +506,15 @@ class ExplanationClient:
         country_values = await self._indicator_repo.get_values_for(
             entity_key=None, country=country, period_type="month", period_key=period_key
         )
+        # A marca vem do próprio MOS que se está explicando: o pacote tem de
+        # descrever os números que produziram AQUELE resultado. Lendo sem ela,
+        # uma análise de marca seria explicada com os indicadores da categoria.
         product_values = await self._indicator_repo.get_values_for(
-            entity_key=entity_key, country=country, period_type="month", period_key=period_key
+            entity_key=entity_key,
+            brand_key=mos_result.brand_key,
+            country=country,
+            period_type="month",
+            period_key=period_key,
         )
         merged = {**country_values, **product_values}
 

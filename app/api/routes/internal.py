@@ -369,7 +369,9 @@ async def build_evidence(request: EvidenceRequest, session: AsyncSession = Depen
     mos_repo = MosRepository(session)
     mos_results = []
     for country in request.countries:
-        row = await mos_repo.get_mos_result(request.entity_key, country, "month", request.period_key)
+        row = await mos_repo.get_mos_result(
+            request.entity_key, country, "month", request.period_key, request.brand_key
+        )
         if row is not None:
             mos_results.append(row)
     if not mos_results:
@@ -640,6 +642,7 @@ async def score_candidates(
         requested=request.requested_countries,
         period_key=request.period_key,
         demand_ceiling=request.demand_ceiling,
+        marca=await _marca(session, request.brand_key),
     )
     await session.commit()
     return ScoreCandidatesResponse(

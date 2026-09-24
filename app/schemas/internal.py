@@ -115,6 +115,9 @@ class EvidenceRequest(BaseModel):
     countries: list[str] = Field(..., min_length=1)
     period_key: str = Field(..., min_length=1)
     demand_ruler: dict[str, Any] | None = None
+    # A marca desta análise: o pacote explica os números que produziram
+    # AQUELE MOS, não os da categoria.
+    brand_key: uuid.UUID | None = None
 
 
 class EvidenceResponse(BaseModel):
@@ -275,6 +278,9 @@ class ScoreCandidatesRequest(BaseModel):
     requested_countries: list[str] = Field(..., min_length=1)
     period_key: str = Field(..., min_length=1)
     demand_ceiling: float | None = None
+    # A marca desta análise: os candidatos dela são os DELA. Onde o café é mais
+    # procurado não é onde a Juan Valdez é mais procurada.
+    brand_key: uuid.UUID | None = None
 
 
 class ScoredCandidate(BaseModel):

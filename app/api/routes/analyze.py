@@ -50,7 +50,11 @@ async def _load_breakdown(session: AsyncSession, analysis_request: AnalysisReque
     mos_repo = MosRepository(session)
     mos_results = []
     for country in analysis_request.countries:
-        row = await mos_repo.get_mos_result(analysis_request.entity_key, country, "month", period_key)
+        # A marca DESTA análise: sem ela, um relatório de marca seria
+        # remontado com o MOS do produto.
+        row = await mos_repo.get_mos_result(
+            analysis_request.entity_key, country, "month", period_key, analysis_request.brand_key
+        )
         if row is not None:
             mos_results.append(row)
     if not mos_results:

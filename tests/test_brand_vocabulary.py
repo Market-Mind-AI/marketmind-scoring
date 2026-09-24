@@ -101,3 +101,53 @@ async def test_o_campeao_de_uma_marca_nao_vira_o_da_outra(db_session: AsyncSessi
 
     do_produto, _, _ = await repo.champion_for(produto, None, "2026-09")
     assert do_produto is False, "nem o produto herda o campeão de uma marca"
+
+
+async def test_tudo_que_depende_da_marca_esta_separado(db_session: AsyncSession) -> None:
+    """A varredura, prendida como teste.
+
+    Quatro coisas por entidade dependiam da marca e cada uma foi um defeito
+    separado — encontrado só medindo, nunca lendo o código:
+
+      vocabulário   a marca comprava os termos da categoria (045)
+      campeão       o melhor mercado de uma virava o da outra, e como campeão
+                    conhecido faz PULAR a coleta, nunca se corrigiria (047)
+      indicador     as duas análises gravavam na MESMA linha e uma sobrescrevia
+                    a outra; `trend_score` valia 3.557.340 nas quatro (048)
+      referência    a régua de Demand Volume da marca vinha de onde a CATEGORIA
+                    é maior, deslocando todos os scores de demanda dela (049)
+
+    Se alguém acrescentar um quinto e esquecer, este teste não pega — mas os
+    quatro que já custaram caro ficam presos aqui.
+    """
+    from app.db.models.brand_champion import BrandChampion
+    from app.db.models.brand_market import BrandMarket
+    from app.db.models.brand_reference_candidate import BrandReferenceCandidate
+    from app.db.models.indicator_value import IndicatorValue
+    from app.db.models.mos_result import MosResult
+
+    # Todas as tabelas que guardam algo por marca têm a coluna, e as que
+    # guardam medição a têm ANULÁVEL — nulo é "do produto", uma resposta.
+    for modelo in (BrandMarket, BrandChampion, BrandReferenceCandidate):
+        assert "brand_key" in modelo.__table__.columns, modelo.__tablename__
+        assert not modelo.__table__.columns["brand_key"].nullable, (
+            f"{modelo.__tablename__} só existe para marca; nulo ali não significaria nada"
+        )
+    for modelo in (IndicatorValue, MosResult):
+        assert "brand_key" in modelo.__table__.columns, modelo.__tablename__
+        assert modelo.__table__.columns["brand_key"].nullable, (
+            f"{modelo.__tablename__} guarda produto E marca; nulo é 'do produto'"
+        )
+
+    # E os índices únicos separam os dois casos em vez de um só anulável: o
+    # Postgres trata nulos como distintos, então uma chave única com coluna
+    # anulável deixaria passar duplicata justamente do caso sem marca.
+    for modelo in (IndicatorValue, MosResult):
+        parciais = [
+            i
+            for i in modelo.__table__.indexes
+            # `is not None`: a condição é uma cláusula SQL, e avaliá-la como
+            # booleano levanta "Boolean value of this clause is not defined".
+            if i.unique and i.dialect_options["postgresql"].get("where") is not None
+        ]
+        assert len(parciais) >= 2, f"{modelo.__tablename__} precisa de um índice por caso, não um anulável"

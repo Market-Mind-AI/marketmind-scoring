@@ -39,14 +39,14 @@ def test_ceiling_takes_the_raw_prefix_including_requested_countries() -> None:
     # would change with the query and MOS values would stop being comparable
     # between analyses.
     entity = _entity("USA", "IND", "BRA", "IDN", "GBR", "MEX", "ESP", "ITA")
-    assert _codes(_top_reference_candidates(entity)) == ["USA", "IND", "BRA"]
+    assert _codes(_top_reference_candidates(entity.reference_candidates)) == ["USA", "IND", "BRA"]
 
 
 def test_ceiling_is_independent_of_what_was_requested() -> None:
     entity = _entity("USA", "IND", "BRA", "IDN")
     # Same answer whatever the request — there is no request parameter at all,
     # which is the structural guarantee, not just the current behaviour.
-    assert _codes(_top_reference_candidates(entity)) == ["USA", "IND", "BRA"]
+    assert _codes(_top_reference_candidates(entity.reference_candidates)) == ["USA", "IND", "BRA"]
 
 
 # --- the champion's view: highest-ranked NOT requested ----------------------
@@ -57,34 +57,34 @@ def test_champion_skips_requested_and_still_fills_the_bound() -> None:
     # left exactly one usable candidate out of three. Filtering before
     # truncating yields three.
     entity = _entity("USA", "IND", "BRA", "IDN", "GBR", "MEX", "ESP", "ITA")
-    assert _codes(_champion_candidates(entity, ["USA", "BRA"])) == ["IND", "IDN", "GBR"]
+    assert _codes(_champion_candidates(entity.reference_candidates, ["USA", "BRA"])) == ["IND", "IDN", "GBR"]
 
 
 def test_champion_never_exceeds_the_bound() -> None:
     entity = _entity(*[f"C{i:02d}" for i in range(20)])
-    assert len(_champion_candidates(entity, [])) == _MAX_REFERENCE_CANDIDATES
+    assert len(_champion_candidates(entity.reference_candidates, [])) == _MAX_REFERENCE_CANDIDATES
 
 
 def test_champion_preserves_rank_order() -> None:
     entity = _entity("USA", "IND", "BRA", "IDN")
-    assert _codes(_champion_candidates(entity, ["IND"])) == ["USA", "BRA", "IDN"]
+    assert _codes(_champion_candidates(entity.reference_candidates, ["IND"])) == ["USA", "BRA", "IDN"]
 
 
 def test_champion_matches_country_codes_case_insensitively() -> None:
     # The requested list comes from an API payload; a lowercase code there must
     # not smuggle a requested country back in as a champion.
     entity = _entity("USA", "IND", "BRA")
-    assert _codes(_champion_candidates(entity, ["usa"])) == ["IND", "BRA"]
+    assert _codes(_champion_candidates(entity.reference_candidates, ["usa"])) == ["IND", "BRA"]
 
 
 def test_champion_deduplicates_repeated_countries() -> None:
     entity = _entity("IND", "IND", "BRA")
-    assert _codes(_champion_candidates(entity, [])) == ["IND", "BRA"]
+    assert _codes(_champion_candidates(entity.reference_candidates, [])) == ["IND", "BRA"]
 
 
 def test_champion_drops_entries_without_a_country() -> None:
     entity = SimpleNamespace(reference_candidates=[{"search_terms": ["x"]}, {"country": "IND"}])
-    assert _codes(_champion_candidates(entity, [])) == ["IND"]
+    assert _codes(_champion_candidates(entity.reference_candidates, [])) == ["IND"]
 
 
 # --- the invariant that was violated ---------------------------------------
@@ -131,8 +131,8 @@ def test_ceiling_non_requested_members_are_always_collected() -> None:
     entity = _entity("USA", "IND", "BRA", "IDN", "GBR", "MEX", "ESP", "ITA")
     for requested in ([], ["USA"], ["USA", "BRA"], ["IND"], ["USA", "IND", "BRA"]):
         requested_set = {c.upper() for c in requested}
-        ceiling_unrequested = {c["country"] for c in _top_reference_candidates(entity)} - requested_set
-        collected = {c["country"] for c in _champion_candidates(entity, requested)}
+        ceiling_unrequested = {c["country"] for c in _top_reference_candidates(entity.reference_candidates)} - requested_set
+        collected = {c["country"] for c in _champion_candidates(entity.reference_candidates, requested)}
         assert ceiling_unrequested <= collected, f"ceiling reads uncollected data for requested={requested}"
 
 
