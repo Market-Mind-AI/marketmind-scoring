@@ -139,6 +139,35 @@ class _Resolvido:
     familia: ProductCatalog | None = None
 
 
+def _categorias_batem(guardada: str | None, pedida: str | None) -> bool:
+    """Se as duas categorias podem ser do mesmo produto.
+
+    Desconhecida de um dos lados não contradiz nada — a categoria é opcional e
+    vem de um modelo, então ausência nunca pode virar recusa. O que impede é
+    afirmação CONTRA afirmação.
+    """
+    if not guardada or not pedida:
+        return True
+    return guardada.strip().casefold() == pedida.strip().casefold()
+
+
+def _e_mais_especifico(consulta: str, titulo_casado: str) -> bool:
+    """Se a consulta é o título casado MAIS alguma qualificação.
+
+    `instant coffee` contra `coffee`: mesmas palavras e mais uma. Semelhança de
+    forma diz que são o mesmo; produto costuma dizer que não.
+
+    Palavra a palavra e não substring, senão `airfryer` contra `air fryer`
+    cairia aqui — e esses dois são o mesmo produto escrito de dois jeitos, que
+    é justamente o que o passo 2 existe para resolver sozinho.
+    """
+    da_consulta = set(consulta.split())
+    do_casado = set(titulo_casado.strip().casefold().split())
+    if not do_casado or not da_consulta:
+        return False
+    return do_casado < da_consulta
+
+
 def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
     return CatalogResolveResponse(
         entity_key=resolvido.entity.entity_key,
@@ -267,10 +296,17 @@ class CatalogService:
         # ProductRepository.repoint_alias.
         alias_orfao: ProductAlias | None = None
 
-        existente = await self._repo.get_entity_by_alias_exact(chave) if chave else None
+        existente = await self._repo.get_entity_by_alias_exact(chave, category) if chave else None
         if existente is not None:
             alias_existente, entity = existente
-            if entity.brand_key == brand_key:
+            # Alias é igualdade de TEXTO, e texto igual não é produto igual.
+            # Medido em 24/09/2026: `jaguar` em Automotive e `jaguar` em
+            # Wildlife caíam na mesma entidade pelo caminho O(1) — o mais
+            # barato, e por isso o que nada a jusante corrige.
+            #
+            # Categorias que se contradizem não resolvem aqui: a pergunta passa
+            # a ser de SIGNIFICADO, e quem responde isso é o passo 3.
+            if _categorias_batem(entity.category, category) and entity.brand_key == brand_key:
                 await self._repo.bump_alias_hit(alias_existente)
                 await self._atualizar(
                     entity,
@@ -281,11 +317,17 @@ class CatalogService:
                     target_age_max=target_age_max,
                 )
                 return _Resolvido(entity=entity, method="alias", marca=marca, familia=familia)
-            logger.warning(
-                f"Alias {chave!r} pertence a {entity.canonical_title!r}, que está em outra partição de marca; "
-                f"resolvendo na partição correta e repontando"
-            )
-            alias_orfao = alias_existente
+            if not _categorias_batem(entity.category, category):
+                logger.info(
+                    f"Alias {chave!r} aponta para {entity.canonical_title!r} ({entity.category!r}), e este pedido "
+                    f"diz {category!r}; escalando para o LLM em vez de decidir por texto igual"
+                )
+            else:
+                logger.warning(
+                    f"Alias {chave!r} pertence a {entity.canonical_title!r}, que está em outra partição de marca; "
+                    f"resolvendo na partição correta e repontando"
+                )
+                alias_orfao = alias_existente
 
         trigram = (
             await self._repo.trigram_search(generico, category=category, brand_key=brand_key)
@@ -300,9 +342,22 @@ class CatalogService:
                 f"Passo 2 vetado para {text!r} por excluded_terms de "
                 f"{[p.canonical_title for p in trigram.vetoed]}; escalando para o LLM"
             )
-        if trigram.match is not None:
+        if trigram.match is not None and _e_mais_especifico(generico, trigram.match.product.canonical_title):
+            # A consulta contém TODAS as palavras do casado e ainda traz outras:
+            # é o mesmo nome com uma qualificação, e qualificação costuma ser
+            # outro produto. Medido em 24/09/2026: `instant coffee` casava com
+            # `coffee` por semelhança de forma, e café instantâneo não tem a
+            # demanda do café.
+            #
+            # Não decide o contrário aqui — só recusa decidir por FORMA. Quem
+            # diz se `extra virgin olive oil` é `olive oil` é o passo 3.
+            logger.info(
+                f"Passo 2 recusado para {text!r}: é {trigram.match.product.canonical_title!r} mais qualificação; "
+                f"escalando para o LLM"
+            )
+        elif trigram.match is not None:
             entity = trigram.match.product
-            await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao)
+            await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao, category=category)
             await self._atualizar(
                 entity,
                 category=category,
@@ -325,9 +380,13 @@ class CatalogService:
             category=category, priority=trigram.vetoed, brand_key=brand_key
         )
         motivo: dict[str, str] = {}
-        correspondente = await self._matcher.pick(text=text, candidates=candidatos, motivo=motivo)
+        correspondente = await self._matcher.pick(
+            text=text, candidates=candidatos, motivo=motivo, category=category
+        )
         if correspondente is not None:
-            await self._registrar_chave(chave, correspondente, source=source, alias_orfao=alias_orfao)
+            await self._registrar_chave(
+                chave, correspondente, source=source, alias_orfao=alias_orfao, category=category
+            )
             await self._atualizar(
                 correspondente,
                 category=category,
@@ -354,7 +413,7 @@ class CatalogService:
             brand_key=brand_key,
             generic_entity_key=familia.entity_key if familia is not None else None,
         )
-        await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao)
+        await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao, category=category)
         await self._index_terms(entity, localized_markets)
         return _Resolvido(entity=entity, method="created", marca=marca, familia=familia)
 
@@ -382,16 +441,23 @@ class CatalogService:
         await self._index_terms(entity, localized_markets)
 
     async def _registrar_chave(
-        self, chave: str, entity: ProductCatalog, *, source: str, alias_orfao: ProductAlias | None
+        self,
+        chave: str,
+        entity: ProductCatalog,
+        *,
+        source: str,
+        alias_orfao: ProductAlias | None,
+        category: str | None = None,
     ) -> None:
         """Grava a chave desta partição como alias exato da entidade, para a
-        próxima resolução sair pelo caminho O(1). Quando a chave já pertencia a
-        uma entidade de outra partição, repontar é a única saída: o alias é
-        único global."""
+        próxima resolução sair pelo caminho O(1).
+
+        A chave é (nome, categoria) desde a migration 051: o mesmo nome em
+        outra categoria é outro produto, e cabem os dois."""
         if alias_orfao is not None:
             await self._repo.repoint_alias(alias_orfao, entity.entity_key)
             return
-        await self._gravar_alias(chave, entity.entity_key, source)
+        await self._gravar_alias(chave, entity.entity_key, source, category or entity.category)
 
     async def _podar_termos_derivados(self, entity: ProductCatalog) -> int:
         """Remove da entidade os termos derivados que a curadoria atual não
@@ -416,7 +482,9 @@ class CatalogService:
             logger.info(f"Podados {apagados} termos derivados obsoletos de {entity.canonical_title!r}")
         return apagados
 
-    async def _gravar_alias(self, alias_normalized: str, entity_key: uuid.UUID, source: str) -> None:
+    async def _gravar_alias(
+        self, alias_normalized: str, entity_key: uuid.UUID, source: str, category: str | None = None
+    ) -> None:
         """Grava o alias da consulta, a menos que ela não tenha forma normalizada.
 
         Texto só de pontuação ou emoji normaliza para vazio. Gravar isso como
@@ -427,7 +495,9 @@ class CatalogService:
         if not alias_normalized:
             logger.info("Consulta sem forma normalizada (só pontuação/emoji); nenhum alias gravado")
             return
-        await self._repo.create_alias(alias_normalized=alias_normalized, entity_key=entity_key, source=source)
+        await self._repo.create_alias(
+            alias_normalized=alias_normalized, entity_key=entity_key, source=source, category=category
+        )
 
     async def backfill_terms(self, *, batch_size: int = 100) -> dict[str, int]:
         """Indexa o vocabulário curado de TODAS as entidades já existentes.

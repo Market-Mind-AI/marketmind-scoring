@@ -55,15 +55,44 @@ class ProductRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_entity_by_alias_exact(self, alias_normalized: str) -> tuple[ProductAlias, ProductCatalog] | None:
+    async def get_entity_by_alias_exact(
+        self, alias_normalized: str, category: str | None = None
+    ) -> tuple[ProductAlias, ProductCatalog] | None:
+        """O produto deste nome NESTA categoria, quando a resposta é inequívoca.
+
+        A identidade é o par (nome, categoria): `jaguar` em Automotive e
+        `jaguar` em Wildlife são produtos diferentes, e até 24/09/2026 caíam na
+        mesma entidade pelo caminho O(1) — o mais barato, e por isso o único
+        que nada a jusante corrige.
+
+        Devolve None quando o nome existe em mais de uma categoria e o pedido
+        não diz qual. Recusar é a resposta certa: quem decide por SIGNIFICADO é
+        o passo 3, e chutar aqui criaria um erro permanente pelo caminho que
+        ninguém revisa.
+        """
         stmt = (
             select(ProductAlias, ProductCatalog)
             .join(ProductCatalog, ProductCatalog.entity_key == ProductAlias.entity_key)
             .where(ProductAlias.alias_normalized == alias_normalized)
         )
-        result = await self._session.execute(stmt)
-        row = result.first()
-        return None if row is None else (row[0], row[1])
+        linhas = list((await self._session.execute(stmt)).all())
+        if not linhas:
+            return None
+        if category:
+            pedida = category.strip().casefold()
+            exatas = [linha for linha in linhas if (linha[0].category or "").strip().casefold() == pedida]
+            if exatas:
+                return exatas[0][0], exatas[0][1]
+            # Só as sem categoria declarada podem servir a um pedido com
+            # categoria: elas não contradizem nada. Uma categoria concreta e
+            # diferente contradiz.
+            sem_categoria = [linha for linha in linhas if not linha[0].category]
+            if len(sem_categoria) == 1 and len(linhas) == 1:
+                return sem_categoria[0][0], sem_categoria[0][1]
+            return None
+        if len(linhas) == 1:
+            return linhas[0][0], linhas[0][1]
+        return None
 
     async def markets_for(
         self, entity: ProductCatalog, brand_key: uuid.UUID | None
@@ -407,10 +436,15 @@ class ProductRepository:
             f"era artefato da regra antiga de marca"
         )
 
-    async def create_alias(self, *, alias_normalized: str, entity_key: uuid.UUID, source: str) -> ProductAlias:
+    async def create_alias(
+        self, *, alias_normalized: str, entity_key: uuid.UUID, source: str, category: str | None = None
+    ) -> ProductAlias:
         alias = ProductAlias(
             id=uuid.uuid4(),
             alias_normalized=alias_normalized,
+            # Parte da identidade, não decoração: o mesmo nome em outra
+            # categoria é outro produto (migration 051).
+            category=category,
             entity_key=entity_key,
             source=source,
             hit_count=1,
@@ -420,17 +454,23 @@ class ProductRepository:
         await self._session.flush()
         return alias
 
-    async def create_aliases_bulk(self, *, aliases: dict[str, uuid.UUID], source: str) -> int:
+    async def create_aliases_bulk(
+        self, *, aliases: dict[str, uuid.UUID], source: str, category: str | None = None
+    ) -> int:
         """Um INSERT para todos os aliases, em vez de um por termo.
 
         Um produto com 27 mercados chega aqui com ~286 termos normalizados; um
         INSERT+flush por termo eram ~286 idas ao banco por resolução, e é o
         caminho quente do backfill do catálogo inteiro.
 
-        `ON CONFLICT DO NOTHING` não é só velocidade: `alias_normalized` é
-        único global, então duas resoluções simultâneas do mesmo termo faziam a
-        segunda estourar IntegrityError. Aqui a segunda simplesmente não grava,
-        que é exatamente a regra de negócio (o primeiro dono prevalece).
+        `ON CONFLICT DO NOTHING` não é só velocidade: o par (nome, categoria) é
+        único, então duas resoluções simultâneas do mesmo termo faziam a segunda
+        estourar IntegrityError. Aqui a segunda simplesmente não grava, que é
+        exatamente a regra de negócio (o primeiro dono prevalece).
+
+        O conflito é declarado sobre a EXPRESSÃO do índice, não sobre a coluna:
+        a unicidade vive em `(alias_normalized, COALESCE(category, ''))` desde a
+        migration 051, porque nulo não participa de unicidade no Postgres.
         """
         if not aliases:
             return 0
@@ -438,6 +478,7 @@ class ProductRepository:
             {
                 "id": uuid.uuid4(),
                 "alias_normalized": alias,
+                "category": category,
                 "entity_key": entity_key,
                 "source": source,
                 "hit_count": 1,
@@ -445,7 +486,9 @@ class ProductRepository:
             }
             for alias, entity_key in aliases.items()
         ]
-        stmt = pg_insert(ProductAlias).values(linhas).on_conflict_do_nothing(index_elements=["alias_normalized"])
+        stmt = pg_insert(ProductAlias).values(linhas).on_conflict_do_nothing(
+            index_elements=[ProductAlias.alias_normalized, func.coalesce(ProductAlias.category, "")]
+        )
         result = cast(CursorResult[Any], await self._session.execute(stmt))
         return int(result.rowcount or 0)
 

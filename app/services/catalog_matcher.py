@@ -68,6 +68,10 @@ _SYSTEM = (
     "abbreviations are all the SAME product. A different function, a different category, or a "
     "different operating principle is a DIFFERENT product, even when the names look almost "
     "identical.\n\n"
+    "When the query states a category and an entry names a DIFFERENT one, they are different "
+    "products — however identical the names look. A name shared across categories is common "
+    "('jaguar' the car and the animal, 'apple' the fruit and the brand, 'galaxy' the phone and "
+    "the chocolate) and is exactly the case a name comparison cannot settle.\n\n"
     "SAME product despite looking nothing alike:\n"
     "  'air fryer' / 'freidora de aire' / 'fritadeira sem óleo' / 'ノンフライヤー'\n"
     "  'drone' / 'quadcopter' / 'multi-rotor'\n"
@@ -139,6 +143,7 @@ class CatalogMatcher:
         text: str,
         candidates: list["ProductCatalog"],
         motivo: dict[str, str] | None = None,
+        category: str | None = None,
     ) -> "ProductCatalog | None":
         """`motivo`, quando dado, recebe em `motivo["reasoning"]` o porquê da
         escolha — a evidência da coincidência SEMÂNTICA, que é o que este passo
@@ -152,8 +157,15 @@ class CatalogMatcher:
 
         provider = self._provider or resolve_catalog_match_llm()
         listagem = "\n".join(_describe(c) for c in candidates)
+        # A categoria do PEDIDO, que antes não era enviada. Sem ela o modelo
+        # via a categoria dos candidatos e não tinha contra o que comparar:
+        # medido em 24/09/2026, `jaguar` em Wildlife foi fundido com `jaguar`
+        # em Automotive porque o texto batia, e a resposta dizia literalmente
+        # "exact name match with the existing 'jaguar' entry in Automotive".
+        linha_categoria = f"Category stated for this query: {category}\n" if category else ""
         prompt = (
-            f"Product name to resolve: {text}\n\n"
+            f"Product name to resolve: {text}\n"
+            f"{linha_categoria}\n"
             f"Existing catalog entries:\n{listagem}\n\n"
             "Which entry, if any, is the same product?"
         )
