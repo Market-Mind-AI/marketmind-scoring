@@ -77,6 +77,7 @@ class IndicatorCode(StrEnum):
     GDP_PER_CAPITA_SCORE = "gdp_per_capita_score"
     INTERNET_PENETRATION_SCORE = "internet_penetration_score"
     MOBILE_CONNECTIVITY_SCORE = "mobile_connectivity_score"
+    BROADBAND_ADOPTION_SCORE = "broadband_adoption_score"
     GDP_GROWTH_SCORE = "gdp_growth_score"
     POPULATION_SCALE_SCORE = "population_scale_score"
     URBANIZATION_SCORE = "urbanization_score"

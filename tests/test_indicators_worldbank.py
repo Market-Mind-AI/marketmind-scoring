@@ -118,3 +118,23 @@ async def test_trade_openness_uses_latest_value() -> None:
 
     assert result.availability_status == AvailabilityStatus.AVAILABLE
     assert result.raw_value == 69.45
+
+
+async def test_broadband_adoption_uses_latest_value() -> None:
+    with patch_worldbank([24.08]):
+        result = await worldbank_indicators.compute_broadband_adoption("BR")
+
+    assert result.availability_status == AvailabilityStatus.AVAILABLE
+    assert result.raw_value == 24.08
+    assert result.direction == IndicatorDirection.DIRECT
+
+
+async def test_broadband_adoption_unavailable_when_missing() -> None:
+    """Coberto porque a coleta ainda está em backfill: um país sem o indicador
+    precisa sair como UNAVAILABLE e deixar a dimensão ser medida pelos outros
+    dois, nunca virar zero (ver MANDATORY_INDICATORS em dimension_mapping)."""
+    with patch_worldbank([]):
+        result = await worldbank_indicators.compute_broadband_adoption("BR")
+
+    assert result.availability_status == AvailabilityStatus.UNAVAILABLE
+    assert result.raw_value is None
