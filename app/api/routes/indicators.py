@@ -34,6 +34,7 @@ async def compute_indicators(
             entity_key=request.entity_key,
             period_key=request.period_key,
             demand_ceiling=request.demand_ceiling,
+            brand_key=request.brand_key,
         )
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -199,7 +199,11 @@ async def test_categoria_e_medida_como_contexto_ao_lado_da_marca(db_session: Asy
     # marca (com expansão) -> categoria -> marca CURADA, que é a que entra na razão
     with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria, volume_marca]):
         results = await engine.compute_all(
-            country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=1_000.0
+            country_iso3="USA",
+            entity_key=entidade.entity_key,
+            period_key=_unique_period_key(),
+            demand_ceiling=1_000.0,
+            brand_key=marca.brand_key,
         )
 
     by_code = {r.indicator_code: r for r in results if r.entity_key is not None}
@@ -249,16 +253,18 @@ async def test_marca_maior_que_a_categoria_e_dita_como_razao(db_session: AsyncSe
 
     sufixo = uuid.uuid4().hex[:8]
     repo = ProductRepository(db_session)
+    # UMA entidade: o produto. O vocabulário da CATEGORIA fica nela; o da
+    # MARCA, em brand_markets.
     familia = await repo.create_entity(
         canonical_title=f"single malt whisky {sufixo}",
         localized_markets={"USA": {"primary_name": "single malt whisky", "search_terms": ["single malt whisky"]}},
     )
     marca = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
-    entidade = await repo.create_entity(
-        canonical_title=f"Cardhu single malt whisky {sufixo}",
-        localized_markets={"USA": {"primary_name": "cardhu", "search_terms": ["cardhu"]}},
-        brand_key=marca.brand_key,
-        generic_entity_key=familia.entity_key,
+    entidade = familia
+    await repo.save_brand_markets(
+        entidade.entity_key,
+        marca.brand_key,
+        {"USA": {"primary_name": "cardhu", "search_terms": ["cardhu"]}},
     )
     await db_session.commit()
 
@@ -271,7 +277,11 @@ async def test_marca_maior_que_a_categoria_e_dita_como_razao(db_session: AsyncSe
     engine = IndicatorEngine(db_session)
     with _patched_country_level(), _patched_pytrends(trend=[volume_marca, volume_categoria, volume_marca]):
         results = await engine.compute_all(
-            country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=9_630.0
+            country_iso3="USA",
+            entity_key=entidade.entity_key,
+            period_key=_unique_period_key(),
+            demand_ceiling=9_630.0,
+            brand_key=marca.brand_key,
         )
 
     notas = {r.indicator_code: r.notes for r in results if r.entity_key is not None}
@@ -292,16 +302,18 @@ async def test_razao_compara_termos_curados_dos_dois_lados(db_session: AsyncSess
 
     sufixo = uuid.uuid4().hex[:8]
     repo = ProductRepository(db_session)
+    # UMA entidade: o produto. O vocabulário da CATEGORIA fica nela; o da
+    # MARCA, em brand_markets.
     familia = await repo.create_entity(
         canonical_title=f"single malt whisky {sufixo}",
         localized_markets={"USA": {"primary_name": "single malt whisky", "search_terms": ["single malt whisky"]}},
     )
     marca = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
-    entidade = await repo.create_entity(
-        canonical_title=f"Cardhu single malt whisky {sufixo}",
-        localized_markets={"USA": {"primary_name": "cardhu", "search_terms": ["cardhu"]}},
-        brand_key=marca.brand_key,
-        generic_entity_key=familia.entity_key,
+    entidade = familia
+    await repo.save_brand_markets(
+        entidade.entity_key,
+        marca.brand_key,
+        {"USA": {"primary_name": "cardhu", "search_terms": ["cardhu"]}},
     )
     await db_session.commit()
 
@@ -314,7 +326,11 @@ async def test_razao_compara_termos_curados_dos_dois_lados(db_session: AsyncSess
     engine = IndicatorEngine(db_session)
     with _patched_country_level(), _patched_pytrends(trend=[_raw(20_980), _raw(18_460), _raw(14_000)]):
         results = await engine.compute_all(
-            country_iso3="USA", entity_key=entidade.entity_key, period_key=_unique_period_key(), demand_ceiling=20_980.0
+            country_iso3="USA",
+            entity_key=entidade.entity_key,
+            period_key=_unique_period_key(),
+            demand_ceiling=20_980.0,
+            brand_key=marca.brand_key,
         )
 
     por_codigo = {r.indicator_code: r for r in results if r.entity_key is not None}

@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 class ComputeIndicatorsRequest(BaseModel):
     country: str = Field(..., min_length=3, max_length=3, description="ISO3 country code")
     entity_key: uuid.UUID | None = None
+    # A marca desta análise, quando há. Decide QUAL vocabulário é medido — e é
+    # a peça sem a qual a coleta usa os termos da marca e a medição lê os do
+    # produto, que foi o que produziu MOS idêntico para "coffee" e para
+    # "coffee + Juan Valdez" em 24/09/2026.
+    brand_key: uuid.UUID | None = None
     period_key: str | None = Field(None, description="'YYYY-MM'; defaults to the current month")
     demand_ceiling: float | None = Field(
         None,

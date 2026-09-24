@@ -111,6 +111,7 @@ class IndicatorEngine:
         period_key: str | None = None,
         demand_ceiling: float | None = None,
         terms_override: list[str] | None = None,
+        brand_key: uuid.UUID | None = None,
     ) -> list[IndicatorValue]:
         resolved_period_key = period_key or current_month_period_key()
         country = await self._country_repo.get_by_iso3(country_iso3)
@@ -124,7 +125,12 @@ class IndicatorEngine:
             if entity is None:
                 raise EntityNotFoundError(f"Entity {entity_key} not found")
             results += await self._compute_pytrends_indicators(
-                entity, country, resolved_period_key, demand_ceiling=demand_ceiling, terms_override=terms_override
+                entity,
+                country,
+                resolved_period_key,
+                demand_ceiling=demand_ceiling,
+                terms_override=terms_override,
+                brand_key=brand_key,
             )
             results.append(await self._compute_median_age_fit(entity, country, resolved_period_key))
 
@@ -218,6 +224,7 @@ class IndicatorEngine:
         period_key: str,
         demand_ceiling: float | None = None,
         terms_override: list[str] | None = None,
+        brand_key: uuid.UUID | None = None,
     ) -> list[IndicatorValue]:
         # Demand from Google Ads ABSOLUTE search volume (not Trends), 2026-07-15:
         # each country is measured with its OWN user-approved search terms
@@ -232,13 +239,19 @@ class IndicatorEngine:
         # Do mercado curado, que é onde quem escreveu os termos disse em que
         # idioma os escreveu. A coluna do país é o último recurso, para
         # mercados anteriores a essa mudança.
-        mercado_do_pais = (entity.localized_markets or {}).get(country.iso3) if entity is not None else None
+        # O vocabulário DESTA análise: da marca quando há marca, do produto
+        # quando não. Medido em 24/09/2026, antes de isto existir: a coleta já
+        # usava os termos da marca e a MEDIÇÃO ainda lia os do produto, então
+        # "coffee" e "coffee + Juan Valdez" saíam com MOS idêntico — 37.82 e
+        # 35.02 nos dois — porque o número vinha da categoria nas duas vezes.
+        mercados = await self._product_repo.markets_for(entity, brand_key) if entity is not None else {}
+        mercado_do_pais = mercados.get(country.iso3)
         language = (mercado_do_pais or {}).get("search_language") or getattr(country, "search_language", None)
         if terms_override:
             search_terms = as_term_list(terms_override)
             excluded_terms: list[str] = []
         else:
-            market = (entity.localized_markets or {}).get(country.iso3) or {}
+            market = mercados.get(country.iso3) or {}
             search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
             # The look-alikes the curation ruled out for this market: terms that
             # mean something ELSE here. They were only ever used to decide
@@ -247,9 +260,10 @@ class IndicatorEngine:
             # front door and walked in through the expansion at 14,800 searches
             # a month, because it contains an approved term.
             excluded_terms = as_term_list(market.get("excluded_terms"))
-        # A CATEGORIA do produto, medida ao lado da marca (decisão D4). Os termos
-        # genéricos vêm da entidade-família (`generic_entity_key`), que o
-        # enriquecimento preenche com `brand=None` — nenhum deles carrega marca.
+        # A CATEGORIA do produto, medida ao lado da marca (decisão D4). Desde
+        # 24/09/2026 não há entidade-família: é o MESMO produto sem marca, o
+        # outro vocabulário da mesma entidade. Numa análise sem marca não há o
+        # que acrescentar — os termos já SÃO os da categoria.
         #
         # Custo: zero de coleta nova. Os dois conjuntos viajam na MESMA request
         # de `search_volume` (que aceita 1000 keywords por task) e dividem os 20
@@ -258,13 +272,12 @@ class IndicatorEngine:
         # `terms_override` fica de fora: são os países candidatos pontuados só
         # para o benchmark do campeão, e a categoria ali não seria usada.
         category_terms: list[str] = []
-        if entity.generic_entity_key is not None and not terms_override:
-            familia = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
-            if familia is not None:
-                mercado_familia = (familia.localized_markets or {}).get(country.iso3) or {}
-                category_terms = as_term_list(mercado_familia.get("search_terms")) or as_term_list(
-                    mercado_familia.get("primary_name")
-                )
+        if brand_key is not None and not terms_override:
+            do_produto = await self._product_repo.markets_for(entity, None)
+            mercado_categoria = do_produto.get(country.iso3) or {}
+            category_terms = as_term_list(mercado_categoria.get("search_terms")) or as_term_list(
+                mercado_categoria.get("primary_name")
+            )
 
         seed_terms = pytrends_indicators.build_seed_terms(search_terms, category_terms)
         # Portão de relevância da intenção, ligado SÓ quando os seeds atendem os
