@@ -46,7 +46,12 @@ class MosEngine:
         self._explanation_repo = MetricExplanationRepository(session)
 
     async def compute_mos(
-        self, *, entity_key: uuid.UUID, countries: list[str], period_key: str | None = None
+        self,
+        *,
+        entity_key: uuid.UUID,
+        countries: list[str],
+        period_key: str | None = None,
+        brand_key: uuid.UUID | None = None,
     ) -> list[MosResult]:
         entity = await self._product_repo.get_by_entity_key(entity_key)
         if entity is None:
@@ -54,12 +59,15 @@ class MosEngine:
 
         resolved_period_key = period_key or current_month_period_key()
 
-        results = [await self._compute_one(entity_key, country_iso3, resolved_period_key) for country_iso3 in countries]
+        results = [
+            await self._compute_one(entity_key, country_iso3, resolved_period_key, brand_key)
+            for country_iso3 in countries
+        ]
         await self._session.commit()
         return results
 
     async def find_incomplete_countries(
-        self, *, entity_key: uuid.UUID, countries: list[str], period_key: str
+        self, *, entity_key: uuid.UUID, countries: list[str], period_key: str, brand_key: uuid.UUID | None = None
     ) -> dict[str, str]:
         """Completeness gate (user principle 2026-07-11): the MOS must never be
         computed on partial data. Returns {country: reason} for every requested
@@ -72,16 +80,29 @@ class MosEngine:
                 entity_key=None, country=country_iso3, period_type=PeriodType.MONTH.value, period_key=period_key
             )
             product_values = await self._indicator_repo.get_values_for(
-                entity_key=entity_key, country=country_iso3, period_type=PeriodType.MONTH.value, period_key=period_key
+                entity_key=entity_key,
+                brand_key=brand_key,
+                country=country_iso3,
+                period_type=PeriodType.MONTH.value,
+                period_key=period_key,
             )
             reason = check_availability({**country_values, **product_values})
             if reason is not None:
                 incomplete[country_iso3] = reason
         return incomplete
 
-    async def _exclude(self, *, entity_key: uuid.UUID, country_iso3: str, period_key: str, reason: str) -> MosResult:
+    async def _exclude(
+        self,
+        *,
+        entity_key: uuid.UUID,
+        country_iso3: str,
+        period_key: str,
+        reason: str,
+        brand_key: uuid.UUID | None = None,
+    ) -> MosResult:
         return await self._mos_repo.upsert_mos_result(
             entity_key=entity_key,
+            brand_key=brand_key,
             country=country_iso3,
             period_type=PeriodType.MONTH.value,
             period_key=period_key,
@@ -93,19 +114,29 @@ class MosEngine:
             excluded_reason=reason,
         )
 
-    async def _compute_one(self, entity_key: uuid.UUID, country_iso3: str, period_key: str) -> MosResult:
+    async def _compute_one(
+        self, entity_key: uuid.UUID, country_iso3: str, period_key: str, brand_key: uuid.UUID | None = None
+    ) -> MosResult:
         country_values = await self._indicator_repo.get_values_for(
             entity_key=None, country=country_iso3, period_type=PeriodType.MONTH.value, period_key=period_key
         )
         product_values = await self._indicator_repo.get_values_for(
-            entity_key=entity_key, country=country_iso3, period_type=PeriodType.MONTH.value, period_key=period_key
+            entity_key=entity_key,
+            brand_key=brand_key,
+            country=country_iso3,
+            period_type=PeriodType.MONTH.value,
+            period_key=period_key,
         )
         merged = {**country_values, **product_values}
 
         exclusion_reason = check_availability(merged)
         if exclusion_reason is not None:
             return await self._exclude(
-                entity_key=entity_key, country_iso3=country_iso3, period_key=period_key, reason=exclusion_reason
+                entity_key=entity_key,
+                country_iso3=country_iso3,
+                period_key=period_key,
+                reason=exclusion_reason,
+                brand_key=brand_key,
             )
 
         subscores = compute_dimension_subscores(merged)
@@ -116,6 +147,7 @@ class MosEngine:
                 country_iso3=country_iso3,
                 period_key=period_key,
                 reason="Missing dimension sub-score(s): " + ", ".join(missing_dimensions),
+                brand_key=brand_key,
             )
 
         weights: dict[IndicatorDimension, float] = {}
@@ -149,6 +181,7 @@ class MosEngine:
 
         return await self._mos_repo.upsert_mos_result(
             entity_key=entity_key,
+            brand_key=brand_key,
             country=country_iso3,
             period_type=PeriodType.MONTH.value,
             period_key=period_key,

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import ForeignKey, Index, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +32,11 @@ class MosResult(Base):
     entity_key: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("product_catalog.entity_key"), nullable=False
     )
+    # A marca deste MOS. Nulo é "do produto" — sem esta coluna o MOS da marca
+    # sobrescrevia o do produto na mesma linha.
+    brand_key: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("brands.brand_key"), nullable=True
+    )
     country: Mapped[str] = mapped_column(String(3), nullable=False)
     period_type: Mapped[str] = mapped_column(nullable=False)
     period_key: Mapped[str] = mapped_column(nullable=False)
@@ -51,6 +56,27 @@ class MosResult(Base):
     computed_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     __table_args__ = (
-        Index("ix_mos_results_lookup", "entity_key", "country", "period_type", "period_key", unique=True),
+        # Dois índices parciais: o Postgres trata nulos como distintos num
+        # índice único, então `brand_key` anulável na chave deixaria passar
+        # duplicata do caso sem marca (migration 048).
+        Index(
+            "ix_mos_results_lookup_produto",
+            "entity_key",
+            "country",
+            "period_type",
+            "period_key",
+            unique=True,
+            postgresql_where=text("brand_key IS NULL"),
+        ),
+        Index(
+            "ix_mos_results_lookup_marca",
+            "entity_key",
+            "brand_key",
+            "country",
+            "period_type",
+            "period_key",
+            unique=True,
+            postgresql_where=text("brand_key IS NOT NULL"),
+        ),
         Index("ix_mos_results_country", "country"),
     )

@@ -31,6 +31,12 @@ class IndicatorValue(Base):
     entity_key: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("product_catalog.entity_key"), nullable=True
     )
+    # A marca desta medição. Nulo é "do produto", e é o que separa a demanda da
+    # Juan Valdez da do café — sem esta coluna as duas análises gravavam na
+    # mesma linha e uma sobrescrevia a outra (migration 048).
+    brand_key: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("brands.brand_key"), nullable=True
+    )
     country: Mapped[str] = mapped_column(String(3), nullable=False)
     indicator_code: Mapped[str] = mapped_column(nullable=False)
     period_type: Mapped[str] = mapped_column(nullable=False)
@@ -52,15 +58,29 @@ class IndicatorValue(Base):
     computed_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
 
     __table_args__ = (
+        # Três índices parciais e não um: o Postgres trata nulos como distintos
+        # num índice único, então uma coluna anulável na chave deixaria passar
+        # duplicata justamente do caso sem marca.
         Index(
-            "ix_indicator_values_lookup_with_entity",
+            "ix_indicator_values_lookup_produto",
             "entity_key",
             "country",
             "indicator_code",
             "period_type",
             "period_key",
             unique=True,
-            postgresql_where=text("entity_key IS NOT NULL"),
+            postgresql_where=text("entity_key IS NOT NULL AND brand_key IS NULL"),
+        ),
+        Index(
+            "ix_indicator_values_lookup_marca",
+            "entity_key",
+            "brand_key",
+            "country",
+            "indicator_code",
+            "period_type",
+            "period_key",
+            unique=True,
+            postgresql_where=text("entity_key IS NOT NULL AND brand_key IS NOT NULL"),
         ),
         Index(
             "ix_indicator_values_lookup_country_level",

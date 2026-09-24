@@ -56,10 +56,16 @@ class MosRepository:
         return row
 
     async def get_mos_result(
-        self, entity_key: uuid.UUID, country: str, period_type: str, period_key: str
+        self,
+        entity_key: uuid.UUID,
+        country: str,
+        period_type: str,
+        period_key: str,
+        brand_key: uuid.UUID | None = None,
     ) -> MosResult | None:
         stmt = select(MosResult).where(
             MosResult.entity_key == entity_key,
+            MosResult.brand_key == brand_key,
             MosResult.country == country,
             MosResult.period_type == period_type,
             MosResult.period_key == period_key,
@@ -71,6 +77,7 @@ class MosRepository:
         self,
         *,
         entity_key: uuid.UUID,
+        brand_key: uuid.UUID | None = None,
         country: str,
         period_type: str,
         period_key: str,
@@ -85,7 +92,7 @@ class MosRepository:
         availability_status: str,
         excluded_reason: str | None,
     ) -> MosResult:
-        existing = await self.get_mos_result(entity_key, country, period_type, period_key)
+        existing = await self.get_mos_result(entity_key, country, period_type, period_key, brand_key)
         mos_decimal = None if mos is None else Decimal(str(mos))
         mos_before_cap_decimal = None if mos_before_cap is None else Decimal(str(mos_before_cap))
         topsis_decimal = None if topsis_score is None else Decimal(str(topsis_score))
@@ -110,6 +117,7 @@ class MosRepository:
         row = MosResult(
             id=uuid.uuid4(),
             entity_key=entity_key,
+            brand_key=brand_key,
             country=country,
             period_type=period_type,
             period_key=period_key,

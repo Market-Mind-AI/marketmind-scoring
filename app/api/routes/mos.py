@@ -26,7 +26,10 @@ async def compute_mos(request: ComputeMosRequest, session: AsyncSession = Depend
     engine = MosEngine(session)
     try:
         results = await engine.compute_mos(
-            entity_key=request.entity_key, countries=request.countries, period_key=request.period_key
+            entity_key=request.entity_key,
+            countries=request.countries,
+            period_key=request.period_key,
+            brand_key=request.brand_key,
         )
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

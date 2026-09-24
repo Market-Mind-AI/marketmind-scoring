@@ -14,13 +14,25 @@ class IndicatorRepository:
         self._session = session
 
     async def get_values_for(
-        self, *, entity_key: uuid.UUID | None, country: str, period_type: str, period_key: str
+        self,
+        *,
+        entity_key: uuid.UUID | None,
+        country: str,
+        period_type: str,
+        period_key: str,
+        brand_key: uuid.UUID | None = None,
     ) -> dict[str, IndicatorValue]:
-        """All indicator_values rows for one (entity, country, period) —
+        """All indicator_values rows for one (entity, brand, country, period) —
         used by the MOS engine to build a country's dimension vector.
-        entity_key=None returns only country-level (product-agnostic) rows."""
+        entity_key=None returns only country-level (product-agnostic) rows.
+
+        `brand_key` separa a medição da marca da do produto. Sem ele as duas
+        gravavam na mesma linha e uma sobrescrevia a outra: medido em
+        24/09/2026, `trend_score` valia 3.557.340 nas quatro análises, com e sem
+        marca (migration 048)."""
         stmt = select(IndicatorValue).where(
             IndicatorValue.entity_key == entity_key,
+            IndicatorValue.brand_key == brand_key,
             IndicatorValue.country == country,
             IndicatorValue.period_type == period_type,
             IndicatorValue.period_key == period_key,
@@ -102,10 +114,17 @@ class IndicatorRepository:
         return row
 
     async def get_value(
-        self, entity_key: uuid.UUID | None, country: str, indicator_code: str, period_type: str, period_key: str
+        self,
+        entity_key: uuid.UUID | None,
+        country: str,
+        indicator_code: str,
+        period_type: str,
+        period_key: str,
+        brand_key: uuid.UUID | None = None,
     ) -> IndicatorValue | None:
         stmt = select(IndicatorValue).where(
             IndicatorValue.entity_key == entity_key,
+            IndicatorValue.brand_key == brand_key,
             IndicatorValue.country == country,
             IndicatorValue.indicator_code == indicator_code,
             IndicatorValue.period_type == period_type,
@@ -118,6 +137,7 @@ class IndicatorRepository:
         self,
         *,
         entity_key: uuid.UUID | None,
+        brand_key: uuid.UUID | None = None,
         country: str,
         indicator_code: str,
         period_type: str,
@@ -133,7 +153,7 @@ class IndicatorRepository:
         interpretation_band: str | None = None,
         explanation: str | None = None,
     ) -> IndicatorValue:
-        existing = await self.get_value(entity_key, country, indicator_code, period_type, period_key)
+        existing = await self.get_value(entity_key, country, indicator_code, period_type, period_key, brand_key)
         raw_decimal = None if raw_value is None else Decimal(str(raw_value))
         score_decimal = None if normalized_score is None else Decimal(str(normalized_score))
 
@@ -155,6 +175,7 @@ class IndicatorRepository:
         row = IndicatorValue(
             id=uuid.uuid4(),
             entity_key=entity_key,
+            brand_key=brand_key,
             country=country,
             indicator_code=indicator_code,
             period_type=period_type,

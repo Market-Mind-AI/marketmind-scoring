@@ -132,7 +132,9 @@ class IndicatorEngine:
                 terms_override=terms_override,
                 brand_key=brand_key,
             )
-            results.append(await self._compute_median_age_fit(entity, country, resolved_period_key))
+            results.append(
+                await self._compute_median_age_fit(entity, country, resolved_period_key, brand_key)
+            )
 
         await self._session.commit()
         return results
@@ -419,12 +421,13 @@ class IndicatorEngine:
                     period_key,
                     raw,
                     demand_ceiling=ceiling,
+                    brand_key=brand_key,
                 )  # fmt: skip
             )
         return saved
 
     async def _compute_median_age_fit(
-        self, entity: ProductCatalog, country: Country, period_key: str
+        self, entity: ProductCatalog, country: Country, period_key: str, brand_key: uuid.UUID | None = None
     ) -> IndicatorValue:
         un_iso2 = country.iso2
         if un_iso2 is None:
@@ -435,7 +438,13 @@ class IndicatorEngine:
         else:
             raw = await undata_indicators.compute_median_age_fit(un_iso2, entity.target_age_min, entity.target_age_max)
         return await self._normalize_and_save(
-            IndicatorCode.MEDIAN_AGE_FIT_SCORE, DataSource.UNDATA, entity.entity_key, country.iso3, period_key, raw
+            IndicatorCode.MEDIAN_AGE_FIT_SCORE,
+            DataSource.UNDATA,
+            entity.entity_key,
+            country.iso3,
+            period_key,
+            raw,
+            brand_key=brand_key,
         )
 
     async def _normalize_and_save(
@@ -447,6 +456,7 @@ class IndicatorEngine:
         period_key: str,
         raw: RawIndicatorResult,
         demand_ceiling: float | None = None,
+        brand_key: uuid.UUID | None = None,
     ) -> IndicatorValue:
         normalized_score: float | None = None
         note = raw.notes
@@ -496,6 +506,7 @@ class IndicatorEngine:
 
         return await self._indicator_repo.upsert_value(
             entity_key=entity_key,
+            brand_key=brand_key,
             country=country_iso3,
             indicator_code=indicator_code.value,
             period_type=PeriodType.MONTH.value,
