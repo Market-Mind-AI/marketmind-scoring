@@ -26,6 +26,10 @@ _COUNTRY_LEVEL_TARGETS = [
     f"{_ENGINE}.worldbank_indicators.compute_gdp_per_capita",
     f"{_ENGINE}.worldbank_indicators.compute_internet_penetration",
     f"{_ENGINE}.worldbank_indicators.compute_mobile_connectivity",
+    # Estreou com a migration 044, ao lado do chip. Sem o dublê o motor sai
+    # para a rede de verdade e sete testes falham com erro de DNS, o que não
+    # se lê como "faltou um mock".
+    f"{_ENGINE}.worldbank_indicators.compute_broadband_adoption",
     f"{_ENGINE}.worldbank_indicators.compute_gdp_growth",
     f"{_ENGINE}.worldbank_indicators.compute_population_scale",
     f"{_ENGINE}.worldbank_indicators.compute_urbanization",

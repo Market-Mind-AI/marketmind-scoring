@@ -27,18 +27,30 @@ from app.db.models.normalization_reference import NormalizationReference
 from app.domain.enums import IndicatorCode, IndicatorDirection
 from app.services.indicators.normalization import FIXED_BOUNDS_PERIOD_KEY, normalize
 
-# (min, max) esperados por indicador de país — o que a migration 030 semeia.
+# (min, max) esperados por indicador de país — o que a migration 030 semeia,
+# com o que a 044 recalibrou por cima (chip e banda larga).
 _REGUAS_DE_PAIS = {
     "population_growth_score": (-1.0, 2.0),
     "gdp_growth_score": (-2.0, 8.0),
     "gdp_per_capita_score": (2000.0, 95000.0),
     "investment_score": (12.0, 35.0),
-    "mobile_connectivity_score": (70.0, 190.0),
+    # Recalibrado pela 044: assinaturas por 100 habitantes saturam acima de uma
+    # linha por pessoa, então a régua de 70-190 media posse de chip e não
+    # acesso. Vira 0-100 e a banda larga estreia ao lado.
+    "mobile_connectivity_score": (0.0, 100.0),
+    "broadband_adoption_score": (0.0, 55.0),
     "net_exports_score": (-8.0, 12.0),
     "net_migration_rate_score": (-6.0, 9.0),
     "consumer_spending_score": (40.0, 75.0),
     "worldbank_inflation_score": (0.0, 12.0),
 }
+
+# Quantos países cada régua olhou. 24 é a cesta da migration 030, que era a
+# cesta inteira quando ela rodou. A 044 recalibrou depois: o chip contra os 151
+# que têm o indicador, e a banda larga contra os 31 que já tinham o dado
+# coletado quando ela foi escrita. O número importa porque é ele que torna a
+# recalibração defensável — uma régua tirada de uma amostra pequena não é régua.
+_POPULACAO_ESPERADA = {"mobile_connectivity_score": 151, "broadband_adoption_score": 31}
 
 # Vêm do Google Ads e dependem do PRODUTO, não do país: recalibrá-las contra uma
 # população de países seria medir a coisa errada.
@@ -65,9 +77,9 @@ async def _bounds(session: AsyncSession, code: str) -> tuple[float, float, int]:
 async def test_regua_de_pais_recalibrada(db_session: AsyncSession, code: str, esperado: tuple[float, float]) -> None:
     min_x, max_x, populacao = await _bounds(db_session, code)
     assert (min_x, max_x) == esperado
-    # A recalibração só é defensável porque a população de referência existe:
-    # 24 países, a cesta suportada inteira, não uma amostra.
-    assert populacao == 24
+    # A recalibração só é defensável porque a população de referência existe, e
+    # é a cesta inteira do momento em que a régua foi feita — nunca uma amostra.
+    assert populacao == _POPULACAO_ESPERADA.get(code, 24)
 
 
 @pytest.mark.parametrize(("code", "esperado"), sorted(_REGUAS_DE_DEMANDA.items()))
