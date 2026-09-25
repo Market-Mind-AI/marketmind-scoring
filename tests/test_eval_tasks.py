@@ -67,7 +67,7 @@ async def test_catalog_matching_builds_candidates_from_the_case() -> None:
 
             self.user = user
             key = re.search(r"entity_key: (\S+)", user).group(1)
-            return CatalogMatchDecision(entity_key=key, reasoning="same product")
+            return CatalogMatchDecision(relationship="same", entity_key=key, reasoning="same product")
 
     provider = _EchoFirstCandidate()
 

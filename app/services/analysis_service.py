@@ -407,6 +407,17 @@ class AnalysisService:
                 category_terms = as_term_list(mercado_categoria.get("search_terms")) or as_term_list(
                     mercado_categoria.get("primary_name")
                 )
+            elif entity is not None and getattr(entity, "generic_entity_key", None) is not None:
+                # SUB-PRODUTO: a categoria é o produto PAI. `instant coffee` se
+                # lê contra `coffee` do mesmo jeito que uma marca se lê contra
+                # a categoria dela — é o que separa "não há mercado aqui" de
+                # "há mercado e este sub-produto não é ele".
+                pai = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
+                if pai is not None:
+                    do_pai = (pai.localized_markets or {}).get(country_iso3) or {}
+                    category_terms = as_term_list(do_pai.get("search_terms")) or as_term_list(
+                        do_pai.get("primary_name")
+                    )
             location = country.iso2 if country is not None else None
             # O idioma vem de quem escreveu os termos, não de um cadastro. Ver
             # _idioma_do_mercado.

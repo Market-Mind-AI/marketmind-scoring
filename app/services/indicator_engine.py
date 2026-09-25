@@ -290,6 +290,17 @@ class IndicatorEngine:
             category_terms = as_term_list(mercado_categoria.get("search_terms")) or as_term_list(
                 mercado_categoria.get("primary_name")
             )
+        elif entity.generic_entity_key is not None and not terms_override:
+            # SUB-PRODUTO: a categoria é o produto PAI (25/09/2026). Sem isso o
+            # `instant coffee` seria pontuado sem nada contra o que se ler, e a
+            # frase "o mercado existe e este sub-produto não é ele" — que é a
+            # leitura útil — não teria número.
+            pai = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
+            if pai is not None:
+                do_pai = (pai.localized_markets or {}).get(country.iso3) or {}
+                category_terms = as_term_list(do_pai.get("search_terms")) or as_term_list(
+                    do_pai.get("primary_name")
+                )
 
         seed_terms = pytrends_indicators.build_seed_terms(search_terms, category_terms)
         # Portão de relevância da intenção, ligado SÓ quando os seeds atendem os

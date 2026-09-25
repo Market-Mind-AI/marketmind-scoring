@@ -383,6 +383,44 @@ class CatalogService:
         correspondente = await self._matcher.pick(
             text=text, candidates=candidatos, motivo=motivo, category=category
         )
+        if correspondente is not None and motivo.get("relationship") == "subtype":
+            # SUB-PRODUTO: entidade própria, pendurada na mais ampla.
+            #
+            # A terceira saída da resolução, de 25/09/2026. `instant coffee`
+            # não é `coffee` — tem outra demanda, outro preço, outro comprador
+            # — e também não é um produto sem relação com café. Forçado a
+            # escolher entre os dois, o modelo respondia "o mesmo", e com
+            # razão: a categoria cura `café solúvel` entre seus termos, porque
+            # é isso que a torna categoria.
+            #
+            # O vínculo com o pai é o que dá contexto: a demanda do
+            # sub-produto passa a ser lida contra a da categoria, do mesmo
+            # jeito que a de uma marca.
+            entity = await self._repo.create_entity(
+                canonical_title=titulo,
+                category=category or correspondente.category,
+                localized_markets=None if marca is not None else localized_markets,
+                reference_candidates=reference_candidates,
+                target_age_min=target_age_min,
+                target_age_max=target_age_max,
+                generic_entity_key=correspondente.entity_key,
+            )
+            await self._registrar_chave(
+                chave, entity, source=source, alias_orfao=alias_orfao, category=category
+            )
+            await self._index_terms(entity, localized_markets)
+            logger.info(
+                f"Sub-produto criado: {titulo!r} sob {correspondente.canonical_title!r} "
+                f"({motivo.get('reasoning')})"
+            )
+            return _Resolvido(
+                entity=entity,
+                method="subtype",
+                match_reasoning=motivo.get("reasoning"),
+                marca=marca,
+                familia=correspondente,
+            )
+
         if correspondente is not None:
             await self._registrar_chave(
                 chave, correspondente, source=source, alias_orfao=alias_orfao, category=category

@@ -44,14 +44,33 @@ if TYPE_CHECKING:
 
 
 class CatalogMatchDecision(BaseModel):
-    """Veredito estruturado. `entity_key` vazio significa que nenhum candidato
-    é o mesmo produto — o chamador então cria uma entidade nova."""
+    """Veredito estruturado, com TRÊS saídas.
 
+    Duas não bastavam, e o caso que mostrou isso foi `instant coffee` contra
+    `coffee`, em 24/09/2026. Café instantâneo não é café em geral — tem outra
+    demanda, outro preço, outro comprador — mas também não é um produto sem
+    relação com café. Forçado a escolher entre "o mesmo" e "outro", o modelo
+    respondia "o mesmo", e com razão: a entidade `coffee` já curava `café
+    solúvel` entre seus termos.
+
+    A terceira saída é a que descreve a realidade: SUB-PRODUTO. Entidade
+    própria, vocabulário próprio, demanda própria — e ligada ao produto mais
+    amplo, que passa a ser o contexto de categoria contra o qual ela se lê.
+    """
+
+    relationship: str = Field(
+        default="none",
+        description=(
+            "How the query relates to the chosen entry: 'same' (the same product), "
+            "'subtype' (a NARROWER product inside it), or 'none' (unrelated to every entry). "
+            "'subtype' still requires entity_key: it names the broader product."
+        ),
+    )
     entity_key: str = Field(
         default="",
         description=(
-            "The entity_key of the candidate that is THE SAME PRODUCT, copied exactly from "
-            "the list. Empty string if none of them is."
+            "The entity_key of the chosen candidate, copied exactly from the list. Empty string "
+            "when relationship is 'none'."
         ),
     )
     reasoning: str = Field(
@@ -68,6 +87,14 @@ _SYSTEM = (
     "abbreviations are all the SAME product. A different function, a different category, or a "
     "different operating principle is a DIFFERENT product, even when the names look almost "
     "identical.\n\n"
+    "THREE OUTCOMES, not two. 'same' when a buyer searching either name wants the same thing. "
+    "'subtype' when the query is a NARROWER product inside one of the entries — it has its own "
+    "demand, its own price, its own buyer, and belongs under that entry: 'instant coffee' under "
+    "'coffee', 'extra virgin olive oil' under 'olive oil', 'hiking socks' under 'socks'. 'none' "
+    "when no entry relates to it at all.\n\n"
+    "Do NOT answer 'same' just because the broader entry happens to curate a term for the narrower "
+    "one. A category's vocabulary naturally contains its subtypes; that is what makes it the "
+    "category, and it is not evidence that the two are one product.\n\n"
     "When the query states a category and an entry names a DIFFERENT one, they are different "
     "products — however identical the names look. A name shared across categories is common "
     "('jaguar' the car and the animal, 'apple' the fruit and the brand, 'galaxy' the phone and "
@@ -184,12 +211,24 @@ class CatalogMatcher:
         if not isinstance(decision, CatalogMatchDecision) or not decision.entity_key.strip():
             return None
 
+        relacao = (decision.relationship or "none").strip().lower()
+        if relacao not in ("same", "subtype"):
+            return None
+
         escolhido = decision.entity_key.strip()
         for candidate in candidates:
             if str(candidate.entity_key) == escolhido:
-                if motivo is not None and decision.reasoning:
-                    motivo["reasoning"] = decision.reasoning
-                logger.info(f"Match de catálogo: {text!r} -> {candidate.canonical_title!r} ({decision.reasoning})")
+                if motivo is not None:
+                    # A RELAÇÃO viaja junto com o motivo: quem chama precisa
+                    # saber se reaproveita a entidade ou cria uma nova
+                    # pendurada nela, e isso não se deduz da entidade sozinha.
+                    motivo["relationship"] = relacao
+                    if decision.reasoning:
+                        motivo["reasoning"] = decision.reasoning
+                rotulo = "é o mesmo produto" if relacao == "same" else "é sub-produto de"
+                logger.info(
+                    f"Match de catálogo: {text!r} {rotulo} {candidate.canonical_title!r} ({decision.reasoning})"
+                )
                 return candidate
 
         # Chave alucinada: o modelo devolveu algo que não estava na lista.

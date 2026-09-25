@@ -43,7 +43,7 @@ class _Provider:
 async def test_escolhe_a_entidade_que_o_modelo_nomeia() -> None:
     air = _Produto("air fryer")
     oleo = _Produto("deep fryer")
-    provider = _Provider(CatalogMatchDecision(entity_key=str(air.entity_key), reasoning="mesmo aparelho"))
+    provider = _Provider(CatalogMatchDecision(relationship="same", entity_key=str(air.entity_key), reasoning="mesmo aparelho"))
 
     escolhido = await CatalogMatcher(provider=provider).pick(
         text="freidora de aire", candidates=[air, oleo]
@@ -68,7 +68,7 @@ async def test_chave_alucinada_nao_vira_o_candidato_mais_proximo() -> None:
     correspondência". Cair para "o mais parecido" reintroduziria a decisão por
     semelhança que este passo existe para substituir."""
     air = _Produto("air fryer")
-    provider = _Provider(CatalogMatchDecision(entity_key=str(uuid.uuid4())))
+    provider = _Provider(CatalogMatchDecision(relationship="same", entity_key=str(uuid.uuid4())))
 
     assert await CatalogMatcher(provider=provider).pick(text="qualquer coisa", candidates=[air]) is None
 

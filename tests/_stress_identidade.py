@@ -57,7 +57,7 @@ CASOS = [
     ("B2", s("air fryer"), "Ninja", "Home appliances"),
     # C — produtos VIZINHOS da mesma marca: produtos DIFERENTES
     ("C1", s("air purifier"), "Philips", "Home appliances"),
-    # D — sub-categoria x categoria: DIFERENTES
+    # D — sub-produto x categoria: entidades DIFERENTES, uma pendurada na outra
     ("D1", s("coffee"), None, "Food and drink"),
     ("D2", s("instant coffee"), None, "Food and drink"),
     ("D3", s("espresso machine"), None, "Home appliances"),
@@ -100,6 +100,11 @@ CASOS = [
     ("L2", s("coffee filter"), None, "Home appliances"),
 ]
 
+# Sub-produto: entidade PRÓPRIA, mas pendurada no produto mais amplo. Nem
+# fusão (perderia a demanda própria) nem produto solto (perderia o contexto de
+# categoria contra o qual ele se lê).
+SUBPRODUTO = [("D2", "D1"), ("H2", "H1")]
+
 # Quem TEM de cair junto, e quem TEM de ficar separado.
 MESMO = [
     ("A1", "A2", "A3"),
@@ -125,6 +130,7 @@ async def main() -> int:
     marcas: dict[str, str | None] = {}
     titulos: dict[str, str] = {}
     metodos: dict[str, str] = {}
+    pais_de: dict[str, str | None] = {}
 
     async with async_session_factory() as sessao:
         await _limpar(sessao)
@@ -135,7 +141,12 @@ async def main() -> int:
             marcas[rotulo] = r.brand
             titulos[rotulo] = r.canonical_title
             metodos[rotulo] = r.method
-            print(f"  {rotulo:3} {texto[:34]:<36} marca={str(marca or '-'):<9} -> {r.canonical_title[:34]:<36} [{r.method}]")
+            pais_de[rotulo] = r.generic_title
+            print(
+                f"  {rotulo:3} {texto[:32]:<34} marca={str(marca or '-'):<9} -> "
+                f"{r.canonical_title[:30]:<32} [{r.method}]"
+                + (f" sob {r.generic_title!r}" if r.generic_title else "")
+            )
 
     print()
     falhas = []
@@ -156,6 +167,15 @@ async def main() -> int:
             falhas.append(f"MARCA NO TÍTULO: {rotulo} -> {titulos[rotulo]!r}")
         if marca and marcas[rotulo] != marca:
             falhas.append(f"MARCA PERDIDA: {rotulo} pediu {marca!r}, voltou {marcas[rotulo]!r}")
+
+    for filho, pai in SUBPRODUTO:
+        if chaves[filho] == chaves[pai]:
+            falhas.append(f"DEVIA SER SUB-PRODUTO: {filho}={titulos[filho]!r} fundiu com {pai}={titulos[pai]!r}")
+        elif pais_de.get(filho) != titulos[pai]:
+            falhas.append(
+                f"SUB-PRODUTO SOLTO: {filho}={titulos[filho]!r} devia estar sob {titulos[pai]!r}, "
+                f"está sob {pais_de.get(filho)!r}"
+            )
 
     print(f"casos: {len(CASOS)} | falhas: {len(falhas)}")
     for f in falhas:
