@@ -160,9 +160,15 @@ def _e_mais_especifico(consulta: str, titulo_casado: str) -> bool:
     Palavra a palavra e não substring, senão `airfryer` contra `air fryer`
     cairia aqui — e esses dois são o mesmo produto escrito de dois jeitos, que
     é justamente o que o passo 2 existe para resolver sozinho.
+
+    OS DOIS LADOS passam pelo MESMO normalizador. A primeira versão comparava a
+    consulta normalizada com o título cru, e `ford focus ST-Line X` contra
+    `ford focus ST-Line` não disparava: de um lado `st-line` era um token, do
+    outro eram `st` e `line`. A verificação existia e nunca via o caso que ela
+    foi escrita para ver.
     """
-    da_consulta = set(consulta.split())
-    do_casado = set(titulo_casado.strip().casefold().split())
+    da_consulta = set(normalize_alias(consulta).split())
+    do_casado = set(normalize_alias(titulo_casado).split())
     if not do_casado or not da_consulta:
         return False
     return do_casado < da_consulta

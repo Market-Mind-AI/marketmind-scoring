@@ -98,6 +98,19 @@ CASOS = [
     # L — produto composto x componente
     ("L1", s("coffee machine"), None, "Home appliances"),
     ("L2", s("coffee filter"), None, "Home appliances"),
+    # M — o que NÃO muda o produto (cor) contra o que muda (versão/acabamento).
+    #     A cor é atributo de uma unidade; a versão é outro carro, com outro
+    #     preço, outro comprador e outra busca.
+    ("M1", s("ford focus"), None, "Automotive"),
+    ("M2", s("ford focus ST 2023 verde"), None, "Automotive"),
+    ("M3", s("ford focus ST 2023 preto"), None, "Automotive"),
+    ("M4", s("ford focus ST-Line"), None, "Automotive"),
+    ("M5", s("ford focus ST-Line X"), None, "Automotive"),
+    # N — a mesma fronteira noutra família, para a regra não caber só em carro.
+    ("N1", s("iphone 15"), None, "Consumer electronics"),
+    ("N2", s("iphone 15 128gb azul"), None, "Consumer electronics"),
+    ("N3", s("iphone 15 128gb preto"), None, "Consumer electronics"),
+    ("N4", s("iphone 15 pro"), None, "Consumer electronics"),
 ]
 
 # Sub-produto: entidade PRÓPRIA, mas pendurada no produto mais amplo. Nem
@@ -113,6 +126,10 @@ MESMO = [
     ("A1", "E2", "I1", "I2"),
     ("J1", "J2"),
     ("K1", "K2"),
+    # Cor não é produto: quem procura o verde e quem procura o preto procuram
+    # o mesmo carro, e somar as duas buscas é o número certo.
+    ("M2", "M3"),
+    ("N2", "N3"),
     ("E1", "I3"),  # os dois são a fritadeira DE ÓLEO, em dois idiomas
 ]
 DIFERENTE = [
@@ -122,6 +139,10 @@ DIFERENTE = [
     ("J1", "J3"), ("L1", "L2"),
     ("A1", "E1"),  # air fryer x fritadeira com óleo: princípios diferentes
     ("A1", "I3"),  # e o ucraniano é a de óleo, não a de ar
+    # Acabamento é outro carro: outro preço, outro comprador, outra busca.
+    ("M4", "M5"),
+    ("M1", "M4"),
+    ("N1", "N4"),
 ]
 
 
