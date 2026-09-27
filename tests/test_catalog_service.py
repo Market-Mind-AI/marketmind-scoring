@@ -15,6 +15,24 @@ def _sem_match() -> AsyncMock:
     return matcher
 
 
+def _match_primeiro_subtipo(motivo_dado: str = "versao mais estreita do primeiro") -> AsyncMock:
+    """Passo 3 devolvendo o TERCEIRO veredito: o candidato existe e a consulta
+    é um produto mais estreito dentro dele. Quem chama cria entidade própria
+    pendurada nesse candidato."""
+
+    def _pick(*, text, candidates, motivo=None, category=None):  # noqa: ANN001, ANN202
+        if not candidates:
+            return None
+        if motivo is not None:
+            motivo["relationship"] = "subtype"
+            motivo["reasoning"] = motivo_dado
+        return candidates[0]
+
+    matcher = AsyncMock()
+    matcher.pick.side_effect = _pick
+    return matcher
+
+
 def _match_primeiro(motivo_dado: str = "mesmo produto, nomes diferentes") -> AsyncMock:
     """Passo 3 aceitando o primeiro candidato — simula o LLM reconhecendo o
     produto. O julgamento em si é testado em test_catalog_matcher.py.
@@ -197,3 +215,47 @@ async def test_resolve_cria_entidade_quando_llm_nao_reconhece(db_session: AsyncS
     assert result.method == "created"
 
 
+
+
+async def test_consulta_mais_ampla_nao_e_decidida_por_forma(db_session: AsyncSession) -> None:
+    """O passo 2 recusa decidir nos DOIS sentidos.
+
+    `extra virgin olive oil` no catálogo e `olive oil` na consulta: trigram
+    acha, porque um nome contém o outro inteiro. Deixar passar arquivaria a
+    demanda de TODO o azeite contra o extravirgem — pior que o caso simétrico,
+    que só criaria uma duplicata. Medido contra o catálogo de dev em
+    27/09/2026.
+    """
+    unique = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    especifico = await service.resolve(f"extra virgin cobalt oil {unique}", source="test")
+    assert especifico.method == "created"
+
+    amplo = await service.resolve(f"cobalt oil {unique}", source="test")
+    assert amplo.method == "created"
+    assert amplo.entity_key != especifico.entity_key
+
+
+async def test_sub_produto_reencontrado_mantem_a_familia(db_session: AsyncSession) -> None:
+    """Reencontrar por alias devolve o mesmo pai que a resolução que o criou.
+
+    A família é decidida pelo passo 3 e gravada em `generic_entity_key`; os
+    passos baratos só reencontram a entidade. Sem carregá-la, a segunda
+    análise de um sub-produto lia a categoria sem o produto que a define.
+    """
+    unique = uuid.uuid4().hex[:8]
+    pai_texto = f"zephyr grinder {unique}"
+    filho_texto = f"zephyr grinder pro {unique}"
+
+    pai = await CatalogService(db_session, matcher=_sem_match()).resolve(pai_texto, source="test")
+    assert pai.method == "created"
+
+    service = CatalogService(db_session, matcher=_match_primeiro_subtipo())
+    filho = await service.resolve(filho_texto, source="test")
+    assert filho.method == "subtype"
+    assert filho.generic_title == pai.canonical_title
+
+    de_novo = await CatalogService(db_session, matcher=_sem_match()).resolve(filho_texto, source="test")
+    assert de_novo.method == "alias"
+    assert de_novo.entity_key == filho.entity_key
+    assert de_novo.generic_title == pai.canonical_title

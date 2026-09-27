@@ -151,8 +151,9 @@ def _categorias_batem(guardada: str | None, pedida: str | None) -> bool:
     return guardada.strip().casefold() == pedida.strip().casefold()
 
 
-def _e_mais_especifico(consulta: str, titulo_casado: str) -> bool:
-    """Se a consulta é o título casado MAIS alguma qualificação.
+def _difere_em_qualificacao(consulta: str, titulo_casado: str) -> bool:
+    """Se um dos dois nomes é o outro MAIS alguma qualificação, em qualquer
+    direção.
 
     `instant coffee` contra `coffee`: mesmas palavras e mais uma. Semelhança de
     forma diz que são o mesmo; produto costuma dizer que não.
@@ -166,12 +167,19 @@ def _e_mais_especifico(consulta: str, titulo_casado: str) -> bool:
     `ford focus ST-Line` não disparava: de um lado `st-line` era um token, do
     outro eram `st` e `line`. A verificação existia e nunca via o caso que ela
     foi escrita para ver.
+
+    NOS DOIS SENTIDOS desde 27/09/2026. Só olhava a consulta mais específica
+    que o casado, e o sentido contrário é pior: medido contra o catálogo de
+    dev, `olive oil` casou por trigram com `extra virgin olive oil` — o
+    produto AMPLO engolido por um sub-produto seu, e a demanda de todo o azeite
+    passaria a ser gravada contra o extravirgem. Forma não decide nenhum dos
+    dois sentidos; os dois vão para o passo 3.
     """
     da_consulta = set(normalize_alias(consulta).split())
     do_casado = set(normalize_alias(titulo_casado).split())
     if not do_casado or not da_consulta:
         return False
-    return do_casado < da_consulta
+    return do_casado < da_consulta or da_consulta < do_casado
 
 
 def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
@@ -260,6 +268,14 @@ class CatalogService:
                 await self._repo.save_brand_markets(
                     resolvido.entity.entity_key, marca.brand_key, localized_markets
                 )
+        # A família vem dos passos que a DECIDEM; quem apenas reencontra a
+        # entidade (alias, trigram) não a traz. Carregada aqui para que a
+        # segunda resolução de um sub-produto devolva o mesmo contexto de
+        # categoria que a primeira — medido em 27/09/2026: `instant coffee`
+        # voltava sem pai por alias, tendo `coffee` gravado no banco, e o
+        # enriquecimento então lia a categoria sem o produto que a define.
+        if resolvido.familia is None and resolvido.entity.generic_entity_key is not None:
+            resolvido.familia = await self._repo.get_by_entity_key(resolvido.entity.generic_entity_key)
         await self._session.commit()
         return _resposta(resolvido)
 
@@ -348,18 +364,18 @@ class CatalogService:
                 f"Passo 2 vetado para {text!r} por excluded_terms de "
                 f"{[p.canonical_title for p in trigram.vetoed]}; escalando para o LLM"
             )
-        if trigram.match is not None and _e_mais_especifico(generico, trigram.match.product.canonical_title):
-            # A consulta contém TODAS as palavras do casado e ainda traz outras:
-            # é o mesmo nome com uma qualificação, e qualificação costuma ser
-            # outro produto. Medido em 24/09/2026: `instant coffee` casava com
-            # `coffee` por semelhança de forma, e café instantâneo não tem a
-            # demanda do café.
+        if trigram.match is not None and _difere_em_qualificacao(generico, trigram.match.product.canonical_title):
+            # Um dos dois nomes é o outro mais uma qualificação, e qualificação
+            # costuma ser outro produto. Medido em 24/09/2026: `instant coffee`
+            # casava com `coffee` por semelhança de forma, e café instantâneo
+            # não tem a demanda do café. Em 27/09/2026, no sentido contrário:
+            # `olive oil` casava com `extra virgin olive oil`.
             #
             # Não decide o contrário aqui — só recusa decidir por FORMA. Quem
             # diz se `extra virgin olive oil` é `olive oil` é o passo 3.
             logger.info(
-                f"Passo 2 recusado para {text!r}: é {trigram.match.product.canonical_title!r} mais qualificação; "
-                f"escalando para o LLM"
+                f"Passo 2 recusado para {text!r}: difere de {trigram.match.product.canonical_title!r} por uma "
+                f"qualificação; escalando para o LLM"
             )
         elif trigram.match is not None:
             entity = trigram.match.product
