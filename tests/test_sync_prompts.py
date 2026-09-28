@@ -40,7 +40,7 @@ def test_the_registry_holds_the_six_instructions_from_code() -> None:
         "catalog-match-system": catalog_matcher._SYSTEM,
         "enrichment-system": enrichment_client._SYSTEM,
         "reference-market-system": reference_market_client._SYSTEM,
-        "vision-instructions": vision_client._INSTRUCTIONS,
+        "vision-system": vision_client._INSTRUCTIONS,
         "explanation-system-pt": explanation_client._SYSTEM_PROMPT_PT,
         "explanation-system-en": explanation_client._SYSTEM_PROMPT_EN,
     }

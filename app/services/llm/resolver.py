@@ -22,7 +22,12 @@ def resolve_llm(*, provider: str, model: str, site: str | None = None) -> LLMPro
 def _build(provider: str, model: str) -> LLMProvider:
     code = provider.strip().lower()
     if code == "claude":
-        return ClaudeProvider(model, settings.anthropic_api_key, settings.anthropic_workspace_id)
+        return ClaudeProvider(
+            model,
+            settings.anthropic_api_key,
+            settings.anthropic_workspace_id,
+            cache_ttl=settings.llm_prompt_cache_ttl,
+        )
     if code == "gpt":
         return GptProvider(model, settings.openai_api_key)
     if code == "ollama":

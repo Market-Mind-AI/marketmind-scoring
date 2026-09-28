@@ -127,6 +127,36 @@ async def test_tokens_come_from_the_requests_tally(spans) -> None:
     assert json.loads(_attr(spans()["explanation"], "usage_details")) == {"input": 1200, "output": 300}
 
 
+class CachedProvider(FakeProvider):
+    async def complete(self, *, system=None, system_tail=None, user, image=None, response_model=None):
+        self.calls.append({"system": system, "system_tail": system_tail, "user": user})
+        usage.record(
+            self.model,
+            SimpleNamespace(
+                input_tokens=200, output_tokens=300, cache_read_input_tokens=900, cache_creation_input_tokens=100
+            ),
+        )
+        return self.reply
+
+
+async def test_cached_tokens_are_priced_apart_from_the_rest_of_the_prompt(spans) -> None:
+    """Langfuse prices each usage type on its own: the whole prompt under
+    `input` would bill cache reads at the full rate."""
+    inner = CachedProvider()
+    provider = TracedProvider(inner, site="explanation")
+
+    with usage.collect():
+        await provider.complete(system="Stable.", system_tail="Brand: Cardhu.", user="Explain")
+
+    assert inner.calls[0]["system_tail"] == "Brand: Cardhu."
+    assert json.loads(_attr(spans()["explanation"], "usage_details")) == {
+        "input": 200,
+        "output": 300,
+        "input_cache_read": 900,
+        "input_cache_creation": 100,
+    }
+
+
 async def test_a_failed_call_is_marked_and_the_error_is_unchanged(spans) -> None:
     boom = RuntimeError("provider down")
     provider = TracedProvider(FakeProvider(error=boom), site="reference_market")

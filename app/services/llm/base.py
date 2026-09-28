@@ -33,7 +33,15 @@ class ImageInput:
 class LLMProvider(ABC):
     """One resolved (provider, model) pair. ``complete`` returns a plain string
     when ``response_model`` is None, or a validated instance of it otherwise
-    (callers pass a response_model and narrow the result with isinstance)."""
+    (callers pass a response_model and narrow the result with isinstance).
+
+    ``system`` is the part of the instructions that is the same from one call
+    to the next; ``system_tail`` is the part that changes per request (a brand,
+    the user's own words). They are read as one system prompt, tail last. The
+    split exists for prompt caching: a provider that caches a prefix (Claude)
+    caches ``system`` and sends the tail after it, so a per-request detail does
+    not turn every call into a fresh cache write. Providers without that just
+    join the two."""
 
     def __init__(self, model: str) -> None:
         self.model = model
@@ -43,7 +51,14 @@ class LLMProvider(ABC):
         self,
         *,
         system: str | None = None,
+        system_tail: str | None = None,
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
     ) -> str | BaseModel: ...
+
+
+def joined_system(system: str | None, system_tail: str | None) -> str | None:
+    """``system`` and ``system_tail`` as the single prompt they stand for."""
+    parts = [part for part in (system, system_tail) if part]
+    return "\n\n".join(parts) if parts else None

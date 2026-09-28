@@ -33,8 +33,16 @@ logger = logging.getLogger(__name__)
 class Usage:
     """One request's model spend."""
 
+    # The whole prompt, cached or not — what "input" meant before caching, and
+    # what the orchestrator adds up. Anthropic reports the cached part apart
+    # from `input_tokens`; left out, turning caching on would look like the
+    # prompts had shrunk.
     input_tokens: int = 0
     output_tokens: int = 0
+    # The parts of input_tokens served from the prompt cache (billed at ~0.1x)
+    # and written to it (~1.25x). Subsets, not additions.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     calls: int = 0
     # Calls whose provider gave no usage figures. Kept apart so a total of zero
     # tokens over three calls reads as "not reported" and not as "free".
@@ -71,7 +79,9 @@ def record(model: str, raw_usage: Any) -> None:
     ``raw_usage`` is the provider's own usage object — Anthropic's
     ``input_tokens``/``output_tokens`` or OpenAI's ``prompt_tokens``/
     ``completion_tokens``. Both shapes are read; anything else counts as a call
-    with unknown tokens.
+    with unknown tokens. Anthropic's ``cache_read_input_tokens`` and
+    ``cache_creation_input_tokens`` are added to the input: its
+    ``input_tokens`` is only the uncached remainder.
     """
     usage = _current.get()
     if usage is None:
@@ -85,8 +95,12 @@ def record(model: str, raw_usage: Any) -> None:
     if entrada is None and saida is None:
         usage.calls_without_usage += 1
         return
-    usage.input_tokens += entrada or 0
+    lido = _first_int(raw_usage, "cache_read_input_tokens") or 0
+    escrito = _first_int(raw_usage, "cache_creation_input_tokens") or 0
+    usage.input_tokens += (entrada or 0) + lido + escrito
     usage.output_tokens += saida or 0
+    usage.cache_read_tokens += lido
+    usage.cache_write_tokens += escrito
 
 
 def _first_int(raw_usage: Any, *names: str) -> int | None:

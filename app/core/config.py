@@ -1,3 +1,4 @@
+from typing import Literal
 from urllib.parse import quote
 
 from pydantic_settings import BaseSettings
@@ -215,6 +216,14 @@ class Settings(BaseSettings):
     # carries the workspace in the key itself and needs nothing here, so this
     # stays empty for most setups.
     anthropic_workspace_id: str = ""
+    # How long Claude keeps a cached system prompt: "1h" or "5m". Chosen by the
+    # start-to-start gap between calls that share it. Measured 2026-09-28, the
+    # analyses here start 5-60 min apart — past a 5-minute entry, so on "5m"
+    # every call would pay the write premium (1.25x) and read nothing; "1h"
+    # writes at 2x and pays off from the third call within the hour. "5m" is
+    # the cheaper choice only for bursts (an eval run), where calls start
+    # under 5 minutes apart and keep the entry warm anyway.
+    llm_prompt_cache_ttl: Literal["5m", "1h"] = "1h"
 
     # Langfuse tracing of the model calls (app/observability.py). Both keys or
     # nothing: unset means untraced, which is allowed — a missing trace loses an

@@ -250,6 +250,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     settings.langfuse_prompt_label = args.label
+    # A run is a burst: its calls start well under 5 minutes apart, so the
+    # 5-minute cache stays warm on its own and writes at 1.25x instead of 2x.
+    settings.llm_prompt_cache_ttl = "5m"
     loaded = asyncio.run(asyncio.to_thread(prompts.warm, PROMPTS))
     print(f"{loaded}/{len(PROMPTS)} prompts loaded from the {args.label} label")
     if loaded == 0 and args.label != "production":

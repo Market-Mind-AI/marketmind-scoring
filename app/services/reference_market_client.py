@@ -45,6 +45,19 @@ _SYSTEM = (
 )
 
 
+# How to answer. Fixed, so it sits with the system prompt and is cached with
+# it; the product and the supported countries go in the user message.
+_TASK = (
+    "From the SUPPORTED countries in the request, return the 8 with the HIGHEST real consumer demand for "
+    "THIS product worldwide, RANKED biggest-first, each as a `candidates` entry: `country` = ISO3; "
+    "`primary_name` = the single most-used real search term (local language); `search_terms` = the "
+    "real high-volume queries a local buyer types (brand+model + variants + the original English/Latin "
+    "names + local-language names), keyword-style, never long descriptive phrases; `excluded_terms` = "
+    "look-alike terms meaning something else; `confidence` = 0-1. Include every plausibly-large market "
+    "— real search volume decides the winner."
+)
+
+
 class ReferenceMarketClient:
     def __init__(self) -> None:
         # Provider + model resolved from .env for the `reference_market` site
@@ -65,17 +78,11 @@ class ReferenceMarketClient:
             f"Generic name: {product_name}\n"
             f"Brand: {brand or '(none)'}\n"
             f"Category: {category or '(unknown)'}\n\n"
-            "From the SUPPORTED countries below, return the 8 with the HIGHEST real consumer demand for THIS "
-            "product worldwide, RANKED biggest-first, each as a `candidates` entry: `country` = ISO3; "
-            "`primary_name` = the single most-used real search term (local language); `search_terms` = the "
-            "real high-volume queries a local buyer types (brand+model + variants + the original English/Latin "
-            "names + local-language names), keyword-style, never long descriptive phrases; `excluded_terms` = "
-            "look-alike terms meaning something else; `confidence` = 0-1. Include every plausibly-large market "
-            f"— real search volume decides the winner. Supported countries: {', '.join(supported_countries)}."
+            f"Supported countries: {', '.join(supported_countries)}."
         )
         try:
             result = await self._provider.complete(
-                system=prompt_text("reference-market-system", _SYSTEM),
+                system=f"{prompt_text('reference-market-system', _SYSTEM)}\n\n{_TASK}",
                 user=prompt,
                 response_model=ReferenceCandidatesResult,
             )

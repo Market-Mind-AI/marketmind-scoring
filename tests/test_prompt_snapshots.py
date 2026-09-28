@@ -2,7 +2,12 @@
 
 While the defaults are in use (no Langfuse — as in every test), moving the texts
 into Langfuse Prompt Management must not change a byte of what the model sees.
-The snapshot was generated from the code before the move."""
+The snapshot was generated from the code before the move.
+
+The vision entries were regenerated on 2026-09-28, on purpose: the instructions
+became the (cached) system prompt with no variables, and the countries moved to
+the user message. Each entry is the system prompt, a separator, and the user
+message."""
 
 import itertools
 import json
@@ -62,7 +67,8 @@ async def _vision_prompt(image: str | None, media_type: str | None, hint: str | 
         await VisionClient().identify_product(
             image_base64=image, image_media_type=media_type, hint_text=hint, countries=countries
         )
-    return provider.complete.await_args.kwargs["user"]
+    kwargs = provider.complete.await_args.kwargs
+    return f"{kwargs['system']}\n---\n{kwargs['user']}"
 
 
 @pytest.mark.parametrize(("language", "single", "champion", "user_prompt"), _EXPLANATION_CASES)

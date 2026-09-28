@@ -101,3 +101,21 @@ async def test_sinais_de_contexto_saem_em_lista_propria(db_session) -> None:
     assert "brand share 2.0%" in contextos["category_volume_score"]["context"]
     # E não entra em `signals`, onde todo item tem score numérico.
     assert all(s["score"] is not None for s in pacote["signals"])
+
+
+def test_what_changes_per_analysis_stays_out_of_the_cached_part() -> None:
+    """The stable part is what the provider caches; a brand or the user's words
+    in it would make every analysis a cache write nobody reads."""
+    from app.services.explanation_client import _system_parts
+
+    stable, tail = _system_parts(
+        "en", single_country=False, user_prompt="Is Spain worth it?", external_champion=True, brand="Cardhu"
+    )
+    plain, no_tail = _system_parts("en", single_country=False)
+
+    assert stable == plain
+    assert no_tail is None
+    assert "Cardhu" in tail and "Is Spain worth it?" in tail
+    assert _system_prompt(
+        "en", single_country=False, user_prompt="Is Spain worth it?", external_champion=True, brand="Cardhu"
+    ) == f"{stable}\n\n{tail}"

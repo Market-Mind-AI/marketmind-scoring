@@ -86,3 +86,48 @@ def test_one_request_never_sees_another_request_s_spend() -> None:
 
     assert first.headers["X-LLM-Input-Tokens"] == "100"
     assert second.headers["X-LLM-Input-Tokens"] == "100"  # not 200
+
+
+def test_cached_prompt_tokens_still_count_as_input() -> None:
+    """Anthropic's `input_tokens` is only the uncached remainder. Without the
+    cached parts, turning caching on would read as the prompts shrinking — and
+    the run's cost as whatever the cache happened to leave over."""
+    with usage.collect() as spend:
+        usage.record(
+            "claude-opus-5",
+            SimpleNamespace(
+                input_tokens=200, output_tokens=300, cache_read_input_tokens=900, cache_creation_input_tokens=100
+            ),
+        )
+
+    assert spend.input_tokens == 1200
+    assert spend.cache_read_tokens == 900
+    assert spend.cache_write_tokens == 100
+
+
+def test_the_response_says_how_much_of_the_prompt_came_from_the_cache() -> None:
+    app = FastAPI()
+
+    from app.main import report_llm_usage
+
+    app.middleware("http")(report_llm_usage)
+
+    @app.get("/cached")
+    def cached() -> dict[str, str]:
+        usage.record(
+            "claude-opus-5",
+            SimpleNamespace(input_tokens=200, output_tokens=300, cache_read_input_tokens=1000),
+        )
+        return {"ok": "yes"}
+
+    @app.get("/uncached")
+    def uncached() -> dict[str, str]:
+        usage.record("claude-opus-5", SimpleNamespace(input_tokens=200, output_tokens=300))
+        return {"ok": "yes"}
+
+    client = TestClient(app)
+    spent = client.get("/cached")
+    assert spent.headers["X-LLM-Input-Tokens"] == "1200"
+    assert spent.headers["X-LLM-Cache-Read-Tokens"] == "1000"
+    assert spent.headers["X-LLM-Cache-Write-Tokens"] == "0"
+    assert "X-LLM-Cache-Read-Tokens" not in client.get("/uncached").headers

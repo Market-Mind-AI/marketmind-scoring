@@ -24,7 +24,6 @@ class EditedInLangfuse:
     code text instead."""
 
     _VARIABLES = {
-        "vision-instructions": ("subject", "country_list"),
         "explanation-system-pt": ("structure", "scope_intro", "country_rule", "ruler_scope"),
         "explanation-system-en": ("structure", "scope_intro", "country_rule", "ruler_scope"),
     }
@@ -109,7 +108,12 @@ async def test_enrichment_uses_its_prompt(langfuse: EditedInLangfuse) -> None:
 
     await client.localized_markets(product_name="air fryer", brand=None, category="kitchen", countries=[("BRA", "pt")])
 
-    assert provider.complete.await_args.kwargs["system"] == "EDITED enrichment-system"
+    # The Langfuse text leads the system prompt; the fixed task rules follow it,
+    # and the brand rule rides after the cache breakpoint.
+    kwargs = provider.complete.await_args.kwargs
+    assert kwargs["system"].startswith("EDITED enrichment-system\n\n")
+    assert "no term may carry a brand name" in kwargs["system_tail"]
+    assert "BRA" in kwargs["user"]
 
 
 async def test_reference_market_uses_its_prompt(langfuse: EditedInLangfuse) -> None:
@@ -141,7 +145,9 @@ async def test_reference_market_uses_its_prompt(langfuse: EditedInLangfuse) -> N
         product_name="air fryer", brand=None, category="kitchen", supported_countries=["USA", "BRA", "DEU"]
     )
 
-    assert provider.complete.await_args.kwargs["system"] == "EDITED reference-market-system"
+    kwargs = provider.complete.await_args.kwargs
+    assert kwargs["system"].startswith("EDITED reference-market-system\n\n")
+    assert kwargs["user"].endswith("Supported countries: USA, BRA, DEU.")
 
 
 async def test_vision_uses_its_prompt_and_keeps_the_users_text(langfuse: EditedInLangfuse) -> None:
@@ -163,9 +169,11 @@ async def test_vision_uses_its_prompt_and_keeps_the_users_text(langfuse: EditedI
             image_base64=None, image_media_type=None, hint_text="air fryer 5L", countries=["BRA"]
         )
 
-    prompt = provider.complete.await_args.kwargs["user"]
-    assert prompt.startswith("EDITED vision-instructions")
-    assert prompt.endswith("\n\nProduct description from the user: air fryer 5L")
+    # The instructions are the whole (cached) system prompt; what changes per
+    # call — the countries and the user's words — is the user message.
+    kwargs = provider.complete.await_args.kwargs
+    assert kwargs["system"] == "EDITED vision-system"
+    assert kwargs["user"] == "Countries (ISO-3166 alpha-3): BRA\n\nProduct description from the user: air fryer 5L"
 
 
 @pytest.mark.parametrize(

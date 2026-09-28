@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app import observability, prompts
 from app.services.llm import usage
-from app.services.llm.base import ImageInput, LLMProvider
+from app.services.llm.base import ImageInput, LLMProvider, joined_system
 
 logger = logging.getLogger("marketmind-scoring.llm_tracing")
 
@@ -38,14 +38,20 @@ class TracedProvider(LLMProvider):
         self,
         *,
         system: str | None = None,
+        system_tail: str | None = None,
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
     ) -> str | BaseModel:
-        generation = self._start(system, user, image)
+        generation = self._start(joined_system(system, system_tail), user, image)
         before = _tokens(usage.current())
+        # The tail only when there is one, so a provider written before the
+        # split (the test doubles) keeps its signature.
+        tail = {"system_tail": system_tail} if system_tail else {}
         try:
-            result = await self.inner.complete(system=system, user=user, image=image, response_model=response_model)
+            result = await self.inner.complete(
+                system=system, user=user, image=image, response_model=response_model, **tail
+            )
         except BaseException as exc:
             _finish(generation, level="ERROR", status_message=str(exc), usage_details=_spent_since(before))
             raise
@@ -78,11 +84,19 @@ def _as_output(result: str | BaseModel) -> Any:
     return result.model_dump(mode="json") if isinstance(result, BaseModel) else result
 
 
-def _tokens(tally: usage.Usage | None) -> tuple[int, int, int] | None:
-    return (tally.input_tokens, tally.output_tokens, tally.calls_without_usage) if tally is not None else None
+def _tokens(tally: usage.Usage | None) -> tuple[int, int, int, int, int] | None:
+    if tally is None:
+        return None
+    return (
+        tally.input_tokens,
+        tally.output_tokens,
+        tally.calls_without_usage,
+        tally.cache_read_tokens,
+        tally.cache_write_tokens,
+    )
 
 
-def _spent_since(before: tuple[int, int, int] | None) -> dict[str, int] | None:
+def _spent_since(before: tuple[int, int, int, int, int] | None) -> dict[str, int] | None:
     """The token delta since ``before``, or None when there is nothing to report.
 
     That is either because no tally is open, or because the call that just ran
@@ -93,7 +107,16 @@ def _spent_since(before: tuple[int, int, int] | None) -> dict[str, int] | None:
     after = _tokens(usage.current())
     if before is None or after is None or after[2] > before[2]:
         return None
-    return {"input": after[0] - before[0], "output": after[1] - before[1]}
+    lido, escrito = after[3] - before[3], after[4] - before[4]
+    # Langfuse prices each usage type on its own, so `input` is the uncached
+    # remainder here and the cached parts go under their own keys — reporting
+    # the whole prompt as `input` would price cache reads at full rate.
+    spent = {"input": after[0] - before[0] - lido - escrito, "output": after[1] - before[1]}
+    if lido:
+        spent["input_cache_read"] = lido
+    if escrito:
+        spent["input_cache_creation"] = escrito
+    return spent
 
 
 def _finish(generation: Any | None, **update: Any) -> None:

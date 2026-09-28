@@ -116,6 +116,11 @@ async def report_llm_usage(request: Request, call_next) -> Response:
         response.headers["X-LLM-Input-Tokens"] = str(spend.input_tokens)
         response.headers["X-LLM-Output-Tokens"] = str(spend.output_tokens)
         response.headers["X-LLM-Calls"] = str(spend.calls)
+        if spend.cache_read_tokens or spend.cache_write_tokens:
+            # Parts of X-LLM-Input-Tokens, not additions: how much of the
+            # prompt came from the cache and how much was written to it.
+            response.headers["X-LLM-Cache-Read-Tokens"] = str(spend.cache_read_tokens)
+            response.headers["X-LLM-Cache-Write-Tokens"] = str(spend.cache_write_tokens)
         if spend.calls_without_usage:
             # So a total of zero over three calls reads as "not reported by the
             # provider" rather than as "free".

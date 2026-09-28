@@ -28,6 +28,7 @@ from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.metric_explanation_repository import MetricExplanationRepository
 from app.repositories.mos_repository import MosRepository
 from app.services.llm import resolve_explanation_llm
+from app.services.llm.base import joined_system
 from app.services.mos.dimension_mapping import DIMENSION_BY_INDICATOR, compute_dimension_subscores
 from app.services.mos.explanation_builder import ExplanationCatalog
 from app.services.mos.interpretation import score_band
@@ -447,6 +448,34 @@ def _system_prompt(
     brand: str | None = None,
     product: str | None = None,
 ) -> str:
+    """The narrative's system prompt as one text: the stable part, then the
+    per-request rules (see `_system_parts`)."""
+    stable, tail = _system_parts(
+        language,
+        single_country=single_country,
+        user_prompt=user_prompt,
+        external_champion=external_champion,
+        brand=brand,
+        product=product,
+    )
+    return joined_system(stable, tail) or ""
+
+
+def _system_parts(
+    language: str,
+    *,
+    single_country: bool,
+    user_prompt: str | None = None,
+    external_champion: bool = False,
+    brand: str | None = None,
+    product: str | None = None,
+) -> tuple[str, str | None]:
+    """(stable, tail). The stable part depends only on the language and on
+    whether it is one country or a ranking, so it repeats across analyses and
+    is what the provider caches. The tail — the off-request champion, the
+    brand, the user's own words — changes per analysis and goes after the
+    cache breakpoint; kept in the cached part, every analysis would write a
+    fresh cache entry nobody reads."""
     lang = (language or "").strip().lower()
     is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
     if is_pt:
@@ -473,16 +502,16 @@ def _system_prompt(
             base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
     base = f"{base}\n\n{_DEMAND_CONFIDENCE_RULE_PT if is_pt else _DEMAND_CONFIDENCE_RULE_EN}"
     base = f"{base}\n\n{_DEMAND_TERMS_RULE_PT if is_pt else _DEMAND_TERMS_RULE_EN}"
+    tail: list[str] = []
     if external_champion:
-        base = f"{base}\n\n{_CHAMPION_RULE_PT if is_pt else _CHAMPION_RULE_EN}"
+        tail.append(_CHAMPION_RULE_PT if is_pt else _CHAMPION_RULE_EN)
     if brand:
         modelo = _BRAND_RULE_PT if is_pt else _BRAND_RULE_EN
-        base = f"{base}\n\n" + modelo.replace("{brand}", brand).replace("{product}", product or "")
+        tail.append(modelo.replace("{brand}", brand).replace("{product}", product or ""))
     user_text = (user_prompt or "").strip()
     if user_text:
-        block = (_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", user_text)
-        base = f"{base}\n\n{block}"
-    return base
+        tail.append((_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", user_text))
+    return base, "\n\n".join(tail) or None
 
 
 class ExplanationClient:
@@ -655,7 +684,7 @@ class ExplanationClient:
         single = len(requested) <= 1
         external_champion = any(c.get("is_champion") and not c.get("requested", True) for c in countries)
         try:
-            system = _system_prompt(
+            system, system_tail = _system_parts(
                 settings.ollama_llm_narrative_language,
                 single_country=single,
                 user_prompt=user_prompt,
@@ -678,7 +707,7 @@ class ExplanationClient:
                 ensure_ascii=False,
                 indent=2,
             )
-            narrative = await resolve_explanation_llm().complete(system=system, user=user)
+            narrative = await resolve_explanation_llm().complete(system=system, system_tail=system_tail, user=user)
             if not narrative or not str(narrative).strip():
                 logger.warning("Explanation LLM returned an empty narrative")
                 return None

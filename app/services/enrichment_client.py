@@ -58,6 +58,34 @@ _SYSTEM = (
     "Return ONLY the structured result."
 )
 
+# How to fill each entry. Fixed, so it sits with the system prompt and is
+# cached with it; the product and its countries go in the user message.
+_TASK = (
+    "For each country: `country` = the ISO3 code; `primary_name` = the single most-used real search "
+    "term (local language); `search_terms` = a GENEROUS list of the REAL, high-volume queries a local "
+    "buyer types — local-language colloquial/loanword names, spelling/spacing variants, and ALWAYS "
+    "the original English/Latin-script names too, NEVER literal translations or long descriptive "
+    "phrases; `excluded_terms` = everything that must NOT be counted; `confidence` = 0-1. "
+    "Order search_terms primary-first.\n\n"
+    "WHAT COUNTS AS DEMAND. These volumes are summed into a score that answers 'should I sell "
+    "this here'. Only include a term someone types while deciding to BUY or looking for where "
+    "to buy — the product name, its variants, sizes, grades, 'price', 'near me', 'buy'.\n\n"
+    "WHAT MUST BE EXCLUDED, and this is where the list has to be thorough. `excluded_terms` are "
+    "matched as substrings against Google's related keywords, so put the SHORTEST distinguishing "
+    "form (the word 'suína', not 'picanha suína temperada'). Three kinds:\n"
+    "  1. A DIFFERENT PRODUCT that shares the name. Pork 'picanha' is not beef picanha; a pepper "
+    "called 'picana' is not a cut of meat.\n"
+    "  2. USING it, not buying it — whoever searches this already owns it. Name the ways people "
+    "write preparation in THIS language, which is usually the method itself rather than a "
+    "question: for Portuguese meat that is 'na airfryer', 'no forno', 'na brasa', 'no espeto', "
+    "'churrasco', 'receita'; for a device it would be 'como limpar', 'não liga', 'manual'.\n"
+    "  3. LOOKING IT UP rather than shopping: 'o que é', 'vs', 'significado', 'wikipedia', and "
+    "the local forms of those.\n"
+    "Write them in the local language, lowercase, without accents where the language allows both "
+    "spellings. Be generous: a term wrongly excluded costs a little demand, while a term wrongly "
+    "counted inflates a market against every other one."
+)
+
 
 class EnrichmentClient:
     def __init__(self) -> None:
@@ -88,42 +116,24 @@ class EnrichmentClient:
             f"Brand: {brand or '(none)'}\n"
             f"Category: {category or '(unknown)'}\n\n"
             "Produce EXACTLY ONE markets entry for EACH of these countries (by ISO-3166 alpha-3):\n"
-            f"{country_lines}\n\n"
-            "For each country: `country` = the ISO3 code; `primary_name` = the single most-used real search "
-            "term (local language); `search_terms` = a GENEROUS list of the REAL, high-volume queries a local "
-            "buyer types — local-language colloquial/loanword names, spelling/spacing variants, and ALWAYS "
-            "the original English/Latin-script names too, NEVER literal translations or long descriptive "
-            "phrases; `excluded_terms` = everything that must NOT be counted; `confidence` = 0-1. "
-            "Order search_terms primary-first.\n\n"
-            "WHAT COUNTS AS DEMAND. These volumes are summed into a score that answers 'should I sell "
-            "this here'. Only include a term someone types while deciding to BUY or looking for where "
-            "to buy — the product name, its variants, sizes, grades, 'price', 'near me', 'buy'.\n\n"
-            "WHAT MUST BE EXCLUDED, and this is where the list has to be thorough. `excluded_terms` are "
-            "matched as substrings against Google's related keywords, so put the SHORTEST distinguishing "
-            "form (the word 'suína', not 'picanha suína temperada'). Three kinds:\n"
-            "  1. A DIFFERENT PRODUCT that shares the name. Pork 'picanha' is not beef picanha; a pepper "
-            "called 'picana' is not a cut of meat.\n"
-            "  2. USING it, not buying it — whoever searches this already owns it. Name the ways people "
-            "write preparation in THIS language, which is usually the method itself rather than a "
-            "question: for Portuguese meat that is 'na airfryer', 'no forno', 'na brasa', 'no espeto', "
-            "'churrasco', 'receita'; for a device it would be 'como limpar', 'não liga', 'manual'.\n"
-            "  3. LOOKING IT UP rather than shopping: 'o que é', 'vs', 'significado', 'wikipedia', and "
-            "the local forms of those.\n"
-            "Write them in the local language, lowercase, without accents where the language allows both "
-            "spellings. Be generous: a term wrongly excluded costs a little demand, while a term wrongly "
-            "counted inflates a market against every other one.\n\n"
-            + (
-                f"EVERY search term must name the brand {brand!r} (in the local script), varying model/size/"
-                "variant around it. NEVER the bare generic name and NEVER another brand: the volumes are "
-                "summed into this brand's demand score."
-                if brand
-                else "This product is the CATEGORY, so no term may carry a brand name — a branded term would "
-                "make one brand's demand stand for the whole category."
-            )
+            f"{country_lines}"
+        )
+        # The brand rule is per request, so it goes after the cache breakpoint
+        # (see LLMProvider): the rest of the instructions repeat on every call.
+        brand_rule = (
+            f"EVERY search term must name the brand {brand!r} (in the local script), varying model/size/"
+            "variant around it. NEVER the bare generic name and NEVER another brand: the volumes are "
+            "summed into this brand's demand score."
+            if brand
+            else "This product is the CATEGORY, so no term may carry a brand name — a branded term would "
+            "make one brand's demand stand for the whole category."
         )
         try:
             result = await self._provider.complete(
-                system=prompt_text("enrichment-system", _SYSTEM), user=prompt, response_model=LocalizedMarketsResult
+                system=f"{prompt_text('enrichment-system', _SYSTEM)}\n\n{_TASK}",
+                system_tail=brand_rule,
+                user=prompt,
+                response_model=LocalizedMarketsResult,
             )
         except LLMError as exc:
             raise EnrichmentError(f"Enrichment LLM call failed: {exc}") from exc

@@ -35,3 +35,48 @@ def test_no_key_at_all_fails_where_it_can_be_read() -> None:
         ClaudeProvider("claude-opus-5", "")
 
     assert "ANTHROPIC_API_KEY" in str(excinfo.value)
+
+
+class _Messages:
+    def __init__(self) -> None:
+        self.sent: dict = {}
+
+    async def create(self, **kwargs):  # noqa: ANN003, ANN201
+        from types import SimpleNamespace
+
+        self.sent = kwargs
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")], usage=None)
+
+
+async def test_the_stable_instructions_are_cached_and_the_per_request_tail_is_not() -> None:
+    """Every call here ends in unique content, so the breakpoint belongs at the
+    end of what repeats. Past it, a brand or the user's words would make each
+    call write a cache entry that no later call reads."""
+    provider = ClaudeProvider("claude-opus-5", "sk-ant-test")
+    provider._client.messages = _Messages()  # type: ignore[assignment]
+
+    await provider.complete(system="Stable rules.", system_tail="Brand: Cardhu.", user="Explain")
+
+    assert provider._client.messages.sent["system"] == [
+        {"type": "text", "text": "Stable rules.", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"type": "text", "text": "Brand: Cardhu."},
+    ]
+    assert "cache_control" not in provider._client.messages.sent
+
+
+async def test_no_instructions_send_no_system() -> None:
+    provider = ClaudeProvider("claude-opus-5", "sk-ant-test")
+    provider._client.messages = _Messages()  # type: ignore[assignment]
+
+    await provider.complete(user="What is this?")
+
+    assert "system" not in provider._client.messages.sent
+
+
+async def test_the_cache_lifetime_is_the_configured_one() -> None:
+    provider = ClaudeProvider("claude-opus-5", "sk-ant-test", cache_ttl="5m")
+    provider._client.messages = _Messages()  # type: ignore[assignment]
+
+    await provider.complete(system="Stable rules.", user="Explain")
+
+    assert provider._client.messages.sent["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}

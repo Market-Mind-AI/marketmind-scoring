@@ -13,7 +13,7 @@ PROMPTS: dict[str, str] = {
     "catalog-match-system": _CATALOG_MATCH_SYSTEM,
     "enrichment-system": _ENRICHMENT_SYSTEM,
     "reference-market-system": _REFERENCE_MARKET_SYSTEM,
-    "vision-instructions": _VISION_INSTRUCTIONS,
+    "vision-system": _VISION_INSTRUCTIONS,
     "explanation-system-pt": _SYSTEM_PROMPT_PT,
     "explanation-system-en": _SYSTEM_PROMPT_EN,
 }

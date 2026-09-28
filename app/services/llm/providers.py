@@ -10,12 +10,14 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from app.services.llm import usage
-from app.services.llm.base import ImageInput, LLMError, LLMProvider
+from app.services.llm.base import ImageInput, LLMError, LLMProvider, joined_system
 
 
 class ClaudeProvider(LLMProvider):
-    def __init__(self, model: str, api_key: str, workspace_id: str | None = None) -> None:
+    def __init__(self, model: str, api_key: str, workspace_id: str | None = None, cache_ttl: str = "1h") -> None:
         super().__init__(model)
+        # See settings.llm_prompt_cache_ttl for why an hour is the default.
+        self._cache_control = {"type": "ephemeral", "ttl": cache_ttl}
         if not api_key:
             raise LLMError("ANTHROPIC_API_KEY is not configured (required for the 'claude' LLM provider)")
         # An organisation-scoped key has to say which workspace to bill and
@@ -29,6 +31,7 @@ class ClaudeProvider(LLMProvider):
         self,
         *,
         system: str | None = None,
+        system_tail: str | None = None,
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
@@ -55,8 +58,19 @@ class ClaudeProvider(LLMProvider):
             "max_tokens": 16000,
             "messages": [{"role": "user", "content": content}],
         }
+        # The stable instructions carry the cache breakpoint; the per-request
+        # tail goes after it. Every call here is one-shot and ends in unique
+        # content (the product, the evidence packet, a photo), so the automatic
+        # top-level breakpoint would land on that tail and pay the write premium
+        # on bytes never read back. A system shorter than the model's minimum
+        # (512 tokens on Opus 5) simply isn't cached — no error, no charge.
+        blocks: list[dict[str, Any]] = []
         if system:
-            kwargs["system"] = system
+            blocks.append({"type": "text", "text": system, "cache_control": self._cache_control})
+        if system_tail:
+            blocks.append({"type": "text", "text": system_tail})
+        if blocks:
+            kwargs["system"] = blocks
 
         if response_model is not None:
             response = await self._client.messages.parse(output_format=response_model, **kwargs)
@@ -80,6 +94,7 @@ class GptProvider(LLMProvider):
         self,
         *,
         system: str | None = None,
+        system_tail: str | None = None,
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
@@ -89,8 +104,9 @@ class GptProvider(LLMProvider):
             data_uri = f"data:{image.media_type};base64,{image.base64_data}"
             user_content.append({"type": "image_url", "image_url": {"url": data_uri}})
         messages: list[dict[str, Any]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
+        instructions = joined_system(system, system_tail)
+        if instructions:
+            messages.append({"role": "system", "content": instructions})
         messages.append({"role": "user", "content": user_content})
 
         if response_model is not None:
@@ -126,10 +142,12 @@ class OllamaProvider(LLMProvider):
         self,
         *,
         system: str | None = None,
+        system_tail: str | None = None,
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
     ) -> str | BaseModel:
+        system = joined_system(system, system_tail)
         fmt = response_model.model_json_schema() if response_model is not None else None
         if image is not None:
             path = "/vision"

@@ -129,10 +129,15 @@ class ProductIdentification(BaseModel):
     confidence: float
 
 
-# The instructions for the vision call, edited in Langfuse ("vision-instructions");
-# this is the fallback and the seed. {{subject}} and {{country_list}} are filled per call.
+# The instructions for the vision call, edited in Langfuse ("vision-system");
+# this is the fallback and the seed. No variables: it is the system prompt and
+# is cached whole, so the countries and the user's text go in the user message.
+# (Until 2026-09-28 this was "vision-instructions", sent as the user message
+# with {{subject}} and {{country_list}} filled in the middle — which left
+# nothing for the cache to reuse.)
 _INSTRUCTIONS = (
-    "Identify {{subject}} for a cross-country market-demand analysis. "
+    "Identify the product in the input — the photo when one is given, otherwise the user's description — "
+    "for a cross-country market-demand analysis. "
     "CRITICAL: only identify a product that is ACTUALLY present in the input. If no image was given and "
     "the text does not name or describe a concrete product (e.g. it is empty or just 'quero', 'hello', "
     "'test', or a question with no product), set `product_found`=false, leave `product_name` empty, and "
@@ -144,8 +149,8 @@ _INSTRUCTIONS = (
     "('Kitchen Accessories', 'Spare Parts', 'Cookbooks', 'Services'), never the category of the product "
     "it belongs to. "
     "Put the brand only in `brand`; `product_name` stays generic. "
-    "`markets`: provide EXACTLY ONE entry for EACH of these ISO-3166 alpha-3 countries: "
-    "{{country_list}}. For each country, `search_terms` is a GENEROUS list of the real terms a local "
+    "`markets`: provide EXACTLY ONE entry for EACH ISO-3166 alpha-3 country listed in the request. "
+    "For each country, `search_terms` is a GENEROUS list of the real terms a local "
     "buyer actually types for THIS product — genuine colloquial/regional/loanword names and spelling/"
     "spacing variants, NEVER word-for-word translations, and ALWAYS also include the original English/"
     "Latin-script names in every market's list. The system pulls each term's ABSOLUTE monthly "
@@ -196,14 +201,12 @@ class VisionClient:
         if not image_base64 and not (hint_text and hint_text.strip()):
             raise VisionError("identify_product requires an image or a text description")
         country_list = ", ".join(countries) if countries else "(none provided)"
-        subject = "this product" if image_base64 else "the product described below"
-        instructions = prompt_text("vision-instructions", _INSTRUCTIONS, subject=subject, country_list=country_list)
+        instructions = prompt_text("vision-system", _INSTRUCTIONS)
+        prompt = f"Countries (ISO-3166 alpha-3): {country_list}"
         # With no image the text IS the product source, so label it accordingly.
         if hint_text and hint_text.strip():
             label = "Additional context from the user" if image_base64 else "Product description from the user"
-            prompt = f"{instructions}\n\n{label}: {hint_text}"
-        else:
-            prompt = instructions
+            prompt = f"{prompt}\n\n{label}: {hint_text}"
         image = (
             ImageInput(base64_data=image_base64, media_type=image_media_type)
             if image_base64 and image_media_type
@@ -211,6 +214,7 @@ class VisionClient:
         )
         try:
             result = await self._provider.complete(
+                system=instructions,
                 user=prompt,
                 image=image,
                 response_model=ProductIdentification,
