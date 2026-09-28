@@ -259,3 +259,40 @@ async def test_sub_produto_reencontrado_mantem_a_familia(db_session: AsyncSessio
     assert de_novo.method == "alias"
     assert de_novo.entity_key == filho.entity_key
     assert de_novo.generic_title == pai.canonical_title
+
+
+async def test_a_name_resolved_again_in_a_category_its_entity_spells_differently(db_session: AsyncSession) -> None:
+    """Medido em 28/09/2026 em azure-dev, com `air fryer`. Criado em 'Kitchen
+    Appliances' (alias gravado nessa categoria); depois pedido como 'Home
+    appliances', o passo 3 o reconheceu e a entidade passou a guardar essa
+    categoria. O pedido seguinte em Kitchen Appliances achava o próprio alias,
+    recusava pela categoria da ENTIDADE, reconfirmava no passo 3 e tentava
+    gravar o mesmo alias de novo — UniqueViolation, 500 em toda repetição."""
+    text = f"air fryer {uuid.uuid4().hex[:8]}"
+    created = await CatalogService(db_session, matcher=_sem_match()).resolve(
+        text, source="test", category="Kitchen Appliances"
+    )
+
+    service = CatalogService(db_session, matcher=_match_primeiro())
+    await service.resolve(text, source="test", category="Home appliances")
+    again = await service.resolve(text, source="test", category="Kitchen Appliances")
+
+    assert again.entity_key == created.entity_key
+    # O alias desta categoria já é a decisão: sai pelo passo 1, sem LLM.
+    assert again.method == "alias"
+
+
+async def test_recording_a_decided_alias_twice_repoints_instead_of_failing(db_session: AsyncSession) -> None:
+    from app.repositories.product_repository import ProductRepository
+
+    repo = ProductRepository(db_session)
+    first = await repo.create_entity(canonical_title=f"produto {uuid.uuid4()}")
+    other = await repo.create_entity(canonical_title=f"produto {uuid.uuid4()}")
+    await db_session.flush()
+    alias = f"alias {uuid.uuid4().hex[:8]}"
+
+    await repo.set_alias(alias_normalized=alias, entity_key=first.entity_key, source="test", category="Toys")
+    await repo.set_alias(alias_normalized=alias, entity_key=other.entity_key, source="test", category="Toys")
+
+    found = await repo.get_entity_by_alias_exact(alias, "Toys")
+    assert found is not None and found[1].entity_key == other.entity_key

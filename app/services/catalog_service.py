@@ -328,7 +328,19 @@ class CatalogService:
             #
             # Categorias que se contradizem não resolvem aqui: a pergunta passa
             # a ser de SIGNIFICADO, e quem responde isso é o passo 3.
-            if _categorias_batem(entity.category, category) and entity.brand_key == brand_key:
+            # O alias gravado para ESTA categoria já é uma decisão sobre este
+            # par (nome, categoria) — a chave desde a migration 051 —, mesmo que
+            # a entidade guarde outra forma de dizer a categoria ('Home
+            # appliances' contra 'Kitchen Appliances'). Recusá-lo mandava o
+            # mesmo pedido ao LLM toda vez para reconfirmar o que já decidiu.
+            # Igualdade estrita: um alias SEM categoria não decidiu nada sobre
+            # esta — é o caso `jaguar`, que continua indo ao passo 3.
+            alias_desta_categoria = bool(category and alias_existente.category) and (
+                alias_existente.category.strip().casefold() == category.strip().casefold()
+            )
+            if (
+                alias_desta_categoria or _categorias_batem(entity.category, category)
+            ) and entity.brand_key == brand_key:
                 await self._repo.bump_alias_hit(alias_existente)
                 await self._atualizar(
                     entity,
@@ -555,7 +567,7 @@ class CatalogService:
         if not alias_normalized:
             logger.info("Consulta sem forma normalizada (só pontuação/emoji); nenhum alias gravado")
             return
-        await self._repo.create_alias(
+        await self._repo.set_alias(
             alias_normalized=alias_normalized, entity_key=entity_key, source=source, category=category
         )
 

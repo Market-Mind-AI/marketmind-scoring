@@ -454,6 +454,37 @@ class ProductRepository:
         await self._session.flush()
         return alias
 
+    async def set_alias(
+        self, *, alias_normalized: str, entity_key: uuid.UUID, source: str, category: str | None = None
+    ) -> None:
+        """Faz (nome, categoria) apontar para `entity_key`, exista a linha ou não.
+
+        É o que o serviço grava depois de DECIDIR a identidade de uma consulta.
+        Um INSERT puro estourava quando o par já existia: medido em 28/09/2026
+        em azure-dev, `air fryer` em Kitchen Appliances tinha alias para a
+        entidade guardada como Home appliances; o passo 1 recusava pela
+        categoria da entidade, o passo 3 confirmava o mesmo produto, e gravar
+        o alias de novo dava UniqueViolation — 500 em toda repetição.
+
+        A decisão que acabou de ser tomada vale sobre a antiga: se o passo 3
+        escolheu outra entidade para este par, é para ela que o caminho O(1)
+        tem que levar da próxima vez.
+        """
+        stmt = pg_insert(ProductAlias).values(
+            id=uuid.uuid4(),
+            alias_normalized=alias_normalized,
+            category=category,
+            entity_key=entity_key,
+            source=source,
+            hit_count=1,
+            first_seen_at=utc_now(),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ProductAlias.alias_normalized, func.coalesce(ProductAlias.category, "")],
+            set_={"entity_key": stmt.excluded.entity_key, "hit_count": ProductAlias.hit_count + 1},
+        )
+        await self._session.execute(stmt)
+
     async def create_aliases_bulk(
         self, *, aliases: dict[str, uuid.UUID], source: str, category: str | None = None
     ) -> int:
