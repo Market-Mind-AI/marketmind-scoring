@@ -45,6 +45,10 @@ class LLMProvider(ABC):
 
     def __init__(self, model: str) -> None:
         self.model = model
+        # The call site this provider serves ("vision", "explanation", ...),
+        # set by the resolver. Only for the usage log line; never part of the
+        # request.
+        self.site: str | None = None
 
     @abstractmethod
     async def complete(

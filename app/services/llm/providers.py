@@ -2,6 +2,7 @@
 (OpenAI SDK), and Ollama (routed through the marketmind-ollma-llm gateway).
 Each implements the same ``complete`` contract (see base.py)."""
 
+import logging
 from typing import Any
 
 import httpx
@@ -11,6 +12,27 @@ from pydantic import BaseModel
 
 from app.services.llm import usage
 from app.services.llm.base import ImageInput, LLMError, LLMProvider, joined_system
+
+logger = logging.getLogger("marketmind-scoring.llm_usage")
+
+
+def log_claude_usage(model: str, site: str | None, raw_usage: Any) -> None:
+    """One line per Claude call with the billed token counts, exactly as the
+    API reports them. The request's tally (usage.py) sums a whole HTTP request
+    and folds the cache into the input; this is the per-call record that a
+    cost has to be computed from — cache reads, writes per TTL and plain input
+    are priced differently."""
+    if raw_usage is None:
+        logger.info(f"CLAUDE_USAGE site={site} model={model} usage=none")
+        return
+    creation = getattr(raw_usage, "cache_creation", None)
+    logger.info(
+        f"CLAUDE_USAGE site={site} model={model} input={raw_usage.input_tokens} "
+        f"cache_read={raw_usage.cache_read_input_tokens or 0} "
+        f"cache_write_5m={getattr(creation, 'ephemeral_5m_input_tokens', 0) or 0} "
+        f"cache_write_1h={getattr(creation, 'ephemeral_1h_input_tokens', 0) or 0} "
+        f"output={raw_usage.output_tokens}"
+    )
 
 
 class ClaudeProvider(LLMProvider):
@@ -75,11 +97,13 @@ class ClaudeProvider(LLMProvider):
         if response_model is not None:
             response = await self._client.messages.parse(output_format=response_model, **kwargs)
             usage.record(self.model, getattr(response, "usage", None))
+            log_claude_usage(self.model, self.site, getattr(response, "usage", None))
             if response.parsed_output is None:
                 raise LLMError(f"Claude returned no parseable result (stop_reason={response.stop_reason})")
             return response.parsed_output
         response = await self._client.messages.create(**kwargs)
         usage.record(self.model, getattr(response, "usage", None))
+        log_claude_usage(self.model, self.site, getattr(response, "usage", None))
         return "".join(block.text for block in response.content if block.type == "text")
 
 

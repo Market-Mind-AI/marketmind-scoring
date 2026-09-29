@@ -14,6 +14,7 @@ def resolve_llm(*, provider: str, model: str, site: str | None = None) -> LLMPro
     """``site`` names the call site in the trace; without it, or without
     tracing configured, the bare provider comes back."""
     resolved = _build(provider, model)
+    resolved.site = site
     if site and observability.tracing_enabled():
         return TracedProvider(resolved, site)
     return resolved

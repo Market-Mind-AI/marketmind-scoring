@@ -80,3 +80,27 @@ async def test_the_cache_lifetime_is_the_configured_one() -> None:
     await provider.complete(system="Stable rules.", user="Explain")
 
     assert provider._client.messages.sent["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+
+def test_each_claude_call_logs_what_it_was_billed_for(caplog) -> None:  # noqa: ANN001
+    """Cache reads, writes per TTL and plain input are priced differently, so
+    a cost can only be computed from the split — which the request tally folds
+    into one input number."""
+    import logging
+    from types import SimpleNamespace
+
+    from app.services.llm.providers import log_claude_usage
+
+    raw = SimpleNamespace(
+        input_tokens=49,
+        cache_read_input_tokens=4092,
+        cache_creation=SimpleNamespace(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=2348),
+        output_tokens=1156,
+    )
+    with caplog.at_level(logging.INFO, logger="marketmind-scoring.llm_usage"):
+        log_claude_usage("claude-opus-5", "vision", raw)
+
+    assert (
+        "CLAUDE_USAGE site=vision model=claude-opus-5 input=49 cache_read=4092 "
+        "cache_write_5m=0 cache_write_1h=2348 output=1156"
+    ) in caplog.text
