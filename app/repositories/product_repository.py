@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, func, select
+from sqlalchemy import CursorResult, delete, func, literal_column, select
 from sqlalchemy import true as sa_true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -479,8 +479,14 @@ class ProductRepository:
             hit_count=1,
             first_seen_at=utc_now(),
         )
+        # `''` LITERAL, não parâmetro. Com parâmetro o arbiter é
+        # `coalesce(category, $8)`, que o Postgres só casa com o índice da
+        # migration 051 enquanto usa plano customizado — o asyncpg prepara o
+        # statement e, da 6ª execução na mesma conexão em diante, o plano
+        # genérico não infere mais o índice e o INSERT falha com "no unique or
+        # exclusion constraint matching the ON CONFLICT specification".
         stmt = stmt.on_conflict_do_update(
-            index_elements=[ProductAlias.alias_normalized, func.coalesce(ProductAlias.category, "")],
+            index_elements=[ProductAlias.alias_normalized, func.coalesce(ProductAlias.category, literal_column("''"))],
             set_={"entity_key": stmt.excluded.entity_key, "hit_count": ProductAlias.hit_count + 1},
         )
         await self._session.execute(stmt)
@@ -517,8 +523,10 @@ class ProductRepository:
             }
             for alias, entity_key in aliases.items()
         ]
+        # `''` literal pelo mesmo motivo de set_alias: parâmetro só casa com o
+        # índice enquanto o plano é customizado.
         stmt = pg_insert(ProductAlias).values(linhas).on_conflict_do_nothing(
-            index_elements=[ProductAlias.alias_normalized, func.coalesce(ProductAlias.category, "")]
+            index_elements=[ProductAlias.alias_normalized, func.coalesce(ProductAlias.category, literal_column("''"))]
         )
         result = cast(CursorResult[Any], await self._session.execute(stmt))
         return int(result.rowcount or 0)
