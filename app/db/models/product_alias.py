@@ -27,6 +27,10 @@ class ProductAlias(Base):
     source: Mapped[str] = mapped_column(nullable=False)
     hit_count: Mapped[int] = mapped_column(nullable=False, default=1)
     first_seen_at: Mapped[datetime] = mapped_column(nullable=False, default=datetime.utcnow)
+    # `embedding vector(1024)` e `embedding_model` existem na tabela (migration
+    # 052) e não são mapeados de propósito: só a busca semântica os lê e
+    # escreve, em SQL próprio (ProductRepository.semantic_search), e mapear o
+    # vetor faria todo SELECT de alias trazer 4 kB que ninguém usa.
 
     product: Mapped["ProductCatalog"] = relationship(back_populates="aliases", foreign_keys=[entity_key])  # type: ignore[name-defined]  # noqa: F821
 

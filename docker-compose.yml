@@ -20,13 +20,9 @@ services:
     restart: unless-stopped
 
   postgres:
-    # pgvector/pgvector:pg16 — herdado da Fase 2, quando o passo 3 da resolução
-    # de catálogo era busca por embedding. Esse passo foi retirado em
-    # 2026-08-14 e a extensão `vector` foi removida do banco na migration 027,
-    # então `postgres:16` puro já bastaria hoje. A imagem é mantida por ser um
-    # superconjunto (mesmo PG 16, mesmo formato de dados): trocá-la não traria
-    # ganho e exigiria uma janela de manutenção no volume existente.
-    # O que o pipeline realmente usa é `pg_trgm`, presente nas duas.
+    # pgvector/pgvector:pg16 — necessária: a busca semântica do catálogo
+    # (passo 3a, migration 052) usa a extensão `vector` com índice HNSW, além
+    # do `pg_trgm` do passo 2. `postgres:16` puro não tem a extensão.
     image: pgvector/pgvector:pg16
     container_name: marketmind-scoring-postgres
     environment:

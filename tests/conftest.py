@@ -34,6 +34,9 @@ if "test" not in settings.database_name.lower():
 # tracing patch settings or replace observability.client themselves.
 settings.langfuse_public_key = ""
 settings.langfuse_secret_key = ""
+# Same for Voyage: with the key, every resolve that reaches step 3 would embed
+# for real. Tests that exercise semantic search inject their own client.
+settings.voyage_api_key = ""
 
 # Reference/seed data that migrations own and tests must never wipe:
 #  - countries: migration 003's ~27-country basket.

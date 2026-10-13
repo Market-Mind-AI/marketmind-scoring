@@ -7,6 +7,8 @@ section 6). Cheapest-to-most-expensive match, in order:
    que ela declara SER (search_terms) do que dos que declara NÃO ser
    (excluded_terms). Empate ou inversão veta a entidade e escala para o 3.
 3. LLM decides among the catalog's candidate entities — see catalog_matcher.py.
+   Os candidatos vêm, primeiro, da busca semântica (3a): os vizinhos mais
+   próximos da consulta no espaço de embeddings, via HNSW no pgvector.
 4. Nothing matched — create a new entity locally (entity_key is always a
    freshly generated UUID, never blocked by an external dependency).
 
@@ -46,6 +48,13 @@ O passo 3 era embedding até 2026-08-14 e passou a ser o LLM. Motivo medido: os
 `freidora con aceite` ficam a 0,033). O passo 3 é best-effort: se o LLM
 estiver indisponível, a resolução cai para a criação de entidade nova, que é
 o erro recuperável.
+
+O vetor voltou em 2026-10-13 (migration 052) para o lado que a medição de
+14/08 não proíbe: RECUPERAR. A lista que o LLM julga era "mesma categoria,
+mais recentes primeiro", que só contém o candidato certo enquanto o catálogo
+inteiro cabe no teto. Agora os primeiros da lista são os vizinhos semânticos
+da consulta. Quem aceita continua sendo o LLM; nenhuma distância é comparada
+com limiar.
 """
 
 import uuid
@@ -54,6 +63,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.logging import logger
 from app.db.models.brand import Brand
 from app.db.models.product_alias import ProductAlias
@@ -61,6 +71,7 @@ from app.db.models.product_catalog import ProductCatalog
 from app.repositories.product_repository import ProductRepository, TrigramOutcome
 from app.schemas.catalog import CatalogResolveResponse
 from app.services.catalog_matcher import CatalogMatcher
+from app.services.embedding_client import EmbeddingClient, EmbeddingError, vector_literal
 from app.utils.text import as_term_list, normalize_alias
 
 
@@ -196,10 +207,16 @@ def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
 
 
 class CatalogService:
-    def __init__(self, session: AsyncSession, matcher: CatalogMatcher | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        matcher: CatalogMatcher | None = None,
+        embedder: EmbeddingClient | None = None,
+    ) -> None:
         self._session = session
         self._repo = ProductRepository(session)
         self._matcher = matcher or CatalogMatcher()
+        self._embedder = embedder or EmbeddingClient()
 
     async def resolve(
         self,
@@ -277,7 +294,12 @@ class CatalogService:
         if resolvido.familia is None and resolvido.entity.generic_entity_key is not None:
             resolvido.familia = await self._repo.get_by_entity_key(resolvido.entity.generic_entity_key)
         await self._session.commit()
-        return _resposta(resolvido)
+        # A resposta sai ANTES da vetorização: se ela falhar, o rollback
+        # expira as entidades da sessão, e montar a resposta depois disso
+        # tentaria recarregá-las fora de contexto async.
+        resposta = _resposta(resolvido)
+        await self._vetorizar_pendentes(resolvido.entity.entity_key)
+        return resposta
 
     async def _resolver_particao(
         self,
@@ -410,8 +432,9 @@ class CatalogService:
         # termo não tem parentesco de escrita com nada indexado
         # (`lockencreme`, `odżywka bez spłukiwania`) ou é sinônimo de domínio
         # (`quadcopter` para drone). Ver catalog_matcher.py.
+        semanticos = await self._busca_semantica(generico, brand_key=brand_key)
         candidatos = await self._repo.list_match_candidates(
-            category=category, priority=trigram.vetoed, brand_key=brand_key
+            category=category, priority=trigram.vetoed, semantic=semanticos, brand_key=brand_key
         )
         motivo: dict[str, str] = {}
         correspondente = await self._matcher.pick(
@@ -570,6 +593,91 @@ class CatalogService:
         await self._repo.set_alias(
             alias_normalized=alias_normalized, entity_key=entity_key, source=source, category=category
         )
+
+    async def _busca_semantica(self, generico: str, *, brand_key: uuid.UUID | None) -> list[ProductCatalog]:
+        """Passo 3a: os vizinhos semânticos que encabeçam a lista do LLM.
+
+        Best-effort, como o próprio passo 3: sem chave ou com a Voyage fora, a
+        resolução segue com a seleção antiga (categoria e recência) em vez de
+        falhar. Perder o recall custa, no pior caso, uma entidade duplicada —
+        o erro recuperável."""
+        if not generico or not self._embedder.enabled:
+            return []
+        try:
+            [vetor] = await self._embedder.embed([generico], input_type="query")
+        except EmbeddingError as exc:
+            logger.warning(f"Busca semântica indisponível para {generico!r}; seguindo sem ela: {exc}")
+            return []
+        vizinhos = await self._repo.semantic_search(
+            vector_literal(vetor),
+            model=self._embedder.model,
+            brand_key=brand_key,
+            top_k=settings.catalog_semantic_top_k,
+        )
+        if vizinhos:
+            logger.info(
+                f"Vizinhos semânticos de {generico!r}: "
+                + ", ".join(f"{e.canonical_title!r} ({d:.3f})" for e, d in vizinhos)
+            )
+        return [entidade for entidade, _ in vizinhos]
+
+    async def _vetorizar_pendentes(self, entity_key: uuid.UUID) -> None:
+        """Gera o vetor dos aliases que esta resolução acabou de gravar.
+
+        Depois do commit, e não dentro da transação: é uma chamada de rede, e
+        segurá-la com linhas de `product_aliases` travadas faria toda
+        resolução concorrente esperar a Voyage. Se falhar, os aliases ficam
+        sem vetor — invisíveis só para o passo 3a, que é recall — e o
+        `backfill_embeddings` os completa depois."""
+        if not self._embedder.enabled:
+            return
+        try:
+            pendentes = await self._repo.aliases_without_embedding(
+                model=self._embedder.model, limit=1000, entity_key=entity_key
+            )
+            if not pendentes:
+                return
+            vetores = await self._embedder.embed([alias for _, alias in pendentes], input_type="document")
+            await self._repo.save_alias_embeddings(
+                [(id_, vector_literal(v)) for (id_, _), v in zip(pendentes, vetores, strict=True)],
+                model=self._embedder.model,
+            )
+            await self._session.commit()
+        except Exception as exc:  # noqa: BLE001 — a resolução já foi gravada; nada aqui pode desfazê-la
+            await self._session.rollback()
+            logger.warning(f"Aliases de {entity_key} ficaram sem vetor; o backfill completa: {exc}")
+
+    async def backfill_embeddings(self, *, batch_size: int = 128) -> dict[str, int]:
+        """Gera o vetor de todo alias que não tem um do modelo atual.
+
+        Cobre os aliases de antes da migration 052, os que `_vetorizar_pendentes`
+        não conseguiu e, quando VOYAGE_EMBEDDING_MODEL muda, todos — vetores
+        de modelos diferentes não estão no mesmo espaço.
+
+        Commit por lote, pelo mesmo motivo do `backfill_terms`: interrompido,
+        o que já foi gravado fica, e reexecutar continua de onde parou. A
+        paginação é "os próximos pendentes", não por chave: cada lote gravado
+        deixa de ser pendente."""
+        if not self._embedder.enabled:
+            raise EmbeddingError("VOYAGE_API_KEY não configurada")
+        relatorio = {"aliases": 0, "lotes": 0, "tokens": 0}
+        tokens_antes = self._embedder.tokens
+        while True:
+            pendentes = await self._repo.aliases_without_embedding(model=self._embedder.model, limit=batch_size)
+            if not pendentes:
+                break
+            vetores = await self._embedder.embed([alias for _, alias in pendentes], input_type="document")
+            await self._repo.save_alias_embeddings(
+                [(id_, vector_literal(v)) for (id_, _), v in zip(pendentes, vetores, strict=True)],
+                model=self._embedder.model,
+            )
+            await self._session.commit()
+            relatorio["aliases"] += len(pendentes)
+            relatorio["lotes"] += 1
+            logger.info(f"Backfill de embeddings: {relatorio['aliases']} aliases")
+        relatorio["tokens"] = self._embedder.tokens - tokens_antes
+        logger.info(f"Backfill de embeddings concluído: {relatorio}")
+        return relatorio
 
     async def backfill_terms(self, *, batch_size: int = 100) -> dict[str, int]:
         """Indexa o vocabulário curado de TODAS as entidades já existentes.

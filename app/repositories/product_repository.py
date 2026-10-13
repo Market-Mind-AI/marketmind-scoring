@@ -3,8 +3,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, func, literal_column, select
+from sqlalchemy import CursorResult, bindparam, delete, func, literal_column, select, text
 from sqlalchemy import true as sa_true
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -616,11 +617,19 @@ class ProductRepository:
         *,
         category: str | None = None,
         priority: list[ProductCatalog] | None = None,
+        semantic: list[ProductCatalog] | None = None,
         brand_key: uuid.UUID | None = None,
     ) -> list[ProductCatalog]:
         """Entidades que o LLM vai considerar quando alias e trigram falham.
 
-        Prioriza a mesma `category` quando o chamador a conhece (identify-image
+        `semantic` são os vizinhos mais próximos do passo 3a (semantic_search),
+        em ordem de distância, e entram logo depois de `priority`. São a única
+        parte da lista que olha o SIGNIFICADO da consulta: o resto é categoria
+        e data de criação, que só acertam enquanto o catálogo cabe inteiro no
+        teto. Vazio quando o passo 3a está desligado ou falhou — a seleção
+        então é a de antes.
+
+        Depois deles, prioriza a mesma `category` quando o chamador a conhece (identify-image
         a traz): produto novo quase sempre colide com produto do mesmo tipo, e
         entidades de outra categoria só gastariam tokens. Completa com as
         demais até o teto, para que uma categoria errada vinda do LLM de visão
@@ -652,6 +661,11 @@ class ProductRepository:
                 selecionadas.append(produto)
                 vistos.add(produto.entity_key)
 
+        for produto in semantic or []:
+            if produto.entity_key not in vistos and len(selecionadas) < limite:
+                selecionadas.append(produto)
+                vistos.add(produto.entity_key)
+
         if category:
             result = await self._session.execute(
                 base.where(ProductCatalog.category == category).order_by(ProductCatalog.created_at.desc()).limit(limite)
@@ -659,6 +673,8 @@ class ProductRepository:
             for produto in result.scalars():
                 if produto.entity_key in vistos:
                     continue
+                if len(selecionadas) >= limite:
+                    break
                 selecionadas.append(produto)
                 vistos.add(produto.entity_key)
 
@@ -672,6 +688,94 @@ class ProductRepository:
                     break
 
         return selecionadas
+
+    async def semantic_search(
+        self, query_vector: str, *, model: str, brand_key: uuid.UUID | None = None, top_k: int
+    ) -> list[tuple[ProductCatalog, float]]:
+        """Passo 3a: as `top_k` entidades cujos termos estão mais perto da
+        consulta, por distância coseno, com a distância da melhor.
+
+        Só RECUPERA. Quem aceita é o LLM; a distância não é comparada com
+        limiar nenhum, porque a medição de 14/08/2026 mostrou que nenhum separa
+        "mesmo produto" de "produto vizinho" (`freidora de aire` x `freidora de
+        aceite` = 0,044). Para recuperar, o que importa é a ORDEM, e nela o
+        vizinho certo aparece entre os primeiros.
+
+        DUAS ETAPAS porque o índice ordena ALIASES e a resposta é ENTIDADES.
+        Os termos de uma entidade são traduções uns dos outros e ficam juntos
+        no espaço: os 10 aliases mais próximos costumam ser de uma entidade só.
+        Por isso o HNSW traz um bolsão de `top_k * 20` aliases e o agrupamento
+        fica com a melhor distância de cada entidade.
+
+        `hnsw.iterative_scan` porque o filtro da partição de marca roda DEPOIS
+        do índice: sem ele, o HNSW devolve `ef_search` vizinhos, o filtro joga
+        fora os de outras marcas e a consulta pode voltar com menos do que
+        pediu. Com ele (pgvector >= 0.8), a varredura continua até preencher o
+        LIMIT. Os dois GUCs valem só nesta transação, como o limiar do trigram.
+        """
+        await self._session.execute(
+            select(func.set_config("hnsw.ef_search", str(settings.catalog_semantic_ef_search), True))
+        )
+        await self._session.execute(select(func.set_config("hnsw.iterative_scan", "relaxed_order", True)))
+        stmt = text(
+            """
+            WITH vizinhos AS (
+                SELECT a.entity_key, a.embedding <=> CAST(:q AS vector) AS distancia
+                FROM product_aliases a
+                JOIN product_catalog p ON p.entity_key = a.entity_key
+                WHERE a.embedding IS NOT NULL
+                  AND a.embedding_model = :modelo
+                  AND p.merged_into IS NULL
+                  AND p.brand_key IS NOT DISTINCT FROM :brand
+                ORDER BY a.embedding <=> CAST(:q AS vector)
+                LIMIT :bolsao
+            )
+            SELECT entity_key, min(distancia) AS distancia
+            FROM vizinhos
+            GROUP BY entity_key
+            ORDER BY distancia
+            LIMIT :k
+            """
+        ).bindparams(bindparam("brand", type_=PG_UUID(as_uuid=True)))
+        linhas = (
+            await self._session.execute(
+                stmt, {"q": query_vector, "modelo": model, "brand": brand_key, "bolsao": top_k * 20, "k": top_k}
+            )
+        ).all()
+        if not linhas:
+            return []
+        entidades = await self._session.execute(
+            select(ProductCatalog).where(ProductCatalog.entity_key.in_([chave for chave, _ in linhas]))
+        )
+        por_chave = {e.entity_key: e for e in entidades.scalars()}
+        return [(por_chave[chave], float(dist)) for chave, dist in linhas if chave in por_chave]
+
+    async def aliases_without_embedding(
+        self, *, model: str, limit: int, entity_key: uuid.UUID | None = None
+    ) -> list[tuple[uuid.UUID, str]]:
+        """Aliases sem vetor, ou com vetor de OUTRO modelo — que não é
+        comparável com os do modelo atual e conta como ausente."""
+        filtro_entidade = "AND entity_key = :entidade" if entity_key is not None else ""
+        stmt = text(
+            f"""
+            SELECT id, alias_normalized FROM product_aliases
+            WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM :modelo) {filtro_entidade}
+            ORDER BY id
+            LIMIT :n
+            """
+        )
+        params: dict[str, Any] = {"modelo": model, "n": limit}
+        if entity_key is not None:
+            params["entidade"] = entity_key
+        return [(id_, alias) for id_, alias in (await self._session.execute(stmt, params)).all()]
+
+    async def save_alias_embeddings(self, vetores: list[tuple[uuid.UUID, str]], *, model: str) -> None:
+        if not vetores:
+            return
+        await self._session.execute(
+            text("UPDATE product_aliases SET embedding = CAST(:v AS vector), embedding_model = :modelo WHERE id = :id"),
+            [{"id": id_, "v": vetor, "modelo": model} for id_, vetor in vetores],
+        )
 
     async def existing_alias_owners(self, normalized: set[str]) -> dict[str, uuid.UUID]:
         """Quais destes aliases normalizados já existem, e de quem são.

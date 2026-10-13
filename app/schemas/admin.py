@@ -14,6 +14,13 @@ class BackfillTermsResponse(BaseModel):
     obsoletos: int = 0
 
 
+class BackfillEmbeddingsResponse(BaseModel):
+    aliases: int
+    lotes: int
+    # Cobrados pela Voyage nesta execução — o custo do backfill, em tokens.
+    tokens: int
+
+
 class BrandSplitRequest(BaseModel):
     entity_key: uuid.UUID
     brand: str = Field(..., min_length=1, description="A marca que o vocabulário da entidade realmente mede")

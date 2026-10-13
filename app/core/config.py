@@ -206,6 +206,28 @@ class Settings(BaseSettings):
     # Ver docs/marketmind-transparencia-tecnica.md §1.3.
     openai_api_key: str = ""
 
+    # Busca semântica do catálogo (passo 3a, migration 052). O vetor voltou em
+    # 2026-10-13 com OUTRO papel: não aceita match nenhum, só escolhe QUAIS
+    # entidades vão para o LLM do passo 3 — antes a lista era "mesma categoria,
+    # mais recentes primeiro", que deixa o candidato certo de fora assim que o
+    # catálogo passa do teto. A medição de 14/08 continua valendo para
+    # aceitação; ela não diz nada contra recall.
+    #
+    # Voyage AI porque a Anthropic não tem endpoint de embeddings e recomenda
+    # este. Sem chave, o passo 3a desliga e a seleção volta a ser a antiga.
+    voyage_api_key: str = ""
+    voyage_api_base_url: str = "https://api.voyageai.com/v1"
+    voyage_embedding_model: str = "voyage-4"
+    # Tem que bater com a coluna `product_aliases.embedding` (migration 052).
+    voyage_embedding_dimensions: int = 1024
+    voyage_timeout_seconds: float = 20.0
+    # Quantas entidades o vizinho mais próximo põe na frente da lista do LLM.
+    catalog_semantic_top_k: int = 10
+    # Tamanho da fila de candidatos do HNSW na consulta: maior = recall maior e
+    # consulta mais lenta. 40 é o default do pgvector; ver
+    # scripts/benchmark_semantic_recall.py para a curva medida.
+    catalog_semantic_ef_search: int = 40
+
     # Fase 5 — identificação de produto por foto (app/services/vision_client.py,
     # product_identification_service.py). Anthropic tem endpoint de visão
     # nativo (ao contrário de embeddings) — usa o SDK oficial, não um stopgap.

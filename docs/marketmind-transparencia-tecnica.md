@@ -130,6 +130,15 @@ más de 20GB por arrastrar torch. Ambas cosas se revirtieron. Si un vector vuelv
 qué candidatos entran en el prompt cuando el catálogo crezca), nunca como criterio de aceptación, y con runtime ONNX,
 no torch.
 
+**El vector volvió el 13/10/2026 (migration 052), exactamente en ese papel.** La lista de candidatas que el LLM
+juzga era "misma categoría, más recientes primero", que sólo contiene la entidad correcta mientras el catálogo entero
+cabe en el tope de 25. Ahora la encabezan los vecinos semánticos de la consulta (paso 3a): un embedding por alias
+(Voyage AI `voyage-4`, 1024 dimensiones, `input_type` distinto para consulta y documento), índice **HNSW** del
+pgvector con distancia coseno, y agrupación por entidad con la mejor distancia de sus términos. Ninguna distancia se
+compara con umbral: el vector **recupera**, el LLM **decide**. Sin clave o con Voyage caída, la selección vuelve a
+la anterior. `scripts/benchmark_semantic_recall.py` mide recall@k y latencia del HNSW contra la búsqueda exacta
+(fuerza bruta) para varios `ef_search`, en el catálogo real y en uno sintético mayor.
+
 ### 1.4 Coste asimétrico del error — lo que el diseño optimiza
 
 Los dos errores posibles no cuestan lo mismo:

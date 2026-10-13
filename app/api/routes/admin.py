@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import EntityNotFoundError, MarketMindCoreError
 from app.db.session import get_session
 from app.schemas.admin import (
+    BackfillEmbeddingsResponse,
     BackfillTermsResponse,
     BrandSplitRequest,
     BrandSplitResponse,
@@ -15,6 +16,7 @@ from app.schemas.admin import (
 )
 from app.services.brand_split_service import BrandSplitService
 from app.services.catalog_service import CatalogService
+from app.services.embedding_client import EmbeddingError
 from app.services.macro_coverage import MacroPrewarmService
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key
@@ -38,6 +40,25 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 async def backfill_terms(session: AsyncSession = Depends(get_session)) -> BackfillTermsResponse:
     relatorio = await CatalogService(session).backfill_terms()
     return BackfillTermsResponse(**relatorio)
+
+
+@router.post(
+    "/catalog/backfill-embeddings",
+    response_model=BackfillEmbeddingsResponse,
+    summary="Generate the semantic-search vector of every catalog alias",
+    description=(
+        "Embeds (Voyage AI) every alias that has no vector from the current model: those from before "
+        "migration 052, those whose embedding failed during a resolve, and all of them after "
+        "VOYAGE_EMBEDDING_MODEL changes. Idempotent and resumable — commits per batch. The vectors only "
+        "choose which entities the step-3 LLM sees; they never accept a match."
+    ),
+)
+async def backfill_embeddings(session: AsyncSession = Depends(get_session)) -> BackfillEmbeddingsResponse:
+    try:
+        relatorio = await CatalogService(session).backfill_embeddings()
+    except EmbeddingError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return BackfillEmbeddingsResponse(**relatorio)
 
 
 @router.post(
