@@ -1,0 +1,3151 @@
+{
+ "air fryer": {
+  "BRA": {
+   "primary_name": "air fryer",
+   "formal_name": "fritadeira elétrica sem óleo",
+   "search_terms": [
+    "air fryer",
+    "airfryer",
+    "fritadeira air fryer",
+    "fritadeira sem oleo",
+    "fritadeira sem óleo",
+    "fritadeira elétrica sem óleo",
+    "air fryer preço",
+    "comprar air fryer",
+    "air fryer 5 litros",
+    "air fryer grande",
+    "air fryer dupla",
+    "fritadeira de ar quente",
+    "fryer de ar"
+   ],
+   "excluded_terms": [
+    "receita",
+    "receitas",
+    "na airfryer",
+    "na air fryer",
+    "como usar",
+    "como limpar",
+    "nao liga",
+    "não liga",
+    "manual",
+    "cesto",
+    "papel",
+    "forra",
+    "o que e",
+    "o que é",
+    "vs",
+    "faz mal",
+    "wikipedia",
+    "frango",
+    "batata",
+    "pao de queijo",
+    "congelado"
+   ],
+   "antagonist_terms": [
+    "fritadeira a óleo",
+    "fritadeira elétrica com óleo",
+    "fritadeira de imersão"
+   ],
+   "contrast_attributes": [
+    "cooking medium: hot air circulation vs oil immersion"
+   ],
+   "search_language": "pt",
+   "confidence": 0.93
+  },
+  "ESP": {
+   "primary_name": "freidora de aire",
+   "formal_name": "freidora de aire caliente",
+   "search_terms": [
+    "freidora de aire",
+    "air fryer",
+    "airfryer",
+    "freidora sin aceite",
+    "freidora de aire caliente",
+    "freidora de aire precio",
+    "comprar freidora de aire",
+    "freidora de aire barata",
+    "freidora de aire grande",
+    "freidora de aire doble",
+    "freidoras de aire"
+   ],
+   "excluded_terms": [
+    "recetas",
+    "receta",
+    "en freidora de aire",
+    "como limpiar",
+    "como usar",
+    "que es",
+    "qué es",
+    "vs",
+    "manual",
+    "accesorios",
+    "papel",
+    "es sana",
+    "pollo",
+    "patatas",
+    "congelado",
+    "wikipedia"
+   ],
+   "antagonist_terms": [
+    "freidora de aceite",
+    "freidora eléctrica con aceite",
+    "freidora de inmersión"
+   ],
+   "contrast_attributes": [
+    "cooking medium: hot air circulation vs oil immersion"
+   ],
+   "search_language": "es",
+   "confidence": 0.93
+  },
+  "DEU": {
+   "primary_name": "heißluftfritteuse",
+   "formal_name": "Heißluftfritteuse",
+   "search_terms": [
+    "heißluftfritteuse",
+    "heissluftfritteuse",
+    "airfryer",
+    "air fryer",
+    "fritteuse ohne öl",
+    "fritteuse ohne fett",
+    "heißluftfritteuse kaufen",
+    "heißluftfritteuse test",
+    "heißluftfritteuse groß",
+    "heißluftfritteuse xxl",
+    "doppel heißluftfritteuse",
+    "heissluftfritteuse preis"
+   ],
+   "excluded_terms": [
+    "rezepte",
+    "rezept",
+    "in der heißluftfritteuse",
+    "in der heissluftfritteuse",
+    "reinigen",
+    "wie funktioniert",
+    "was ist",
+    "vs",
+    "unterschied",
+    "anleitung",
+    "backpapier",
+    "zubehör",
+    "pommes",
+    "hähnchen",
+    "gesund",
+    "wikipedia"
+   ],
+   "antagonist_terms": [
+    "fritteuse mit öl",
+    "ölfritteuse",
+    "friteuse mit fett"
+   ],
+   "contrast_attributes": [
+    "cooking medium: hot air circulation vs oil immersion"
+   ],
+   "search_language": "de",
+   "confidence": 0.92
+  },
+  "USA": {
+   "primary_name": "air fryer",
+   "formal_name": "air fryer",
+   "search_terms": [
+    "air fryer",
+    "airfryer",
+    "air fryers",
+    "air fryer oven",
+    "best air fryer",
+    "buy air fryer",
+    "air fryer on sale",
+    "large air fryer",
+    "small air fryer",
+    "dual basket air fryer",
+    "digital air fryer",
+    "air fryer price",
+    "air fryer near me",
+    "hot air fryer"
+   ],
+   "excluded_terms": [
+    "recipe",
+    "recipes",
+    "in air fryer",
+    "how to clean",
+    "how to use",
+    "what is",
+    "vs",
+    "liners",
+    "accessories",
+    "parchment",
+    "cook time",
+    "time chart",
+    "frozen",
+    "chicken",
+    "wings",
+    "wikipedia",
+    "manual"
+   ],
+   "antagonist_terms": [
+    "deep fryer",
+    "electric deep fryer",
+    "oil deep fryer"
+   ],
+   "contrast_attributes": [
+    "cooking medium: hot air circulation vs oil immersion"
+   ],
+   "search_language": "en",
+   "confidence": 0.95
+  }
+ },
+ "decaf coffee": {
+  "BRA": {
+   "primary_name": "café descafeinado",
+   "formal_name": "café descafeinado",
+   "search_terms": [
+    "café descafeinado",
+    "cafe descafeinado",
+    "café sem cafeína",
+    "descafeinado",
+    "café descafeinado em pó",
+    "café solúvel descafeinado",
+    "café descafeinado em grãos",
+    "cápsula de café descafeinado",
+    "café descafeinado preço",
+    "comprar café descafeinado",
+    "decaf",
+    "decaf coffee",
+    "café decaf",
+    "espresso descafeinado"
+   ],
+   "excluded_terms": [
+    "o que e",
+    "o que é",
+    "como fazer",
+    "como descafeinar",
+    "receita",
+    "faz mal",
+    "beneficios",
+    "benefícios",
+    "engorda",
+    "tem cafeina",
+    "tem cafeína",
+    "quanto de cafeina",
+    "vs",
+    "diferenca",
+    "diferença",
+    "wikipedia",
+    "significado",
+    "gravidez",
+    "chá",
+    "cha "
+   ],
+   "antagonist_terms": [
+    "café com cafeína",
+    "café tradicional com cafeína",
+    "café normal com cafeína"
+   ],
+   "contrast_attributes": [
+    "caffeine: decaffeinated vs caffeinated"
+   ],
+   "search_language": "pt",
+   "confidence": 0.87
+  },
+  "ESP": {
+   "primary_name": "café descafeinado",
+   "formal_name": "café descafeinado",
+   "search_terms": [
+    "café descafeinado",
+    "cafe descafeinado",
+    "descafeinado",
+    "café sin cafeína",
+    "cápsulas descafeinado",
+    "capsulas de cafe descafeinado",
+    "café descafeinado en grano",
+    "café descafeinado molido",
+    "descafeinado soluble",
+    "café descafeinado precio",
+    "comprar café descafeinado",
+    "decaf",
+    "decaf coffee",
+    "espresso descafeinado"
+   ],
+   "excluded_terms": [
+    "que es",
+    "qué es",
+    "como se hace",
+    "como hacer",
+    "receta",
+    "es malo",
+    "beneficios",
+    "propiedades",
+    "engorda",
+    "tiene cafeina",
+    "tiene cafeína",
+    "cuanta cafeina",
+    "vs",
+    "diferencia",
+    "wikipedia",
+    "significado",
+    "embarazo",
+    "descafeinar"
+   ],
+   "antagonist_terms": [
+    "café con cafeína",
+    "café normal con cafeína",
+    "café cafeinado"
+   ],
+   "contrast_attributes": [
+    "caffeine: decaffeinated vs caffeinated"
+   ],
+   "search_language": "es",
+   "confidence": 0.87
+  },
+  "DEU": {
+   "primary_name": "entkoffeinierter Kaffee",
+   "formal_name": "entkoffeinierter Kaffee",
+   "search_terms": [
+    "entkoffeinierter Kaffee",
+    "Kaffee entkoffeiniert",
+    "koffeinfreier Kaffee",
+    "Kaffee ohne Koffein",
+    "entkoffeinierte Kaffeebohnen",
+    "entkoffeinierter Kaffee kaufen",
+    "Espresso entkoffeiniert",
+    "entkoffeinierter Espresso",
+    "Kaffeekapseln entkoffeiniert",
+    "Kaffeepads entkoffeiniert",
+    "löslicher Kaffee entkoffeiniert",
+    "Instantkaffee entkoffeiniert",
+    "decaf",
+    "decaf coffee",
+    "entkoffeinierter Kaffee Preis"
+   ],
+   "excluded_terms": [
+    "was ist",
+    "wie wird",
+    "herstellung",
+    "selber",
+    "gesund",
+    "ungesund",
+    "wirkung",
+    "nebenwirkungen",
+    "schwangerschaft",
+    "wieviel koffein",
+    "wie viel koffein",
+    "unterschied",
+    "vs",
+    "wikipedia",
+    "rezept",
+    "bedeutung"
+   ],
+   "antagonist_terms": [
+    "Kaffee mit Koffein",
+    "koffeinhaltiger Kaffee",
+    "normaler Kaffee mit Koffein"
+   ],
+   "contrast_attributes": [
+    "caffeine: decaffeinated vs caffeinated"
+   ],
+   "search_language": "de",
+   "confidence": 0.86
+  },
+  "USA": {
+   "primary_name": "decaf coffee",
+   "formal_name": "decaffeinated coffee",
+   "search_terms": [
+    "decaf coffee",
+    "decaffeinated coffee",
+    "decaf",
+    "decaf coffee beans",
+    "decaf ground coffee",
+    "decaf instant coffee",
+    "decaf k cups",
+    "decaf coffee pods",
+    "decaf espresso",
+    "swiss water decaf coffee",
+    "best decaf coffee",
+    "organic decaf coffee",
+    "buy decaf coffee",
+    "decaf coffee near me"
+   ],
+   "excluded_terms": [
+    "what is",
+    "how is",
+    "how to make",
+    "is decaf",
+    "bad for you",
+    "side effects",
+    "benefits",
+    "caffeine content",
+    "how much caffeine",
+    "does decaf",
+    "vs",
+    "difference",
+    "wikipedia",
+    "recipe",
+    "pregnancy",
+    "decaffeinate"
+   ],
+   "antagonist_terms": [
+    "regular caffeinated coffee",
+    "caffeinated coffee",
+    "full caffeine coffee"
+   ],
+   "contrast_attributes": [
+    "caffeine: decaffeinated vs caffeinated"
+   ],
+   "search_language": "en",
+   "confidence": 0.9
+  }
+ },
+ "wireless earbuds": {
+  "BRA": {
+   "primary_name": "fone de ouvido bluetooth",
+   "formal_name": "fone de ouvido intra-auricular sem fio",
+   "search_terms": [
+    "fone de ouvido bluetooth",
+    "fone bluetooth",
+    "fone de ouvido sem fio",
+    "fone sem fio",
+    "earbuds",
+    "wireless earbuds",
+    "fone tws",
+    "tws",
+    "fone bluetooth intra auricular",
+    "fone de ouvido bluetooth preco",
+    "fone de ouvido bluetooth barato",
+    "fone intra auricular sem fio",
+    "true wireless",
+    "fone de ouvido bluetooth com cancelamento de ruido"
+   ],
+   "excluded_terms": [
+    "com fio",
+    "com cabo",
+    "como conectar",
+    "como parear",
+    "como usar",
+    "como limpar",
+    "nao conecta",
+    "nao carrega",
+    "nao liga",
+    "manual",
+    "o que e",
+    "significado",
+    "vs",
+    "wikipedia",
+    "review",
+    "capa para",
+    "case para",
+    "ponteira",
+    "espuma para",
+    "abafador de ruido",
+    "protetor auricular",
+    "aparelho auditivo",
+    "caixa de som",
+    "headset gamer"
+   ],
+   "antagonist_terms": [
+    "fone de ouvido com fio",
+    "fone de ouvido p2 com fio",
+    "headphone bluetooth over ear",
+    "fone de ouvido over ear bluetooth",
+    "fone bluetooth esportivo com fio de pescoco"
+   ],
+   "contrast_attributes": [
+    "connection: wireless bluetooth vs wired cable",
+    "form factor: in-ear earbuds vs over-ear headphones",
+    "form: true wireless separate buds vs neckband connected by cord"
+   ],
+   "search_language": "pt",
+   "confidence": 0.88
+  },
+  "ESP": {
+   "primary_name": "auriculares bluetooth",
+   "formal_name": "auriculares inalámbricos intraaurales",
+   "search_terms": [
+    "auriculares bluetooth",
+    "auriculares inalambricos",
+    "auriculares inalámbricos",
+    "earbuds",
+    "wireless earbuds",
+    "auriculares in ear bluetooth",
+    "auriculares true wireless",
+    "auriculares tws",
+    "auriculares bluetooth baratos",
+    "auriculares bluetooth precio",
+    "auriculares inalambricos deporte",
+    "auriculares boton bluetooth",
+    "auriculares bluetooth cancelacion de ruido"
+   ],
+   "excluded_terms": [
+    "con cable",
+    "como conectar",
+    "como emparejar",
+    "como vincular",
+    "como limpiar",
+    "no conecta",
+    "no carga",
+    "no enciende",
+    "manual",
+    "que es",
+    "significado",
+    "vs",
+    "wikipedia",
+    "funda para",
+    "almohadillas",
+    "repuesto",
+    "tapones para los oidos",
+    "proteccion auditiva",
+    "audifono para sordos",
+    "altavoz bluetooth"
+   ],
+   "antagonist_terms": [
+    "auriculares con cable",
+    "auriculares jack 3.5 con cable",
+    "cascos bluetooth de diadema",
+    "auriculares de diadema inalambricos",
+    "auriculares bluetooth de cuello"
+   ],
+   "contrast_attributes": [
+    "connection: wireless bluetooth vs wired cable",
+    "form factor: in-ear earbuds vs over-ear headphones",
+    "form: true wireless separate buds vs neckband connected by cord"
+   ],
+   "search_language": "es",
+   "confidence": 0.87
+  },
+  "DEU": {
+   "primary_name": "bluetooth kopfhörer in ear",
+   "formal_name": "kabellose In-Ear-Kopfhörer",
+   "search_terms": [
+    "bluetooth kopfhörer in ear",
+    "kabellose kopfhörer in ear",
+    "in ear kopfhörer bluetooth",
+    "true wireless kopfhörer",
+    "wireless earbuds",
+    "earbuds",
+    "kabellose ohrhörer",
+    "bluetooth ohrhörer",
+    "tws kopfhörer",
+    "kabellose in ear kopfhörer test",
+    "bluetooth kopfhörer in ear kaufen",
+    "in ear bluetooth kopfhörer mit noise cancelling",
+    "funk ohrhörer"
+   ],
+   "excluded_terms": [
+    "mit kabel",
+    "kabelgebunden",
+    "verbinden",
+    "koppeln",
+    "anleitung",
+    "bedienungsanleitung",
+    "reinigen",
+    "lädt nicht",
+    "geht nicht",
+    "was ist",
+    "vergleich",
+    "wikipedia",
+    "hülle für",
+    "ersatz",
+    "aufsätze",
+    "gehörschutz",
+    "ohrstöpsel zum schlafen",
+    "hörgerät",
+    "bluetooth lautsprecher"
+   ],
+   "antagonist_terms": [
+    "in ear kopfhörer mit kabel",
+    "kopfhörer mit kabel klinke",
+    "bluetooth over ear kopfhörer",
+    "kabellose over ear kopfhörer",
+    "bluetooth kopfhörer mit nackenbügel"
+   ],
+   "contrast_attributes": [
+    "connection: wireless bluetooth vs wired cable",
+    "form factor: in-ear earbuds vs over-ear headphones",
+    "form: true wireless separate buds vs neckband connected by cord"
+   ],
+   "search_language": "de",
+   "confidence": 0.86
+  },
+  "USA": {
+   "primary_name": "wireless earbuds",
+   "formal_name": "true wireless in-ear earphones",
+   "search_terms": [
+    "wireless earbuds",
+    "bluetooth earbuds",
+    "earbuds",
+    "wireless ear buds",
+    "true wireless earbuds",
+    "wireless earphones",
+    "tws earbuds",
+    "best wireless earbuds",
+    "cheap wireless earbuds",
+    "wireless earbuds with noise cancelling",
+    "bluetooth earphones wireless",
+    "wireless earbuds for running",
+    "earbuds wireless bluetooth"
+   ],
+   "excluded_terms": [
+    "wired",
+    "how to pair",
+    "how to connect",
+    "how to clean",
+    "not charging",
+    "won't connect",
+    "not working",
+    "manual",
+    "what are",
+    "vs",
+    "wikipedia",
+    "reddit",
+    "case for",
+    "replacement tips",
+    "ear tips",
+    "earplugs",
+    "hearing protection",
+    "hearing aid",
+    "bluetooth speaker"
+   ],
+   "antagonist_terms": [
+    "wired earbuds",
+    "wired earphones with mic",
+    "over ear bluetooth headphones",
+    "wireless over ear headphones",
+    "neckband bluetooth earphones"
+   ],
+   "contrast_attributes": [
+    "connection: wireless bluetooth vs wired cable",
+    "form factor: in-ear earbuds vs over-ear headphones",
+    "form: true wireless separate buds vs neckband connected by cord"
+   ],
+   "search_language": "en",
+   "confidence": 0.9
+  }
+ },
+ "induction cooktop": {
+  "BRA": {
+   "primary_name": "cooktop de indução",
+   "formal_name": "cooktop por indução",
+   "search_terms": [
+    "cooktop de indução",
+    "cooktop indução",
+    "fogão de indução",
+    "cooktop indução 4 bocas",
+    "cooktop indução 5 bocas",
+    "cooktop indução 2 bocas",
+    "cooktop de indução portátil",
+    "cooktop por indução",
+    "cooktop indução preço",
+    "cooktop indução 220v",
+    "placa de indução",
+    "induction cooktop"
+   ],
+   "excluded_terms": [
+    "o que e",
+    "como funciona",
+    "receita",
+    "na panela",
+    "panela para",
+    "panelas",
+    "frigideira",
+    "adaptador",
+    "disco de inducao",
+    "vs",
+    "ou gas",
+    "wikipedia",
+    "significado",
+    "como limpar",
+    "nao liga",
+    "nao funciona",
+    "manual",
+    "instalacao",
+    "como instalar",
+    "erro",
+    "conserto",
+    "assistencia"
+   ],
+   "antagonist_terms": [
+    "cooktop a gas",
+    "fogao a gas",
+    "cooktop eletrico",
+    "cooktop vitroceramico",
+    "fogao eletrico"
+   ],
+   "contrast_attributes": [
+    "heat source: induction vs gas flame",
+    "heat source: induction vs radiant electric/ceramic"
+   ],
+   "search_language": "pt",
+   "confidence": 0.88
+  },
+  "ESP": {
+   "primary_name": "placa de inducción",
+   "formal_name": "encimera de inducción",
+   "search_terms": [
+    "placa de inducción",
+    "placa inducción",
+    "encimera de inducción",
+    "cocina de inducción",
+    "placa de inducción 60 cm",
+    "placa de inducción 80 cm",
+    "placa de inducción portátil",
+    "placa de inducción 3 fuegos",
+    "placa de inducción flexible",
+    "inducción portátil",
+    "precio placa de inducción",
+    "induction cooktop"
+   ],
+   "excluded_terms": [
+    "que es",
+    "como funciona",
+    "receta",
+    "sartenes",
+    "sarten",
+    "ollas",
+    "cacerola",
+    "adaptador",
+    "disco adaptador",
+    "vs",
+    "o vitroceramica",
+    "o gas",
+    "wikipedia",
+    "significado",
+    "no enciende",
+    "error",
+    "reparar",
+    "reparacion",
+    "limpiar",
+    "manual",
+    "instalacion",
+    "consumo"
+   ],
+   "antagonist_terms": [
+    "placa de gas",
+    "cocina de gas",
+    "encimera de gas",
+    "placa vitrocerámica",
+    "vitrocerámica radiante",
+    "placa eléctrica"
+   ],
+   "contrast_attributes": [
+    "heat source: induction vs gas flame",
+    "heat source: induction vs radiant ceramic (vitroceramic)"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "Induktionskochfeld",
+   "formal_name": "Induktionskochfeld",
+   "search_terms": [
+    "Induktionskochfeld",
+    "Induktionskochfeld autark",
+    "Kochfeld Induktion",
+    "Induktionsfeld",
+    "Induktionskochplatte",
+    "Induktionsplatte",
+    "Induktionskochfeld 80 cm",
+    "Induktionskochfeld 60 cm",
+    "Induktionskochfeld mit Dunstabzug",
+    "Induktionskochfeld kaufen",
+    "Induktionskochfeld Preis",
+    "induction cooktop"
+   ],
+   "excluded_terms": [
+    "was ist",
+    "wie funktioniert",
+    "Rezept",
+    "Topf",
+    "Pfanne",
+    "Geschirr",
+    "Adapterplatte",
+    "vs",
+    "oder Gas",
+    "Vergleich",
+    "Wikipedia",
+    "reinigen",
+    "Fehler",
+    "geht nicht",
+    "Bedienungsanleitung",
+    "Anleitung",
+    "anschließen",
+    "Anschluss",
+    "Reparatur",
+    "Stromverbrauch"
+   ],
+   "antagonist_terms": [
+    "Gaskochfeld",
+    "Gasherd",
+    "Cerankochfeld",
+    "Glaskeramik Kochfeld",
+    "Elektrokochfeld",
+    "Strahlungskochfeld"
+   ],
+   "contrast_attributes": [
+    "heat source: induction vs gas flame",
+    "heat source: induction vs radiant ceramic (Ceran) electric"
+   ],
+   "search_language": "de",
+   "confidence": 0.88
+  },
+  "USA": {
+   "primary_name": "induction cooktop",
+   "formal_name": "induction cooktop",
+   "search_terms": [
+    "induction cooktop",
+    "portable induction cooktop",
+    "30 inch induction cooktop",
+    "36 inch induction cooktop",
+    "induction stove top",
+    "induction burner",
+    "induction hob",
+    "built in induction cooktop",
+    "countertop induction burner",
+    "induction cooktop price",
+    "double induction cooktop",
+    "buy induction cooktop"
+   ],
+   "excluded_terms": [
+    "recipe",
+    "what is",
+    "how does",
+    "how do",
+    "cookware",
+    "pans",
+    "pots",
+    "skillet",
+    "converter disk",
+    "vs",
+    "or gas",
+    "reddit",
+    "wikipedia",
+    "not working",
+    "error code",
+    "how to clean",
+    "manual",
+    "install",
+    "installation",
+    "repair",
+    "pros and cons",
+    "induction range",
+    "slide in range"
+   ],
+   "antagonist_terms": [
+    "gas cooktop",
+    "gas stove top",
+    "electric cooktop",
+    "radiant electric cooktop",
+    "ceramic glass cooktop"
+   ],
+   "contrast_attributes": [
+    "heat source: induction vs gas flame",
+    "heat source: induction vs radiant electric"
+   ],
+   "search_language": "en",
+   "confidence": 0.92
+  }
+ },
+ "electric toothbrush": {
+  "BRA": {
+   "primary_name": "escova de dente elétrica",
+   "formal_name": "escova dental elétrica",
+   "search_terms": [
+    "escova de dente elétrica",
+    "escova de dente eletrica",
+    "escova dental elétrica",
+    "escova de dentes elétrica",
+    "escova elétrica de dente",
+    "escova elétrica dental",
+    "electric toothbrush",
+    "escova de dente elétrica preço",
+    "escova de dente elétrica recarregável",
+    "escova de dente elétrica sônica",
+    "comprar escova de dente elétrica",
+    "escova de dente elétrica infantil"
+   ],
+   "excluded_terms": [
+    "refil",
+    "refis",
+    "cabeca",
+    "cabeça de reposicao",
+    "carregador",
+    "como usar",
+    "como limpar",
+    "nao liga",
+    "o que e",
+    "manual",
+    "wikipedia",
+    "vs",
+    "faz mal",
+    "vale a pena",
+    "aluguel"
+   ],
+   "antagonist_terms": [
+    "escova de dente manual",
+    "escova dental manual",
+    "irrigador oral",
+    "jato de agua dental"
+   ],
+   "contrast_attributes": [
+    "power: electric powered vs manual",
+    "cleaning action: moving bristles vs water jet"
+   ],
+   "search_language": "pt",
+   "confidence": 0.92
+  },
+  "ESP": {
+   "primary_name": "cepillo de dientes eléctrico",
+   "formal_name": "cepillo dental eléctrico",
+   "search_terms": [
+    "cepillo de dientes eléctrico",
+    "cepillo de dientes electrico",
+    "cepillo eléctrico",
+    "cepillo dental eléctrico",
+    "cepillo de dientes eléctrico recargable",
+    "cepillo de dientes sónico",
+    "electric toothbrush",
+    "comprar cepillo de dientes eléctrico",
+    "cepillo de dientes eléctrico precio",
+    "cepillo de dientes eléctrico infantil",
+    "cepillo de dientes eléctrico oferta"
+   ],
+   "excluded_terms": [
+    "cabezal",
+    "cabezales",
+    "recambio",
+    "cargador",
+    "manual",
+    "como usar",
+    "como limpiar",
+    "no carga",
+    "no funciona",
+    "que es",
+    "wikipedia",
+    "vs",
+    "opiniones foro",
+    "segunda mano"
+   ],
+   "antagonist_terms": [
+    "cepillo de dientes manual",
+    "cepillo dental manual",
+    "irrigador bucal",
+    "hidropulsor dental"
+   ],
+   "contrast_attributes": [
+    "power: electric powered vs manual",
+    "cleaning action: moving bristles vs water jet"
+   ],
+   "search_language": "es",
+   "confidence": 0.92
+  },
+  "DEU": {
+   "primary_name": "elektrische Zahnbürste",
+   "formal_name": "elektrische Zahnbürste",
+   "search_terms": [
+    "elektrische Zahnbürste",
+    "elektrische zahnbuerste",
+    "Zahnbürste elektrisch",
+    "Elektrozahnbürste",
+    "Schallzahnbürste",
+    "elektrische Zahnbürste kaufen",
+    "elektrische Zahnbürste Angebot",
+    "elektrische Zahnbürste Kinder",
+    "elektrische Zahnbürste Preis",
+    "electric toothbrush",
+    "Akku Zahnbürste",
+    "Rotationszahnbürste"
+   ],
+   "excluded_terms": [
+    "aufsteckbürste",
+    "aufsteckbuersten",
+    "ersatzbürste",
+    "bürstenkopf",
+    "ladegerät",
+    "ladestation",
+    "handzahnbürste",
+    "reinigen",
+    "reparieren",
+    "anleitung",
+    "was ist",
+    "vs",
+    "wikipedia",
+    "gebraucht"
+   ],
+   "antagonist_terms": [
+    "Handzahnbürste",
+    "manuelle Zahnbürste",
+    "Munddusche",
+    "Wasserstrahl Zahnreinigung"
+   ],
+   "contrast_attributes": [
+    "power: electric powered vs manual",
+    "cleaning action: moving bristles vs water jet"
+   ],
+   "search_language": "de",
+   "confidence": 0.91
+  },
+  "USA": {
+   "primary_name": "electric toothbrush",
+   "formal_name": "power toothbrush",
+   "search_terms": [
+    "electric toothbrush",
+    "electric tooth brush",
+    "rechargeable toothbrush",
+    "sonic toothbrush",
+    "power toothbrush",
+    "best electric toothbrush",
+    "electric toothbrush for kids",
+    "electric toothbrush price",
+    "buy electric toothbrush",
+    "electric toothbrush deals",
+    "battery toothbrush",
+    "electric toothbrush near me"
+   ],
+   "excluded_terms": [
+    "replacement head",
+    "brush head",
+    "refill",
+    "charger",
+    "charging",
+    "manual toothbrush",
+    "how to use",
+    "how to clean",
+    "not working",
+    "won't charge",
+    "repair",
+    "vs",
+    "wikipedia",
+    "review reddit",
+    "used"
+   ],
+   "antagonist_terms": [
+    "manual toothbrush",
+    "regular toothbrush",
+    "water flosser",
+    "oral irrigator"
+   ],
+   "contrast_attributes": [
+    "power: electric powered vs manual",
+    "cleaning action: moving bristles vs water jet"
+   ],
+   "search_language": "en",
+   "confidence": 0.93
+  }
+ },
+ "lactose-free milk": {
+  "BRA": {
+   "primary_name": "leite sem lactose",
+   "formal_name": "leite com baixo teor de lactose",
+   "search_terms": [
+    "leite sem lactose",
+    "leite zero lactose",
+    "leite sem lactose integral",
+    "leite sem lactose desnatado",
+    "leite semidesnatado sem lactose",
+    "leite deslactosado",
+    "leite em po sem lactose",
+    "leite sem lactose 1 litro",
+    "leite sem lactose preco",
+    "leite uht sem lactose",
+    "lactose free milk",
+    "leite sem lactose caixa"
+   ],
+   "excluded_terms": [
+    "o que e",
+    "faz mal",
+    "engorda",
+    "beneficios",
+    "intolerancia",
+    "alergia",
+    "receita",
+    "como fazer",
+    "bolo",
+    "vs",
+    "diferenca",
+    "tabela nutricional",
+    "wikipedia",
+    "condensado",
+    "requeijao",
+    "iogurte",
+    "queijo",
+    "creme de leite",
+    "doce de leite",
+    "achocolatado",
+    "manteiga",
+    "leite de magnesia",
+    "formula",
+    "bebe"
+   ],
+   "antagonist_terms": [
+    "leite com lactose",
+    "leite integral comum",
+    "leite normal"
+   ],
+   "contrast_attributes": [
+    "lactose: lactose-free vs regular lactose-containing milk"
+   ],
+   "search_language": "pt",
+   "confidence": 0.9
+  },
+  "ESP": {
+   "primary_name": "leche sin lactosa",
+   "formal_name": "leche sin lactosa",
+   "search_terms": [
+    "leche sin lactosa",
+    "leche sin lactosa desnatada",
+    "leche sin lactosa entera",
+    "leche semidesnatada sin lactosa",
+    "leche 0% lactosa",
+    "leche sin lactosa precio",
+    "leche sin lactosa 1 litro",
+    "leche deslactosada",
+    "leche en polvo sin lactosa",
+    "comprar leche sin lactosa",
+    "lactose free milk"
+   ],
+   "excluded_terms": [
+    "que es",
+    "beneficios",
+    "engorda",
+    "propiedades",
+    "intolerancia",
+    "alergia",
+    "receta",
+    "como hacer",
+    "vs",
+    "diferencia",
+    "wikipedia",
+    "yogur",
+    "queso",
+    "nata",
+    "mantequilla",
+    "leche condensada",
+    "batido",
+    "helado",
+    "formula",
+    "bebe"
+   ],
+   "antagonist_terms": [
+    "leche con lactosa",
+    "leche normal",
+    "leche entera normal"
+   ],
+   "contrast_attributes": [
+    "lactose: lactose-free vs regular lactose-containing milk"
+   ],
+   "search_language": "es",
+   "confidence": 0.89
+  },
+  "DEU": {
+   "primary_name": "laktosefreie milch",
+   "formal_name": "laktosefreie Milch",
+   "search_terms": [
+    "laktosefreie milch",
+    "milch laktosefrei",
+    "lactosefreie milch",
+    "laktosefrei milch",
+    "laktosefreie h-milch",
+    "laktosefreie frischmilch",
+    "laktosefreie vollmilch",
+    "laktosefreie milch 1 5 fett",
+    "laktosefreie milch kaufen",
+    "laktosefreie milch preis",
+    "laktosefreie milchpulver",
+    "lactose free milk"
+   ],
+   "excluded_terms": [
+    "was ist",
+    "rezept",
+    "selber machen",
+    "gesund",
+    "unterschied",
+    "vs",
+    "wikipedia",
+    "test",
+    "laktoseintoleranz",
+    "unvertraeglichkeit",
+    "joghurt",
+    "quark",
+    "sahne",
+    "butter",
+    "kaese",
+    "käse",
+    "frischkaese",
+    "eis",
+    "schokolade",
+    "pudding",
+    "babynahrung"
+   ],
+   "antagonist_terms": [
+    "milch mit laktose",
+    "normale milch",
+    "herkoemmliche milch"
+   ],
+   "contrast_attributes": [
+    "lactose: lactose-free vs regular lactose-containing milk"
+   ],
+   "search_language": "de",
+   "confidence": 0.88
+  },
+  "USA": {
+   "primary_name": "lactose free milk",
+   "formal_name": "lactose-free milk",
+   "search_terms": [
+    "lactose free milk",
+    "lactose-free milk",
+    "lactose free whole milk",
+    "lactose free 2% milk",
+    "lactose free skim milk",
+    "lactose free milk near me",
+    "lactose free milk price",
+    "buy lactose free milk",
+    "lactose free milk gallon",
+    "lactose free chocolate milk",
+    "lactose free milk powder",
+    "lactose free ultra filtered milk"
+   ],
+   "excluded_terms": [
+    "what is",
+    "benefits",
+    "vs",
+    "difference",
+    "recipe",
+    "how to make",
+    "is lactose free milk",
+    "wikipedia",
+    "healthy",
+    "side effects",
+    "lactose intolerance",
+    "yogurt",
+    "cheese",
+    "ice cream",
+    "creamer",
+    "half and half",
+    "butter",
+    "cottage",
+    "formula",
+    "baby",
+    "for cats",
+    "for dogs"
+   ],
+   "antagonist_terms": [
+    "regular milk",
+    "milk with lactose",
+    "regular whole milk"
+   ],
+   "contrast_attributes": [
+    "lactose: lactose-free vs regular lactose-containing milk"
+   ],
+   "search_language": "en",
+   "confidence": 0.9
+  }
+ },
+ "robot vacuum": {
+  "BRA": {
+   "primary_name": "robô aspirador",
+   "formal_name": "aspirador de pó robô",
+   "search_terms": [
+    "robô aspirador",
+    "robo aspirador",
+    "aspirador robô",
+    "aspirador robo",
+    "robô aspirador de pó",
+    "aspirador de pó robô",
+    "robo aspirador de po",
+    "robot vacuum",
+    "robô aspirador preço",
+    "robô aspirador barato",
+    "aspirador robô inteligente",
+    "robô aspirador e passa pano",
+    "aspirador de po robo preco"
+   ],
+   "excluded_terms": [
+    "o que e",
+    "o que é",
+    "como funciona",
+    "vs",
+    "wikipedia",
+    "significado",
+    "vale a pena",
+    "como limpar",
+    "como usar",
+    "nao liga",
+    "não liga",
+    "não carrega",
+    "nao carrega",
+    "resetar",
+    "manual",
+    "conserto",
+    "assistencia tecnica",
+    "assistência técnica",
+    "peca",
+    "peça",
+    "escova de reposicao",
+    "filtro de reposicao",
+    "bateria",
+    "roda",
+    "sensor",
+    "aplicativo",
+    "app",
+    "wifi nao conecta",
+    "erro"
+   ],
+   "antagonist_terms": [
+    "aspirador de pó vertical",
+    "aspirador de pó sem fio",
+    "aspirador de pó portátil",
+    "aspirador de pó manual",
+    "robô passa pano",
+    "robô esfregão"
+   ],
+   "contrast_attributes": [
+    "operation: autonomous robot vs handheld manual vacuum",
+    "form: self-driving disc vs upright/stick vacuum",
+    "cleaning mode: vacuuming vs mopping robot"
+   ],
+   "search_language": "pt",
+   "confidence": 0.9
+  },
+  "ESP": {
+   "primary_name": "robot aspirador",
+   "formal_name": "aspiradora robot",
+   "search_terms": [
+    "robot aspirador",
+    "aspirador robot",
+    "robot aspiradora",
+    "aspiradora robot",
+    "robot vacuum",
+    "robot aspirador barato",
+    "robot aspirador precio",
+    "robot aspirador y fregasuelos",
+    "robot aspirador con vaciado automatico",
+    "robot aspirador oferta",
+    "robot limpiasuelos"
+   ],
+   "excluded_terms": [
+    "que es",
+    "qué es",
+    "como funciona",
+    "vs",
+    "wikipedia",
+    "significado",
+    "merece la pena",
+    "como limpiar",
+    "como usar",
+    "no carga",
+    "no enciende",
+    "no conecta",
+    "resetear",
+    "manual",
+    "reparar",
+    "reparacion",
+    "servicio tecnico",
+    "recambio",
+    "repuesto",
+    "cepillo lateral",
+    "filtro",
+    "bateria",
+    "batería",
+    "rueda",
+    "sensor",
+    "error"
+   ],
+   "antagonist_terms": [
+    "aspirador escoba",
+    "aspirador sin cable",
+    "aspirador de mano",
+    "aspirador trineo",
+    "robot friegasuelos",
+    "robot fregasuelos"
+   ],
+   "contrast_attributes": [
+    "operation: autonomous robot vs handheld manual vacuum",
+    "form: self-driving disc vs upright/stick vacuum",
+    "cleaning mode: vacuuming vs mopping robot"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "saugroboter",
+   "formal_name": "Staubsaugerroboter",
+   "search_terms": [
+    "saugroboter",
+    "staubsauger roboter",
+    "staubsaugerroboter",
+    "roboter staubsauger",
+    "robot vacuum",
+    "saugroboter kaufen",
+    "saugroboter günstig",
+    "saugroboter mit absaugstation",
+    "saugroboter angebot",
+    "saug roboter",
+    "reinigungsroboter"
+   ],
+   "excluded_terms": [
+    "was ist",
+    "wie funktioniert",
+    "vs",
+    "wikipedia",
+    "bedeutung",
+    "lohnt sich",
+    "reinigen",
+    "wie reinigt man",
+    "geht nicht",
+    "lädt nicht",
+    "ladet nicht",
+    "fehler",
+    "zurücksetzen",
+    "zurucksetzen",
+    "anleitung",
+    "bedienungsanleitung",
+    "reparatur",
+    "ersatzteil",
+    "ersatzteile",
+    "seitenbürste",
+    "filter",
+    "akku",
+    "rolle",
+    "sensor",
+    "app verbinden"
+   ],
+   "antagonist_terms": [
+    "akkustaubsauger",
+    "stielstaubsauger",
+    "handstaubsauger",
+    "bodenstaubsauger",
+    "wischroboter"
+   ],
+   "contrast_attributes": [
+    "operation: autonomous robot vs handheld manual vacuum",
+    "form: self-driving disc vs upright/stick vacuum",
+    "cleaning mode: vacuuming vs mopping robot"
+   ],
+   "search_language": "de",
+   "confidence": 0.9
+  },
+  "USA": {
+   "primary_name": "robot vacuum",
+   "formal_name": "robotic vacuum cleaner",
+   "search_terms": [
+    "robot vacuum",
+    "robot vacuum cleaner",
+    "robotic vacuum",
+    "robotic vacuum cleaner",
+    "robot vacuum and mop",
+    "self emptying robot vacuum",
+    "automatic vacuum cleaner",
+    "robot vacuum on sale",
+    "cheap robot vacuum",
+    "robot vacuum for pet hair",
+    "vacuum robot",
+    "robo vacuum"
+   ],
+   "excluded_terms": [
+    "what is",
+    "how does",
+    "how do",
+    "vs",
+    "wikipedia",
+    "worth it",
+    "how to clean",
+    "how to use",
+    "won't charge",
+    "wont charge",
+    "not charging",
+    "won't turn on",
+    "error",
+    "reset",
+    "manual",
+    "troubleshoot",
+    "repair",
+    "parts",
+    "replacement brush",
+    "side brush",
+    "filter",
+    "battery",
+    "wheel",
+    "sensor",
+    "app not"
+   ],
+   "antagonist_terms": [
+    "stick vacuum",
+    "cordless stick vacuum",
+    "upright vacuum",
+    "handheld vacuum",
+    "canister vacuum",
+    "robot mop"
+   ],
+   "contrast_attributes": [
+    "operation: autonomous robot vs handheld manual vacuum",
+    "form: self-driving disc vs upright/stick vacuum",
+    "cleaning mode: vacuuming vs mopping robot"
+   ],
+   "search_language": "en",
+   "confidence": 0.93
+  }
+ },
+ "alcohol-free beer": {
+  "BRA": {
+   "primary_name": "cerveja sem álcool",
+   "formal_name": "cerveja sem álcool",
+   "search_terms": [
+    "cerveja sem álcool",
+    "cerveja sem alcool",
+    "cerveja zero álcool",
+    "cerveja zero alcool",
+    "cerveja 0 0",
+    "cerveja 0% álcool",
+    "cerveja sem álcool preço",
+    "cerveja sem álcool comprar",
+    "cerveja não alcoólica",
+    "cerveja sem álcool fardo",
+    "cerveja sem álcool lata",
+    "non alcoholic beer",
+    "alcohol free beer",
+    "zero alcohol beer"
+   ],
+   "excluded_terms": [
+    "o que e",
+    "o que é",
+    "receita",
+    "como fazer",
+    "faz mal",
+    "engorda",
+    "beneficios",
+    "benefícios",
+    "gravidez",
+    "gravida",
+    "grávida",
+    "amamentacao",
+    "tem alcool mesmo",
+    "bafometro",
+    "bafômetro",
+    "vs",
+    "wikipedia",
+    "significado",
+    "quantas calorias",
+    "pode dirigir",
+    "sem gluten",
+    "sem glúten",
+    "chopp"
+   ],
+   "antagonist_terms": [
+    "cerveja com álcool",
+    "cerveja comum",
+    "cerveja tradicional",
+    "vinho sem álcool"
+   ],
+   "contrast_attributes": [
+    "alcohol content: 0.0% alcohol-free vs standard alcoholic",
+    "base beverage: beer vs wine (both alcohol-free)"
+   ],
+   "search_language": "pt",
+   "confidence": 0.9
+  },
+  "ESP": {
+   "primary_name": "cerveza sin alcohol",
+   "formal_name": "cerveza sin alcohol",
+   "search_terms": [
+    "cerveza sin alcohol",
+    "cerveza 0 0",
+    "cerveza 0,0",
+    "cerveza sin",
+    "cerveza 0% alcohol",
+    "cerveza sin alcohol precio",
+    "cerveza sin alcohol comprar",
+    "cerveza sin alcohol pack",
+    "cerveza sin alcohol lata",
+    "cerveza sin gluten y sin alcohol",
+    "non alcoholic beer",
+    "alcohol free beer",
+    "zero alcohol beer"
+   ],
+   "excluded_terms": [
+    "que es",
+    "qué es",
+    "receta",
+    "como hacer",
+    "engorda",
+    "beneficios",
+    "hace dano",
+    "hace daño",
+    "embarazo",
+    "embarazada",
+    "lactancia",
+    "vs",
+    "wikipedia",
+    "significado",
+    "calorias",
+    "calorías",
+    "es buena",
+    "puedo conducir",
+    "alcoholemia"
+   ],
+   "antagonist_terms": [
+    "cerveza con alcohol",
+    "cerveza normal",
+    "cerveza tradicional",
+    "vino sin alcohol"
+   ],
+   "contrast_attributes": [
+    "alcohol content: 0.0% alcohol-free vs standard alcoholic",
+    "base beverage: beer vs wine (both alcohol-free)"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "alkoholfreies bier",
+   "formal_name": "alkoholfreies Bier",
+   "search_terms": [
+    "alkoholfreies bier",
+    "bier ohne alkohol",
+    "alkoholfreies bier kaufen",
+    "alkoholfrei bier",
+    "alkoholfreies bier angebot",
+    "alkoholfreies bier kasten",
+    "alkoholfreies weizen",
+    "alkoholfreies pils",
+    "alkoholfreies helles",
+    "0,0 bier",
+    "bier 0,0",
+    "alkoholfreies bier test",
+    "non alcoholic beer",
+    "alcohol free beer"
+   ],
+   "excluded_terms": [
+    "selber machen",
+    "herstellung",
+    "wie wird",
+    "rezept",
+    "warum",
+    "ist gesund",
+    "gesund",
+    "wikipedia",
+    "vs",
+    "unterschied",
+    "kalorien",
+    "schwanger",
+    "schwangerschaft",
+    "stillzeit",
+    "autofahren",
+    "promille",
+    "wirklich alkoholfrei",
+    "definition"
+   ],
+   "antagonist_terms": [
+    "bier mit alkohol",
+    "normales bier",
+    "alkoholhaltiges bier",
+    "alkoholfreier wein"
+   ],
+   "contrast_attributes": [
+    "alcohol content: 0.0% alcohol-free vs standard alcoholic",
+    "base beverage: beer vs wine (both alcohol-free)"
+   ],
+   "search_language": "de",
+   "confidence": 0.9
+  },
+  "USA": {
+   "primary_name": "non alcoholic beer",
+   "formal_name": "non-alcoholic beer",
+   "search_terms": [
+    "non alcoholic beer",
+    "na beer",
+    "nonalcoholic beer",
+    "alcohol free beer",
+    "non alcoholic beer near me",
+    "zero alcohol beer",
+    "0.0 beer",
+    "best non alcoholic beer",
+    "buy non alcoholic beer",
+    "non alcoholic ipa",
+    "non alcoholic lager",
+    "non alcoholic beer 12 pack",
+    "alcohol removed beer",
+    "dealcoholized beer"
+   ],
+   "excluded_terms": [
+    "recipe",
+    "how to make",
+    "how is",
+    "wikipedia",
+    "vs",
+    "does it have alcohol",
+    "how much alcohol",
+    "while pregnant",
+    "pregnancy",
+    "is it healthy",
+    "calories",
+    "bad for you",
+    "breathalyzer",
+    "meaning",
+    "alcoholic"
+   ],
+   "antagonist_terms": [
+    "regular beer",
+    "beer with alcohol",
+    "alcoholic beer",
+    "non alcoholic wine"
+   ],
+   "contrast_attributes": [
+    "alcohol content: 0.0% alcohol-free vs standard alcoholic",
+    "base beverage: beer vs wine (both alcohol-free)"
+   ],
+   "search_language": "en",
+   "confidence": 0.92
+  }
+ },
+ "gas grill": {
+  "BRA": {
+   "primary_name": "churrasqueira a gás",
+   "formal_name": "churrasqueira a gás",
+   "search_terms": [
+    "churrasqueira a gás",
+    "churrasqueira a gas",
+    "churrasqueira gás",
+    "churrasqueira a gás preço",
+    "churrasqueira a gás portátil",
+    "churrasqueira a gás profissional",
+    "churrasqueira a gás embutir",
+    "grill a gás",
+    "gas grill",
+    "churrasqueira a gás inox",
+    "churrasqueira a gás 3 queimadores",
+    "churrasqueira a gás comprar",
+    "barbecue a gás"
+   ],
+   "excluded_terms": [
+    "carvao",
+    "carvão",
+    "eletrica",
+    "elétrica",
+    "a lenha",
+    "alvenaria",
+    "pedra sabao",
+    "receita",
+    "como fazer",
+    "como acender",
+    "como limpar",
+    "como usar",
+    "na airfryer",
+    "no forno",
+    "nao acende",
+    "não acende",
+    "manual",
+    "aluguel",
+    "alugar",
+    "conserto",
+    "pecas",
+    "peças",
+    "grelha avulsa",
+    "capa para",
+    "o que e",
+    "o que é",
+    "vs",
+    "significado",
+    "wikipedia"
+   ],
+   "antagonist_terms": [
+    "churrasqueira a carvão",
+    "churrasqueira elétrica",
+    "churrasqueira a lenha"
+   ],
+   "contrast_attributes": [
+    "fuel: gas vs charcoal",
+    "fuel: gas vs electric",
+    "fuel: gas vs wood"
+   ],
+   "search_language": "pt",
+   "confidence": 0.9
+  },
+  "ESP": {
+   "primary_name": "barbacoa de gas",
+   "formal_name": "barbacoa de gas",
+   "search_terms": [
+    "barbacoa de gas",
+    "barbacoa gas",
+    "barbacoa a gas",
+    "barbacoas de gas",
+    "barbacoa de gas precio",
+    "barbacoa de gas portatil",
+    "barbacoa de gas 3 quemadores",
+    "parrilla de gas",
+    "asador de gas",
+    "gas grill",
+    "barbacoa de gas butano",
+    "barbacoa de gas comprar",
+    "grill de gas"
+   ],
+   "excluded_terms": [
+    "carbon",
+    "carbón",
+    "electrica",
+    "eléctrica",
+    "de leña",
+    "de lena",
+    "de obra",
+    "piedra volcanica",
+    "receta",
+    "como encender",
+    "como limpiar",
+    "como usar",
+    "limpiar",
+    "recambios",
+    "repuestos",
+    "funda para",
+    "parrilla de repuesto",
+    "alquiler",
+    "manual",
+    "que es",
+    "qué es",
+    "vs",
+    "significado",
+    "wikipedia"
+   ],
+   "antagonist_terms": [
+    "barbacoa de carbón",
+    "barbacoa eléctrica",
+    "barbacoa de leña"
+   ],
+   "contrast_attributes": [
+    "fuel: gas vs charcoal",
+    "fuel: gas vs electric",
+    "fuel: gas vs wood"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "gasgrill",
+   "formal_name": "Gasgrill",
+   "search_terms": [
+    "gasgrill",
+    "gas grill",
+    "gasgrill kaufen",
+    "gasgrill test",
+    "gasgrill 3 brenner",
+    "gasgrill 4 brenner",
+    "gasgrill mit seitenbrenner",
+    "gasgrill angebot",
+    "gasgrill günstig",
+    "gasgrill gusseisen",
+    "gasgriller",
+    "gas barbecue",
+    "gasgrill edelstahl",
+    "gasgrill klein"
+   ],
+   "excluded_terms": [
+    "holzkohle",
+    "elektro",
+    "pellet",
+    "smoker",
+    "reinigen",
+    "rezept",
+    "rezepte",
+    "anleitung",
+    "bedienungsanleitung",
+    "zubehör",
+    "zubehoer",
+    "ersatzteile",
+    "reparieren",
+    "mieten",
+    "abdeckhaube",
+    "gasflasche",
+    "was ist",
+    "vs",
+    "unterschied",
+    "wikipedia"
+   ],
+   "antagonist_terms": [
+    "holzkohlegrill",
+    "elektrogrill",
+    "pelletgrill"
+   ],
+   "contrast_attributes": [
+    "fuel: gas vs charcoal",
+    "fuel: gas vs electric",
+    "fuel: gas vs wood pellets"
+   ],
+   "search_language": "de",
+   "confidence": 0.9
+  },
+  "USA": {
+   "primary_name": "gas grill",
+   "formal_name": "gas grill",
+   "search_terms": [
+    "gas grill",
+    "propane grill",
+    "gas grills",
+    "gas bbq grill",
+    "natural gas grill",
+    "gas barbecue grill",
+    "gas grill for sale",
+    "gas grills on sale",
+    "outdoor gas grill",
+    "portable gas grill",
+    "small gas grill",
+    "best gas grill",
+    "gas grill near me",
+    "2 burner gas grill",
+    "4 burner gas grill",
+    "built in gas grill"
+   ],
+   "excluded_terms": [
+    "charcoal",
+    "electric",
+    "pellet",
+    "recipe",
+    "how to clean",
+    "how to use",
+    "how to light",
+    "cleaning",
+    "cover",
+    "grates",
+    "igniter",
+    "burner replacement",
+    "parts",
+    "repair",
+    "regulator",
+    "propane tank",
+    "rental",
+    "rent",
+    "manual",
+    "what is",
+    "vs",
+    "wikipedia"
+   ],
+   "antagonist_terms": [
+    "charcoal grill",
+    "electric grill",
+    "pellet grill"
+   ],
+   "contrast_attributes": [
+    "fuel: gas vs charcoal",
+    "fuel: gas vs electric",
+    "fuel: gas vs wood pellets"
+   ],
+   "search_language": "en",
+   "confidence": 0.93
+  }
+ },
+ "mechanical keyboard": {
+  "BRA": {
+   "primary_name": "teclado mecânico",
+   "formal_name": "teclado mecânico",
+   "search_terms": [
+    "teclado mecânico",
+    "teclado mecanico",
+    "teclado mecânico gamer",
+    "mechanical keyboard",
+    "teclado mecânico sem fio",
+    "teclado mecânico barato",
+    "teclado mecanico abnt2",
+    "teclado mecânico 60%",
+    "teclado mecânico 75%",
+    "teclado mecânico tkl",
+    "teclado mecânico bluetooth",
+    "teclado mecânico rgb",
+    "teclado mecânico preço",
+    "comprar teclado mecânico",
+    "teclado gamer mecânico"
+   ],
+   "excluded_terms": [
+    "o que e",
+    "oque e",
+    "vs",
+    "significado",
+    "wikipedia",
+    "como limpar",
+    "como montar",
+    "lubrificar",
+    "lube",
+    "switch",
+    "keycap",
+    "teclado musical",
+    "piano",
+    "maquina de escrever",
+    "reparo",
+    "manual",
+    "nao funciona",
+    "configurar",
+    "asmr",
+    "som do teclado"
+   ],
+   "antagonist_terms": [
+    "teclado de membrana",
+    "teclado membrana",
+    "teclado semi mecânico",
+    "teclado chiclete"
+   ],
+   "contrast_attributes": [
+    "switch type: mechanical switches vs rubber dome membrane",
+    "switch type: mechanical switches vs scissor/chiclet low-profile"
+   ],
+   "search_language": "pt",
+   "confidence": 0.92
+  },
+  "ESP": {
+   "primary_name": "teclado mecánico",
+   "formal_name": "teclado mecánico",
+   "search_terms": [
+    "teclado mecánico",
+    "teclado mecanico",
+    "mechanical keyboard",
+    "teclado mecánico gaming",
+    "teclado mecánico inalámbrico",
+    "teclado mecánico barato",
+    "teclado mecánico 60",
+    "teclado mecánico 75",
+    "teclado mecánico tkl",
+    "teclado mecánico rgb",
+    "teclado mecánico bluetooth",
+    "teclado mecánico español",
+    "comprar teclado mecánico",
+    "teclado gaming mecánico"
+   ],
+   "excluded_terms": [
+    "que es",
+    "vs",
+    "significado",
+    "wikipedia",
+    "como limpiar",
+    "limpiar",
+    "lubricar",
+    "montar",
+    "switch",
+    "keycap",
+    "teclado musical",
+    "piano",
+    "maquina de escribir",
+    "no funciona",
+    "manual",
+    "configurar",
+    "asmr",
+    "sonido del teclado"
+   ],
+   "antagonist_terms": [
+    "teclado de membrana",
+    "teclado membrana",
+    "teclado semi mecánico",
+    "teclado de tijera"
+   ],
+   "contrast_attributes": [
+    "switch type: mechanical switches vs rubber dome membrane",
+    "switch type: mechanical switches vs scissor/chiclet low-profile"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "mechanische tastatur",
+   "formal_name": "mechanische Tastatur",
+   "search_terms": [
+    "mechanische tastatur",
+    "mechanical keyboard",
+    "mechanische tastatur gaming",
+    "gaming tastatur mechanisch",
+    "mechanische tastatur kabellos",
+    "mechanische tastatur bluetooth",
+    "mechanische tastatur 60%",
+    "mechanische tastatur tkl",
+    "mechanische tastatur rgb",
+    "mechanische tastatur kaufen",
+    "mechanische tastatur günstig",
+    "mechanische tastatur qwertz",
+    "mechanische gaming tastatur"
+   ],
+   "excluded_terms": [
+    "was ist",
+    "vs",
+    "wikipedia",
+    "reinigen",
+    "selbst bauen",
+    "bauen",
+    "schmieren",
+    "lube",
+    "switch",
+    "keycap",
+    "keyboard lernen",
+    "keyboard spielen",
+    "keyboard für anfänger",
+    "e-piano",
+    "klavier",
+    "schreibmaschine",
+    "anleitung",
+    "funktioniert nicht",
+    "asmr",
+    "tippgeräusch"
+   ],
+   "antagonist_terms": [
+    "membran tastatur",
+    "rubberdome tastatur",
+    "tastatur mit membranschalter",
+    "flache chiclet tastatur"
+   ],
+   "contrast_attributes": [
+    "switch type: mechanical switches vs rubber dome membrane",
+    "switch type: mechanical switches vs scissor/chiclet low-profile"
+   ],
+   "search_language": "de",
+   "confidence": 0.88
+  },
+  "USA": {
+   "primary_name": "mechanical keyboard",
+   "formal_name": "mechanical keyboard",
+   "search_terms": [
+    "mechanical keyboard",
+    "mechanical gaming keyboard",
+    "wireless mechanical keyboard",
+    "60% mechanical keyboard",
+    "65% mechanical keyboard",
+    "75% mechanical keyboard",
+    "tkl mechanical keyboard",
+    "hot swappable mechanical keyboard",
+    "mechanical keyboard for mac",
+    "rgb mechanical keyboard",
+    "cheap mechanical keyboard",
+    "mechanical keyboard bluetooth",
+    "buy mechanical keyboard",
+    "low profile mechanical keyboard"
+   ],
+   "excluded_terms": [
+    "what is",
+    "vs",
+    "wikipedia",
+    "reddit",
+    "how to clean",
+    "clean",
+    "lube",
+    "lubing",
+    "build",
+    "diy",
+    "switches",
+    "keycaps",
+    "typing test",
+    "sound test",
+    "asmr",
+    "not working",
+    "manual",
+    "software",
+    "driver"
+   ],
+   "antagonist_terms": [
+    "membrane keyboard",
+    "rubber dome keyboard",
+    "scissor switch keyboard",
+    "chiclet keyboard"
+   ],
+   "contrast_attributes": [
+    "switch type: mechanical switches vs rubber dome membrane",
+    "switch type: mechanical switches vs scissor/chiclet low-profile"
+   ],
+   "search_language": "en",
+   "confidence": 0.93
+  }
+ },
+ "sugar-free chocolate": {
+  "BRA": {
+   "primary_name": "chocolate zero açúcar",
+   "formal_name": "chocolate sem adição de açúcar",
+   "search_terms": [
+    "chocolate zero açúcar",
+    "chocolate sem açúcar",
+    "chocolate zero acucar",
+    "chocolate sem acucar",
+    "chocolate diet",
+    "chocolate zero",
+    "barra de chocolate sem açúcar",
+    "chocolate sem adição de açúcar",
+    "chocolate para diabéticos",
+    "chocolate com adoçante",
+    "chocolate com stevia",
+    "chocolate 70% sem açúcar",
+    "bombom sem açúcar",
+    "chocolate low carb",
+    "sugar free chocolate",
+    "chocolate zero açúcar preço",
+    "chocolate sem açúcar comprar",
+    "ovo de páscoa sem açúcar",
+    "chocolate em pó zero açúcar"
+   ],
+   "excluded_terms": [
+    "receita",
+    "como fazer",
+    "mousse",
+    "bolo",
+    "brigadeiro",
+    "cobertura",
+    "derreter",
+    "faz mal",
+    "engorda",
+    "o que e",
+    "o que é",
+    "vs",
+    "diferenca",
+    "diferença",
+    "wikipedia",
+    "beneficios",
+    "benefícios",
+    "light",
+    "cachorro",
+    "para cachorro",
+    "pode comer"
+   ],
+   "antagonist_terms": [
+    "chocolate com açúcar",
+    "chocolate ao leite comum"
+   ],
+   "contrast_attributes": [
+    "sweetener: sweetened with sugar substitutes vs sweetened with sugar"
+   ],
+   "search_language": "pt",
+   "confidence": 0.86
+  },
+  "ESP": {
+   "primary_name": "chocolate sin azúcar",
+   "formal_name": "chocolate sin azúcares añadidos",
+   "search_terms": [
+    "chocolate sin azúcar",
+    "chocolate sin azucar",
+    "chocolate sin azúcares añadidos",
+    "chocolate 0% azúcar",
+    "tableta de chocolate sin azúcar",
+    "chocolate negro sin azúcar",
+    "chocolate con leche sin azúcar",
+    "bombones sin azúcar",
+    "chocolate con stevia",
+    "chocolate con eritritol",
+    "chocolate para diabéticos",
+    "chocolate keto",
+    "sugar free chocolate",
+    "chocolate sin azúcar precio",
+    "chocolate sin azúcar comprar",
+    "crema de chocolate sin azúcar",
+    "chocolate sin azúcar mercadona"
+   ],
+   "excluded_terms": [
+    "receta",
+    "como hacer",
+    "hacer en casa",
+    "fundir",
+    "postre",
+    "bizcocho",
+    "engorda",
+    "es sano",
+    "que es",
+    "qué es",
+    "vs",
+    "diferencia",
+    "wikipedia",
+    "beneficios",
+    "light",
+    "para perros",
+    "perro"
+   ],
+   "antagonist_terms": [
+    "chocolate con azúcar",
+    "chocolate con leche normal"
+   ],
+   "contrast_attributes": [
+    "sweetener: sweetened with sugar substitutes vs sweetened with sugar"
+   ],
+   "search_language": "es",
+   "confidence": 0.85
+  },
+  "DEU": {
+   "primary_name": "schokolade ohne zucker",
+   "formal_name": "zuckerfreie Schokolade",
+   "search_terms": [
+    "schokolade ohne zucker",
+    "zuckerfreie schokolade",
+    "schokolade zuckerfrei",
+    "schokolade ohne zuckerzusatz",
+    "schokolade mit erythrit",
+    "schokolade mit stevia",
+    "zuckerfreie schokolade kaufen",
+    "diabetiker schokolade",
+    "low carb schokolade",
+    "keto schokolade",
+    "zuckerfreie pralinen",
+    "vollmilchschokolade ohne zucker",
+    "zartbitterschokolade ohne zucker",
+    "sugar free chocolate",
+    "zuckerfreie schokolade preis",
+    "schokolade ohne zucker dm"
+   ],
+   "excluded_terms": [
+    "rezept",
+    "selber machen",
+    "selbst machen",
+    "schmelzen",
+    "kuchen",
+    "backen",
+    "was ist",
+    "vs",
+    "unterschied",
+    "wikipedia",
+    "gesund",
+    "ungesund",
+    "abnehmen",
+    "durchfall",
+    "nebenwirkungen",
+    "für hunde",
+    "hund"
+   ],
+   "antagonist_terms": [
+    "schokolade mit zucker",
+    "normale vollmilchschokolade"
+   ],
+   "contrast_attributes": [
+    "sweetener: sweetened with sugar substitutes vs sweetened with sugar"
+   ],
+   "search_language": "de",
+   "confidence": 0.85
+  },
+  "USA": {
+   "primary_name": "sugar free chocolate",
+   "formal_name": "no sugar added chocolate",
+   "search_terms": [
+    "sugar free chocolate",
+    "sugar-free chocolate",
+    "sugar free chocolate bar",
+    "no sugar added chocolate",
+    "sugar free dark chocolate",
+    "sugar free milk chocolate",
+    "sugar free chocolate chips",
+    "sugar free chocolate candy",
+    "keto chocolate",
+    "diabetic chocolate",
+    "stevia sweetened chocolate",
+    "monk fruit chocolate",
+    "sugar free chocolate near me",
+    "buy sugar free chocolate",
+    "sugar free chocolates box",
+    "allulose chocolate"
+   ],
+   "excluded_terms": [
+    "recipe",
+    "how to make",
+    "homemade",
+    "diy",
+    "melt",
+    "baking with",
+    "what is",
+    "vs",
+    "difference",
+    "wikipedia",
+    "side effects",
+    "diarrhea",
+    "bad for you",
+    "healthy",
+    "for dogs",
+    "dog",
+    "unsweetened baking"
+   ],
+   "antagonist_terms": [
+    "chocolate with sugar",
+    "regular milk chocolate bar"
+   ],
+   "contrast_attributes": [
+    "sweetener: sweetened with sugar substitutes vs sweetened with sugar"
+   ],
+   "search_language": "en",
+   "confidence": 0.88
+  }
+ },
+ "curl cream": {
+  "BRA": {
+   "primary_name": "creme para cachos",
+   "formal_name": "creme definidor de cachos",
+   "search_terms": [
+    "creme para cachos",
+    "creme de cachos",
+    "creme ativador de cachos",
+    "ativador de cachos",
+    "creme definidor de cachos",
+    "creme de pentear para cachos",
+    "creme para cabelo cacheado",
+    "curl cream",
+    "creme para cachos definidos",
+    "melhor creme para cachos",
+    "creme para cachos preco"
+   ],
+   "excluded_terms": [
+    "caseiro",
+    "como fazer",
+    "receita",
+    "como usar",
+    "como aplicar",
+    "o que e",
+    "significado",
+    "wikipedia",
+    "vs",
+    "shampoo",
+    "condicionador",
+    "mascara",
+    "progressiva",
+    "alisante",
+    "para cabelo liso"
+   ],
+   "antagonist_terms": [
+    "creme alisante",
+    "creme para alisar o cabelo",
+    "gel para cachos",
+    "gelatina para cachos"
+   ],
+   "contrast_attributes": [
+    "result: define curls vs straighten",
+    "texture: cream vs gel"
+   ],
+   "search_language": "pt",
+   "confidence": 0.85
+  },
+  "ESP": {
+   "primary_name": "crema para rizos",
+   "formal_name": "crema definidora de rizos",
+   "search_terms": [
+    "crema para rizos",
+    "crema de rizos",
+    "crema definidora de rizos",
+    "crema para pelo rizado",
+    "crema para cabello rizado",
+    "curl cream",
+    "crema definicion rizos",
+    "crema rizos definidos",
+    "mejor crema para rizos",
+    "crema para rizos precio"
+   ],
+   "excluded_terms": [
+    "casera",
+    "como hacer",
+    "receta",
+    "como usar",
+    "como aplicar",
+    "que es",
+    "significado",
+    "wikipedia",
+    "vs",
+    "champu",
+    "acondicionador",
+    "mascarilla",
+    "alisado",
+    "para pelo liso"
+   ],
+   "antagonist_terms": [
+    "crema alisadora",
+    "crema para alisar el pelo",
+    "gel para rizos",
+    "gel definidor de rizos"
+   ],
+   "contrast_attributes": [
+    "result: define curls vs straighten",
+    "texture: cream vs gel"
+   ],
+   "search_language": "es",
+   "confidence": 0.84
+  },
+  "DEU": {
+   "primary_name": "lockencreme",
+   "formal_name": "Lockencreme",
+   "search_terms": [
+    "lockencreme",
+    "locken creme",
+    "curl cream",
+    "curl creme",
+    "creme fuer locken",
+    "stylingcreme locken",
+    "lockencreme locken definieren",
+    "lockencreme kaufen",
+    "beste lockencreme",
+    "lockencreme test"
+   ],
+   "excluded_terms": [
+    "selber machen",
+    "selber machen rezept",
+    "rezept",
+    "anwenden",
+    "wie benutzt",
+    "wie anwenden",
+    "was ist",
+    "wikipedia",
+    "vs",
+    "shampoo",
+    "spuelung",
+    "conditioner",
+    "haarkur",
+    "glatte haare"
+   ],
+   "antagonist_terms": [
+    "glaettungscreme",
+    "creme zum haare glaetten",
+    "lockengel",
+    "gel fuer locken"
+   ],
+   "contrast_attributes": [
+    "result: define curls vs straighten",
+    "texture: cream vs gel"
+   ],
+   "search_language": "de",
+   "confidence": 0.8
+  },
+  "USA": {
+   "primary_name": "curl cream",
+   "formal_name": "curl defining cream",
+   "search_terms": [
+    "curl cream",
+    "curl creme",
+    "curl defining cream",
+    "curly hair cream",
+    "cream for curly hair",
+    "curl enhancing cream",
+    "hair cream for curls",
+    "best curl cream",
+    "curl cream for wavy hair",
+    "curl defining cream for curly hair",
+    "buy curl cream"
+   ],
+   "excluded_terms": [
+    "diy",
+    "homemade",
+    "how to use",
+    "how to apply",
+    "recipe",
+    "what is",
+    "vs",
+    "wikipedia",
+    "meaning",
+    "shampoo",
+    "conditioner",
+    "hair mask",
+    "for straight hair"
+   ],
+   "antagonist_terms": [
+    "hair straightening cream",
+    "straightening cream for hair",
+    "curl defining gel",
+    "hair gel for curls"
+   ],
+   "contrast_attributes": [
+    "result: define curls vs straighten",
+    "texture: cream vs gel"
+   ],
+   "search_language": "en",
+   "confidence": 0.88
+  }
+ },
+ "inflatable kayak": {
+  "BRA": {
+   "primary_name": "caiaque inflável",
+   "formal_name": "caiaque inflável",
+   "search_terms": [
+    "caiaque inflável",
+    "caiaque inflavel",
+    "inflatable kayak",
+    "caiaque inflável 2 lugares",
+    "caiaque inflável preço",
+    "comprar caiaque inflável",
+    "caiaque inflável duplo",
+    "caiaque inflável pesca",
+    "barco inflável caiaque",
+    "kayak inflável",
+    "caiaque de ar"
+   ],
+   "excluded_terms": [
+    "como remar",
+    "o que e",
+    "vs",
+    "wikipedia",
+    "aluguel",
+    "alugar",
+    "como consertar",
+    "remada",
+    "significado",
+    "diferença",
+    "usado"
+   ],
+   "antagonist_terms": [
+    "caiaque rígido",
+    "caiaque de fibra",
+    "caiaque pedal",
+    "stand up paddle inflável",
+    "prancha de stand up paddle"
+   ],
+   "contrast_attributes": [
+    "construction: inflatable vs rigid hull",
+    "propulsion: paddle kayak vs pedal/motor boat",
+    "watercraft type: kayak vs stand up paddle board"
+   ],
+   "search_language": "pt",
+   "confidence": 0.85
+  },
+  "ESP": {
+   "primary_name": "kayak hinchable",
+   "formal_name": "kayak hinchable",
+   "search_terms": [
+    "kayak hinchable",
+    "kayak inflable",
+    "inflatable kayak",
+    "kayak hinchable 2 personas",
+    "canoa hinchable",
+    "piragua hinchable",
+    "kayak hinchable barato",
+    "kayak hinchable precio",
+    "comprar kayak hinchable",
+    "kayak hinchable decathlon",
+    "kayak hinchable pesca",
+    "kayak hinchable 1 persona"
+   ],
+   "excluded_terms": [
+    "alquiler",
+    "alquilar",
+    "como hinchar",
+    "o que es",
+    "que es",
+    "vs",
+    "wikipedia",
+    "opiniones",
+    "reparar",
+    "segunda mano",
+    "rutas"
+   ],
+   "antagonist_terms": [
+    "kayak rígido",
+    "kayak de plástico",
+    "tabla paddle surf hinchable",
+    "kayak de pedales"
+   ],
+   "contrast_attributes": [
+    "construction: inflatable vs rigid hull",
+    "watercraft type: kayak vs stand up paddle board",
+    "propulsion: paddle vs pedal"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "schlauchboot kajak",
+   "formal_name": "aufblasbares Kajak",
+   "search_terms": [
+    "aufblasbares kajak",
+    "schlauchkajak",
+    "kajak aufblasbar",
+    "inflatable kayak",
+    "aufblasbares kanu",
+    "schlauchboot kajak",
+    "luftkajak",
+    "aufblasbares kajak 2 personen",
+    "kajak aufblasbar kaufen",
+    "aufblasbares kajak test",
+    "packraft aufblasbar",
+    "aufblasbares kajak angeln"
+   ],
+   "excluded_terms": [
+    "mieten",
+    "verleih",
+    "was ist",
+    "vs",
+    "wikipedia",
+    "reparieren",
+    "selber bauen",
+    "gebraucht",
+    "anleitung",
+    "tour"
+   ],
+   "antagonist_terms": [
+    "hartschalenkajak",
+    "festrumpf kajak",
+    "aufblasbares sup board",
+    "tretboot kajak"
+   ],
+   "contrast_attributes": [
+    "construction: inflatable vs rigid hull",
+    "watercraft type: kayak vs stand up paddle board",
+    "propulsion: paddle vs pedal"
+   ],
+   "search_language": "de",
+   "confidence": 0.85
+  },
+  "USA": {
+   "primary_name": "inflatable kayak",
+   "formal_name": "inflatable kayak",
+   "search_terms": [
+    "inflatable kayak",
+    "inflatable kayak 2 person",
+    "inflatable kayaks for sale",
+    "blow up kayak",
+    "inflatable fishing kayak",
+    "best inflatable kayak",
+    "inflatable kayak 1 person",
+    "inflatable tandem kayak",
+    "inflatable kayak near me",
+    "cheap inflatable kayak",
+    "inflatable kayak with pump",
+    "2 person inflatable kayak"
+   ],
+   "excluded_terms": [
+    "rental",
+    "rent",
+    "how to",
+    "vs",
+    "wikipedia",
+    "repair",
+    "patch",
+    "used",
+    "diy",
+    "trips",
+    "what is"
+   ],
+   "antagonist_terms": [
+    "hard shell kayak",
+    "rigid kayak",
+    "hardshell fishing kayak",
+    "inflatable paddle board",
+    "pedal kayak"
+   ],
+   "contrast_attributes": [
+    "construction: inflatable vs rigid hull",
+    "watercraft type: kayak vs stand up paddle board",
+    "propulsion: paddle vs pedal"
+   ],
+   "search_language": "en",
+   "confidence": 0.93
+  }
+ },
+ "electric scooter": {
+  "BRA": {
+   "primary_name": "patinete elétrico",
+   "formal_name": "patinete elétrico",
+   "search_terms": [
+    "patinete elétrico",
+    "patinete eletrico",
+    "electric scooter",
+    "e-scooter",
+    "patinete elétrico adulto",
+    "patinete eletrico adulto",
+    "patinete elétrico preço",
+    "comprar patinete elétrico",
+    "patinete elétrico infantil",
+    "patinete motorizado",
+    "patinete eletrico dobravel",
+    "patinete elétrico barato",
+    "patinete elétrico 1000w",
+    "scooter elétrico patinete"
+   ],
+   "excluded_terms": [
+    "aluguel",
+    "alugar",
+    "como andar",
+    "como pilotar",
+    "lei",
+    "cnh",
+    "multa",
+    "conserto",
+    "consertar",
+    "peças",
+    "manual",
+    "não liga",
+    "nao liga",
+    "o que e",
+    "o que é",
+    "vs",
+    "wikipedia",
+    "significado",
+    "mobilidade reduzida",
+    "cadeira de rodas",
+    "hoverboard",
+    "skate elétrico"
+   ],
+   "antagonist_terms": [
+    "patinete comum",
+    "patinete sem motor",
+    "patinete a gasolina",
+    "scooter elétrica com assento",
+    "ciclomotor elétrico"
+   ],
+   "contrast_attributes": [
+    "propulsion: electric motor vs human kick-powered",
+    "propulsion: battery electric vs petrol engine",
+    "rider position: standing deck scooter vs seated electric moped"
+   ],
+   "search_language": "pt",
+   "confidence": 0.9
+  },
+  "ESP": {
+   "primary_name": "patinete eléctrico",
+   "formal_name": "vehículo de movilidad personal (VMP)",
+   "search_terms": [
+    "patinete eléctrico",
+    "patinete electrico",
+    "patinetes eléctricos",
+    "electric scooter",
+    "e-scooter",
+    "patinete eléctrico adulto",
+    "patinete eléctrico barato",
+    "comprar patinete eléctrico",
+    "patinete eléctrico precio",
+    "patinete eléctrico plegable",
+    "monopatín eléctrico",
+    "scooter eléctrico plegable",
+    "patinete electrico homologado"
+   ],
+   "excluded_terms": [
+    "normativa",
+    "dgt",
+    "seguro",
+    "multa",
+    "matriculacion",
+    "matriculación",
+    "alquiler",
+    "alquilar",
+    "reparacion",
+    "reparación",
+    "como funciona",
+    "carnet",
+    "edad",
+    "que es",
+    "qué es",
+    "vs",
+    "wikipedia",
+    "silla de ruedas",
+    "movilidad reducida",
+    "hoverboard"
+   ],
+   "antagonist_terms": [
+    "patinete sin motor",
+    "patinete manual",
+    "patinete de gasolina",
+    "moto eléctrica con asiento",
+    "ciclomotor eléctrico"
+   ],
+   "contrast_attributes": [
+    "propulsion: electric motor vs human kick-powered",
+    "propulsion: battery electric vs petrol engine",
+    "rider position: standing deck scooter vs seated electric moped"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "e-scooter",
+   "formal_name": "Elektrokleinstfahrzeug",
+   "search_terms": [
+    "e-scooter",
+    "escooter",
+    "e scooter",
+    "elektro scooter",
+    "electric scooter",
+    "e-scooter kaufen",
+    "e-scooter mit straßenzulassung",
+    "e-scooter erwachsene",
+    "elektro tretroller",
+    "e-tretroller",
+    "elektrischer tretroller",
+    "e-scooter test",
+    "escooter kaufen",
+    "e-scooter günstig"
+   ],
+   "excluded_terms": [
+    "mieten",
+    "leihen",
+    "verleih",
+    "sharing",
+    "führerschein",
+    "fuhrerschein",
+    "versicherung",
+    "kennzeichen",
+    "reparatur",
+    "regeln",
+    "stvo",
+    "verbot",
+    "promille",
+    "bußgeld",
+    "was ist",
+    "vs",
+    "wikipedia",
+    "unfall",
+    "rollstuhl",
+    "elektromobil senioren"
+   ],
+   "antagonist_terms": [
+    "tretroller",
+    "cityroller ohne motor",
+    "benzin scooter",
+    "elektroroller mit sitz",
+    "e-roller mit sitz"
+   ],
+   "contrast_attributes": [
+    "propulsion: electric motor vs human kick-powered",
+    "propulsion: battery electric vs petrol engine",
+    "rider position: standing deck scooter vs seated electric moped"
+   ],
+   "search_language": "de",
+   "confidence": 0.88
+  },
+  "USA": {
+   "primary_name": "electric scooter",
+   "formal_name": "electric scooter",
+   "search_terms": [
+    "electric scooter",
+    "e-scooter",
+    "escooter",
+    "electric scooter for adults",
+    "adult electric scooter",
+    "electric scooters for sale",
+    "electric kick scooter",
+    "electric scooter price",
+    "electric scooter near me",
+    "fast electric scooter",
+    "foldable electric scooter",
+    "buy electric scooter",
+    "long range electric scooter",
+    "electric scooter for kids"
+   ],
+   "excluded_terms": [
+    "rental",
+    "rent",
+    "rentals",
+    "how to ride",
+    "repair",
+    "laws",
+    "legal",
+    "license",
+    "insurance",
+    "diy",
+    "vs",
+    "what is",
+    "wikipedia",
+    "mobility scooter",
+    "knee scooter",
+    "wheelchair",
+    "hoverboard",
+    "electric skateboard"
+   ],
+   "antagonist_terms": [
+    "kick scooter",
+    "push scooter",
+    "gas powered scooter",
+    "gas scooter",
+    "electric moped with seat"
+   ],
+   "contrast_attributes": [
+    "propulsion: electric motor vs human kick-powered",
+    "propulsion: battery electric vs gasoline engine",
+    "rider position: standing deck scooter vs seated electric moped"
+   ],
+   "search_language": "en",
+   "confidence": 0.92
+  }
+ },
+ "non-stick frying pan": {
+  "BRA": {
+   "primary_name": "frigideira antiaderente",
+   "formal_name": "frigideira com revestimento antiaderente",
+   "search_terms": [
+    "frigideira antiaderente",
+    "frigideira antiaderente preço",
+    "frigideira de teflon",
+    "frigideira teflon",
+    "frigideira antiaderente 24cm",
+    "frigideira antiaderente 28cm",
+    "frigideira antiaderente grande",
+    "frigideira ceramica antiaderente",
+    "frigideira de ceramica antiaderente",
+    "comprar frigideira antiaderente",
+    "jogo de frigideiras antiaderentes",
+    "frigideira antiaderente funda",
+    "non stick frying pan",
+    "nonstick pan"
+   ],
+   "excluded_terms": [
+    "receita",
+    "como limpar",
+    "como recuperar",
+    "descascando",
+    "soltando",
+    "faz mal",
+    "e toxica",
+    "toxico",
+    "o que e",
+    "vs",
+    "wikipedia",
+    "como temperar",
+    "frigideira eletrica",
+    "panela",
+    "caldeirao",
+    "air fryer",
+    "airfryer",
+    "no forno",
+    "como usar"
+   ],
+   "antagonist_terms": [
+    "frigideira de ferro fundido",
+    "frigideira de inox",
+    "frigideira de aco inoxidavel",
+    "frigideira de ferro"
+   ],
+   "contrast_attributes": [
+    "coating: non-stick coated vs bare uncoated metal"
+   ],
+   "search_language": "pt",
+   "confidence": 0.9
+  },
+  "ESP": {
+   "primary_name": "sartén antiadherente",
+   "formal_name": "sartén con revestimiento antiadherente",
+   "search_terms": [
+    "sartén antiadherente",
+    "sarten antiadherente",
+    "sartenes antiadherentes",
+    "sartén de teflón",
+    "sarten teflon",
+    "sartén antiadherente 28 cm",
+    "sartén antiadherente 24 cm",
+    "sartén cerámica antiadherente",
+    "sarten ceramica antiadherente",
+    "juego de sartenes antiadherentes",
+    "sartén antiadherente precio",
+    "comprar sartén antiadherente",
+    "sartén antiadherente honda",
+    "non stick pan",
+    "non stick frying pan"
+   ],
+   "excluded_terms": [
+    "receta",
+    "como limpiar",
+    "recuperar",
+    "se pega",
+    "se raya",
+    "que es",
+    "vs",
+    "wikipedia",
+    "es toxica",
+    "toxica",
+    "cancerigena",
+    "olla",
+    "cacerola",
+    "freidora",
+    "sarten electrica",
+    "como curar",
+    "en el horno"
+   ],
+   "antagonist_terms": [
+    "sartén de hierro fundido",
+    "sartén de acero inoxidable",
+    "sartén de inox",
+    "sartén de hierro"
+   ],
+   "contrast_attributes": [
+    "coating: non-stick coated vs bare uncoated metal"
+   ],
+   "search_language": "es",
+   "confidence": 0.9
+  },
+  "DEU": {
+   "primary_name": "antihaftpfanne",
+   "formal_name": "beschichtete Bratpfanne",
+   "search_terms": [
+    "antihaftpfanne",
+    "antihaft pfanne",
+    "beschichtete pfanne",
+    "bratpfanne beschichtet",
+    "teflonpfanne",
+    "teflon pfanne",
+    "pfanne beschichtet 28 cm",
+    "pfanne beschichtet 24 cm",
+    "keramikpfanne",
+    "keramik pfanne beschichtet",
+    "pfannenset beschichtet",
+    "beschichtete pfanne kaufen",
+    "antihaftpfanne test",
+    "non stick pan",
+    "non stick pfanne"
+   ],
+   "excluded_terms": [
+    "rezept",
+    "reinigen",
+    "einbrennen",
+    "zerkratzt",
+    "beschichtung ab",
+    "giftig",
+    "schädlich",
+    "schadlich",
+    "pfoa",
+    "was ist",
+    "vs",
+    "wikipedia",
+    "unterschied",
+    "topf",
+    "wok",
+    "elektrische pfanne",
+    "backofen",
+    "spülmaschine",
+    "spulmaschine"
+   ],
+   "antagonist_terms": [
+    "eisenpfanne",
+    "gusseisenpfanne",
+    "edelstahlpfanne",
+    "pfanne aus edelstahl",
+    "schmiedeeiserne pfanne"
+   ],
+   "contrast_attributes": [
+    "coating: non-stick coated vs bare uncoated metal"
+   ],
+   "search_language": "de",
+   "confidence": 0.88
+  },
+  "USA": {
+   "primary_name": "nonstick frying pan",
+   "formal_name": "non-stick frying pan",
+   "search_terms": [
+    "nonstick frying pan",
+    "non stick frying pan",
+    "nonstick skillet",
+    "non stick skillet",
+    "nonstick pan",
+    "non stick pan",
+    "nonstick fry pan",
+    "teflon pan",
+    "ceramic nonstick pan",
+    "10 inch nonstick skillet",
+    "12 inch nonstick pan",
+    "best nonstick pan",
+    "nonstick pan set",
+    "nonstick frying pan with lid",
+    "buy nonstick skillet"
+   ],
+   "excluded_terms": [
+    "recipe",
+    "how to clean",
+    "how to season",
+    "scratched",
+    "peeling",
+    "toxic",
+    "pfoa",
+    "pfas",
+    "what is",
+    "vs",
+    "wikipedia",
+    "difference between",
+    "electric skillet",
+    "griddle",
+    "wok",
+    "sauce pan",
+    "dutch oven",
+    "stock pot",
+    "dishwasher safe?",
+    "oven"
+   ],
+   "antagonist_terms": [
+    "cast iron skillet",
+    "stainless steel skillet",
+    "stainless steel frying pan",
+    "carbon steel pan"
+   ],
+   "contrast_attributes": [
+    "coating: non-stick coated vs bare uncoated metal"
+   ],
+   "search_language": "en",
+   "confidence": 0.92
+  }
+ }
+}
