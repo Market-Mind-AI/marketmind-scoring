@@ -174,3 +174,24 @@ async def test_an_available_country_is_never_demoted(db_session: AsyncSession) -
         await servico.prewarm(countries=["ZZG"])
 
     assert (await CountryRepository(db_session).get_by_iso3("ZZG")).analysis_ready is True
+
+
+async def test_a_country_google_ads_cannot_serve_is_never_promoted(db_session: AsyncSession) -> None:
+    """Macro completo não basta. O coletor de demanda recusa a China de
+    propósito (Google bloqueado), e um país sem demanda medível não pontua —
+    e um país que não pontua derruba a análise inteira (migration 054)."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.macro_coverage import MacroPrewarmService
+
+    assert (await CountryRepository(db_session).get_by_iso3("CHN")).analysis_ready is False
+
+    servico = MacroPrewarmService(db_session)
+    with (
+        patch("app.db.session.async_session_factory", _fabrica_de(db_session)),
+        patch.object(MacroPrewarmService, "_vencidos_de", AsyncMock(return_value=(17, []))),
+    ):
+        relatorio = await servico.prewarm(countries=["CHN"])
+
+    assert relatorio["promovidos"] == 0
+    assert (await CountryRepository(db_session).get_by_iso3("CHN")).analysis_ready is False

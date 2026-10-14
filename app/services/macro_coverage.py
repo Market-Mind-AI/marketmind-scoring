@@ -47,6 +47,13 @@ from app.utils.period import COUNTRY_LEVEL_PERIOD_KEY
 _ANNUAL_LOOKBACK_YEARS = 10
 
 
+
+# Países que o coletor de demanda (marketmind-pytrends, `UNSUPPORTED_ISO2`)
+# recusa de propósito: o Google Ads não os atende, então nunca há volume de
+# busca para pontuar. Macro completo não os torna analisáveis. A mesma lista,
+# em ISO3, da migration 054.
+GOOGLE_ADS_UNAVAILABLE: frozenset[str] = frozenset({"CHN", "RUS", "BLR"})
+
 def fontes_sem_cobertura_de(country) -> frozenset[DataSource]:  # noqa: ANN001
     """As fontes que não cobrem este país, lidas do mapeamento dele.
 
@@ -261,6 +268,10 @@ class MacroPrewarmService:
         """
         pais = await self._country_repo.get_by_iso3(iso3)
         if pais is None or pais.analysis_ready:
+            return False
+        if iso3 in GOOGLE_ADS_UNAVAILABLE:
+            # Macro completo não basta: sem demanda medível o país não pontua,
+            # e um país que não pontua derruba a análise inteira (migration 054).
             return False
         pais.analysis_ready = True
         await self._session.flush()
