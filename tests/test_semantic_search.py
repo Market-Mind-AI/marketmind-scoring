@@ -8,6 +8,7 @@ contra o catálogo real em scripts/benchmark_semantic_recall.py.
 
 import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -51,7 +52,7 @@ class _Embedder(EmbeddingClient):
 def _captura() -> tuple[AsyncMock, list[list[str]]]:
     vistos: list[list[str]] = []
 
-    def _pick(*, text, candidates, motivo=None, category=None):  # noqa: ANN001, ANN202
+    def _pick(*, text, candidates, motivo=None, category=None, evidencias=None):  # noqa: ANN001, ANN202
         vistos.append([c.canonical_title for c in candidates])
         return None
 
@@ -102,8 +103,8 @@ async def test_busca_semantica_respeita_particao_de_marca_e_entidade_fundida(db_
             alias_normalized=f"termo {entidade.entity_key}", entity_key=entidade.entity_key, source="test"
         )
     await db_session.flush()
-    pendentes = await repo.aliases_without_embedding(model="m", limit=10)
-    await repo.save_alias_embeddings([(id_, vector_literal(_eixo(3))) for id_, _ in pendentes], model="m")
+    pendentes = await repo.pending_embeddings(model="m", limit=10)
+    await repo.save_embeddings([(t, id_, vector_literal(_eixo(3))) for t, id_, _ in pendentes], model="m")
 
     consulta = vector_literal(_eixo(3))
     genericos = await repo.semantic_search(consulta, model="m", brand_key=None, top_k=10)
@@ -175,3 +176,246 @@ async def test_cliente_voyage_recusa_dimensao_errada(monkeypatch: pytest.MonkeyP
     )
     with pytest.raises(EmbeddingError):
         await EmbeddingClient(transport=transporte).embed(["a"], input_type="document")
+
+
+# --- Veto semântico por produto antagônico (migration 053) ---------------------------------------
+
+_AIR = 11  # eixo "air fryer"
+_OLEO = 12  # eixo "fritadeira a óleo"
+
+
+def _mercados_air_fryer() -> dict:
+    return {
+        "BRA": {
+            "primary_name": "fritadeira sem oleo eletrica",
+            "search_terms": ["fritadeira sem oleo eletrica"],
+            "excluded_terms": ["receita", "fritadeira a oleo"],
+            "antagonist_terms": ["fritadeira a oleo", "tacho de fritura"],
+            "confidence": 0.9,
+        }
+    }
+
+
+async def _air_fryer(db_session: AsyncSession, embedder: _Embedder, matcher: AsyncMock) -> CatalogService:
+    service = CatalogService(db_session, matcher=matcher, embedder=embedder)
+    await service.resolve(
+        "fritadeira sem oleo eletrica", source="test", category="Kitchen", localized_markets=_mercados_air_fryer()
+    )
+    return service
+
+
+async def test_antagonico_e_indexado_vetorizado_e_promove_o_excluido(db_session: AsyncSession) -> None:
+    embedder = _Embedder({"fritadeira sem oleo eletrica": _AIR, "fritadeira a oleo": _OLEO, "tacho de fritura": _OLEO})
+    matcher, _ = _captura()
+    await _air_fryer(db_session, embedder, matcher)
+
+    linhas = (
+        await db_session.execute(
+            text("SELECT term_normalized, kind, embedding IS NOT NULL FROM product_excluded_terms ORDER BY 1")
+        )
+    ).all()
+    assert linhas == [
+        ("fritadeira a oleo", "antagonist", True),  # estava nas duas listas: promovido
+        ("receita", "excluded", False),  # termo de uso nunca ganha vetor
+        ("tacho de fritura", "antagonist", True),
+    ]
+
+
+async def test_passo_2_vetado_pelo_significado_vai_ao_llm_com_a_evidencia(db_session: AsyncSession) -> None:
+    """A forma casa com a air fryer (trigram alto contra o alias) e nenhum
+    excluded_term a veta por forma (mesmas palavras, outra ordem: o trigram
+    aceitaria); o significado está no eixo do antagônico."""
+    consulta = "fritadeira eletrica sem oleo"
+    embedder = _Embedder(
+        {"fritadeira sem oleo eletrica": _AIR, "fritadeira a oleo": _OLEO, "tacho de fritura": _OLEO, consulta: _OLEO}
+    )
+    matcher, vistos = _captura()
+    service = await _air_fryer(db_session, embedder, matcher)
+
+    resultado = await service.resolve(consulta, source="test", category="Kitchen")
+
+    assert resultado.method == "created"  # o LLM (dublê) não aceitou; nada foi fundido pelo trigram
+    assert vistos[-1][0] == "fritadeira sem oleo eletrica"
+    evidencias = matcher.pick.call_args.kwargs["evidencias"]
+    [texto] = evidencias.values()
+    assert "NOT" in texto and "fritadeira a oleo" in texto
+
+
+async def test_passo_2_aceita_quando_o_significado_concorda(db_session: AsyncSession) -> None:
+    consulta = "fritadeira eletrica sem oleo"
+    embedder = _Embedder(
+        {"fritadeira sem oleo eletrica": _AIR, "fritadeira a oleo": _OLEO, "tacho de fritura": _OLEO, consulta: _AIR}
+    )
+    matcher, _ = _captura()
+    service = await _air_fryer(db_session, embedder, matcher)
+
+    resultado = await service.resolve(consulta, source="test", category="Kitchen")
+
+    assert resultado.method == "trigram"
+    assert resultado.canonical_title == "fritadeira sem oleo eletrica"
+
+
+async def test_entidade_sem_antagonico_nao_paga_embedding_no_passo_2(db_session: AsyncSession) -> None:
+    embedder = _Embedder({})
+    matcher, _ = _captura()
+    service = CatalogService(db_session, matcher=matcher, embedder=embedder)
+    await service.resolve("panela de pressao eletrica", source="test")
+    embedder.chamadas.clear()
+
+    resultado = await service.resolve("panela eletrica de pressao", source="test")
+
+    assert resultado.method == "trigram"
+    assert not [c for c in embedder.chamadas if c[1] == "query"]
+
+
+async def test_backfill_de_termos_nao_poda_antagonico(db_session: AsyncSession) -> None:
+    embedder = _Embedder({})
+    matcher, _ = _captura()
+    service = await _air_fryer(db_session, embedder, matcher)
+
+    relatorio = await service.backfill_terms()
+
+    assert relatorio["obsoletos"] == 0
+    kinds = (await db_session.execute(text("SELECT kind, count(*) FROM product_excluded_terms GROUP BY 1"))).all()
+    assert dict(kinds) == {"antagonist": 2, "excluded": 1}
+
+
+async def test_backfill_de_antagonicos_preenche_indexa_e_e_idempotente(db_session: AsyncSession) -> None:
+    class _Cliente:
+        def __init__(self) -> None:
+            self.pedidos: list[list[tuple]] = []
+
+        async def localized_markets(self, *, product_name, brand, category, countries):  # noqa: ANN001, ANN201
+            self.pedidos.append(countries)
+            return [
+                SimpleNamespace(country=iso3, antagonist_terms=["fritadeira a oleo"], search_terms=["outro termo"])
+                for iso3, _ in countries
+            ]
+
+    mercados = _mercados_air_fryer()
+    del mercados["BRA"]["antagonist_terms"]
+    mercados["BRA"]["excluded_terms"] = ["receita"]
+    embedder = _Embedder({})
+    service = CatalogService(db_session, matcher=_captura()[0], embedder=embedder)
+    await service.resolve("fritadeira sem oleo eletrica", source="test", localized_markets=mercados)
+
+    cliente = _Cliente()
+    primeiro = await service.backfill_antagonists(cliente)  # type: ignore[arg-type]
+    segundo = await service.backfill_antagonists(cliente)  # type: ignore[arg-type]
+
+    assert primeiro["entidades"] == 1 and primeiro["antagonicos"] == 1
+    assert segundo["entidades"] == 0 and segundo["puladas"] == 1
+    assert cliente.pedidos == [[("BRA", None)]]
+    # Da resposta só sai o antagônico: o vocabulário de busca curado não muda.
+    [entidade] = (await db_session.execute(text("SELECT localized_markets FROM product_catalog"))).scalars()
+    assert entidade["BRA"]["search_terms"] == ["fritadeira sem oleo eletrica"]
+    consulta = text("SELECT term_normalized, kind FROM product_excluded_terms ORDER BY 1")
+    kinds = (await db_session.execute(consulta)).all()
+    assert kinds == [("fritadeira a oleo", "antagonist"), ("receita", "excluded")]
+
+
+async def test_match_do_llm_traz_antagonicos_no_idioma_da_consulta_sem_chamada_extra(db_session: AsyncSession) -> None:
+    """O alias aprendido pelo passo 3 (francês, idioma que o catálogo não tinha)
+    chega com o antagônico no mesmo idioma, tirado da MESMA resposta do LLM."""
+
+    def _pick(*, text, candidates, motivo=None, category=None, evidencias=None):  # noqa: ANN001, ANN202
+        motivo["relationship"] = "same"
+        motivo["reasoning"] = "tradução"
+        motivo["antagonist_terms"] = ["écouteurs filaires"]
+        return candidates[0]
+
+    matcher = AsyncMock()
+    matcher.pick.side_effect = _pick
+    embedder = _Embedder({})
+    service = CatalogService(db_session, matcher=_captura()[0], embedder=embedder)
+    await service.resolve("wireless earbuds", source="test")
+    service._matcher = matcher
+
+    resultado = await service.resolve("écouteurs sans fil", source="test")
+
+    assert resultado.method == "llm"
+    assert matcher.pick.call_count == 1
+    linhas = (
+        await db_session.execute(
+            text("SELECT term_normalized, kind, source, embedding IS NOT NULL FROM product_excluded_terms")
+        )
+    ).all()
+    assert linhas == [("ecouteurs filaires", "antagonist", "catalog_match", True)]
+    # A poda do backfill só toca no que veio da curadoria; o aprendido fica.
+    assert (await service.backfill_terms())["obsoletos"] == 0
+
+
+async def test_passo_2_abstem_na_banda_e_manda_ao_llm_com_evidencia(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Consulta a meio caminho entre o produto e o antagônico: nenhum lado
+    ganha por margem, o trigram não decide e o LLM recebe a dúvida escrita."""
+    consulta = "fritadeira eletrica sem oleo"
+
+    class _Meio(_Embedder):
+        async def embed(self, texts, *, input_type):  # type: ignore[override]  # noqa: ANN001
+            vetores = await super().embed(texts, input_type=input_type)
+            if input_type == "query":
+                meio = [0.0] * _DIM
+                meio[_AIR] = 0.75
+                meio[_OLEO] = 0.65
+                return [meio for _ in texts]
+            return vetores
+
+    # O alias que a primeira resolução grava também fica no eixo do produto;
+    # sem isso ele cairia num eixo aleatório e puxaria a média k-NN para longe.
+    embedder = _Meio(
+        {
+            "fritadeira sem oleo eletrica": _AIR,
+            consulta: _AIR,
+            "fritadeira a oleo": _OLEO,
+            "tacho de fritura": _OLEO,
+        }
+    )
+    matcher, vistos = _captura()
+    service = await _air_fryer(db_session, embedder, matcher)
+
+    monkeypatch.setattr(settings, "catalog_semantic_abstention_margin", 0.0)
+    resultado = await service.resolve(consulta, source="test", category="Kitchen")
+    assert resultado.method == "trigram"  # sem banda, o lado do produto ganha por pouco e o passo 2 aceita
+
+    monkeypatch.setattr(settings, "catalog_semantic_abstention_margin", 0.2)
+    resultado = await service.resolve(consulta + " 5l", source="test", category="Kitchen")
+    assert resultado.method == "created"  # abstido: o LLM (dublê) recebeu e não aceitou
+    [texto] = matcher.pick.call_args.kwargs["evidencias"].values()
+    assert "cannot tell which side" in texto
+
+
+async def test_polaridade_usa_a_media_dos_k_mais_proximos(db_session: AsyncSession) -> None:
+    """Um antagônico isolado perto da consulta não veta sozinho se os demais
+    estão longe e o produto tem vários termos perto: k-NN, não 1-NN."""
+    repo = ProductRepository(db_session)
+    entidade = await repo.create_entity(canonical_title=f"produto {uuid.uuid4()}")
+    for i in range(3):
+        await repo.set_alias(
+            alias_normalized=f"termo {i} {entidade.entity_key}", entity_key=entidade.entity_key, source="t"
+        )
+    await repo.create_excluded_terms_bulk(
+        entity_key=entidade.entity_key,
+        termos={f"antag {i}": f"antag {i}" for i in range(3)},
+        source="t",
+        kind="antagonist",
+    )
+    await db_session.flush()
+    pendentes = await repo.pending_embeddings(model="m", limit=10)
+    vetores = []
+    for tabela, id_, texto in pendentes:
+        if tabela == "product_aliases":
+            v = _eixo(1)  # os três termos do produto, todos no eixo da consulta
+        elif texto == "antag 0":
+            v = _eixo(1)  # UM antagônico idêntico à consulta
+        else:
+            v = _eixo(50)  # os outros dois, longe
+        vetores.append((tabela, id_, vector_literal(v)))
+    await repo.save_embeddings(vetores, model="m")
+
+    polaridades = await repo.polarity(vector_literal(_eixo(1)), model="m", entity_keys=[entidade.entity_key])
+    [polaridade] = polaridades.values()
+
+    assert polaridade.distancia_antagonico == pytest.approx(0.0, abs=1e-6)  # o 1-NN empataria e vetaria
+    assert polaridade.escore > 0 and not polaridade.vetada  # a média dos 3 decide pelo produto

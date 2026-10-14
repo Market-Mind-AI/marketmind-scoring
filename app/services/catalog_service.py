@@ -72,6 +72,7 @@ from app.repositories.product_repository import ProductRepository, TrigramOutcom
 from app.schemas.catalog import CatalogResolveResponse
 from app.services.catalog_matcher import CatalogMatcher
 from app.services.embedding_client import EmbeddingClient, EmbeddingError, vector_literal
+from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.utils.text import as_term_list, normalize_alias
 
 
@@ -110,6 +111,8 @@ def _merge_localized_markets(
             "formal_name": cur.get("formal_name") or new.get("formal_name"),
             "search_terms": _union_terms(cur.get("search_terms"), new.get("search_terms"), primary),
             "excluded_terms": _union_terms(cur.get("excluded_terms"), new.get("excluded_terms")),
+            "antagonist_terms": _union_terms(cur.get("antagonist_terms"), new.get("antagonist_terms")),
+            "contrast_attributes": _union_terms(cur.get("contrast_attributes"), new.get("contrast_attributes")),
             "confidence": max(float(cur.get("confidence") or 0.0), float(new.get("confidence") or 0.0)),
         }
     return merged
@@ -217,6 +220,10 @@ class CatalogService:
         self._repo = ProductRepository(session)
         self._matcher = matcher or CatalogMatcher()
         self._embedder = embedder or EmbeddingClient()
+        # O vetor de cada consulta, gerado uma vez por instância: o passo 2
+        # (veto), o 3a (recuperação) e as evidências do 3 usam o mesmo.
+        # None = tentou e falhou; não tenta de novo na mesma resolução.
+        self._vetores: dict[str, list[float] | None] = {}
 
     async def resolve(
         self,
@@ -411,6 +418,11 @@ class CatalogService:
                 f"Passo 2 recusado para {text!r}: difere de {trigram.match.product.canonical_title!r} por uma "
                 f"qualificação; escalando para o LLM"
             )
+        elif trigram.match is not None and await self._veto_semantico(generico, trigram.match.product):
+            # A forma da palavra dizia "é ela" e o significado diz "é o produto
+            # que ela declara como antagônico". Não decide nenhum dos dois por
+            # semelhança: vai para o passo 3 com a entidade na lista.
+            trigram.vetoed.append(trigram.match.product)
         elif trigram.match is not None:
             entity = trigram.match.product
             await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao, category=category)
@@ -436,9 +448,10 @@ class CatalogService:
         candidatos = await self._repo.list_match_candidates(
             category=category, priority=trigram.vetoed, semantic=semanticos, brand_key=brand_key
         )
-        motivo: dict[str, str] = {}
+        evidencias = await self._evidencias_de_polaridade(generico, candidatos)
+        motivo: dict[str, Any] = {}
         correspondente = await self._matcher.pick(
-            text=text, candidates=candidatos, motivo=motivo, category=category
+            text=text, candidates=candidatos, motivo=motivo, category=category, evidencias=evidencias
         )
         if correspondente is not None and motivo.get("relationship") == "subtype":
             # SUB-PRODUTO: entidade própria, pendurada na mais ampla.
@@ -482,6 +495,19 @@ class CatalogService:
             await self._registrar_chave(
                 chave, correspondente, source=source, alias_orfao=alias_orfao, category=category
             )
+            # O alias que acabou de ser gravado é, muitas vezes, de um IDIOMA
+            # que o catálogo não tinha — o passo 3 existe para esses. Sem
+            # antagônico nesse idioma, a próxima consulta antagônica nele casa
+            # por trigram com o alias novo e o veto não tem contra o que
+            # comparar: medido em 13/10/2026, 3 das 4 fusões que sobraram com o
+            # veto ligado foram assim (`écouteurs filaires` via o alias
+            # aprendido `écouteurs sans fil`). Os antagônicos vêm na MESMA
+            # resposta do LLM que decidiu, sem chamada a mais.
+            antagonicos = as_term_list(motivo.get("antagonist_terms"))
+            if antagonicos:
+                await self._index_excluded_terms(
+                    correspondente, {"_consulta": {"antagonist_terms": antagonicos}}, source="catalog_match"
+                )
             await self._atualizar(
                 correspondente,
                 category=category,
@@ -565,7 +591,7 @@ class CatalogService:
                 continue
             for termo in as_term_list(market.get("search_terms")):
                 aliases_validos.add(normalize_alias(termo))
-            for termo in as_term_list(market.get("excluded_terms")):
+            for termo in [*as_term_list(market.get("excluded_terms")), *as_term_list(market.get("antagonist_terms"))]:
                 excluidos_validos.add(normalize_alias(termo))
         aliases_validos.discard("")
         excluidos_validos.discard("")
@@ -601,12 +627,8 @@ class CatalogService:
         resolução segue com a seleção antiga (categoria e recência) em vez de
         falhar. Perder o recall custa, no pior caso, uma entidade duplicada —
         o erro recuperável."""
-        if not generico or not self._embedder.enabled:
-            return []
-        try:
-            [vetor] = await self._embedder.embed([generico], input_type="query")
-        except EmbeddingError as exc:
-            logger.warning(f"Busca semântica indisponível para {generico!r}; seguindo sem ela: {exc}")
+        vetor = await self._vetor_consulta(generico)
+        if vetor is None:
             return []
         vizinhos = await self._repo.semantic_search(
             vector_literal(vetor),
@@ -621,6 +643,91 @@ class CatalogService:
             )
         return [entidade for entidade, _ in vizinhos]
 
+    async def _vetor_consulta(self, generico: str) -> list[float] | None:
+        """O vetor da consulta, ou None quando não há como tê-lo (sem chave,
+        Voyage fora). Quem chama trata None como "sem evidência semântica" e
+        segue — nenhum passo depende disso para responder."""
+        if not generico or not self._embedder.enabled:
+            return None
+        if generico not in self._vetores:
+            try:
+                [self._vetores[generico]] = await self._embedder.embed([generico], input_type="query")
+            except EmbeddingError as exc:
+                logger.warning(f"Vetor indisponível para {generico!r}; seguindo sem evidência semântica: {exc}")
+                self._vetores[generico] = None
+        return self._vetores[generico]
+
+    async def _veto_semantico(self, generico: str, entity: ProductCatalog) -> bool:
+        """O passo 2 aceitaria `entity` por forma; o significado concorda?
+
+        Vetado quando a consulta está mais perto de um produto que a entidade
+        declara ANTAGÔNICO do que de qualquer termo dela. É o caso que o veto
+        do trigram não cobre: o antagônico escrito de um jeito que não está em
+        `excluded_terms` (`fritadeira industrial a óleo`) e que ainda assim
+        parece a entidade por forma.
+
+        Entidade sem antagônico vetorizado nunca é vetada, e sem vetor da
+        consulta também não: o passo 2 segue como era."""
+        if not self._embedder.enabled or not await self._repo.has_antagonist_vectors(
+            entity.entity_key, model=self._embedder.model
+        ):
+            return False
+        vetor = await self._vetor_consulta(generico)
+        if vetor is None:
+            return False
+        polaridades = await self._repo.polarity(
+            vector_literal(vetor), model=self._embedder.model, entity_keys=[entity.entity_key]
+        )
+        polaridade = polaridades.get(entity.entity_key)
+        if polaridade is None:
+            return False
+        if polaridade.vetada:
+            logger.info(
+                f"Passo 2 vetado pelo significado para {generico!r}: mais perto do antagônico "
+                f"{polaridade.termo_antagonico!r} ({polaridade.distancia_antagonico:.3f}) que de "
+                f"{polaridade.termo_positivo!r} ({polaridade.distancia_positivo:.3f}) em "
+                f"{entity.canonical_title!r} (escore {polaridade.escore:+.3f})"
+            )
+            return True
+        if polaridade.ambigua:
+            logger.info(
+                f"Passo 2 abstido para {generico!r}: entre {polaridade.termo_positivo!r} e o antagônico "
+                f"{polaridade.termo_antagonico!r} de {entity.canonical_title!r} por margem só de "
+                f"{polaridade.escore:+.3f}; escalando para o LLM"
+            )
+            return True
+        return False
+
+    async def _evidencias_de_polaridade(
+        self, generico: str, candidatos: list[ProductCatalog]
+    ) -> dict[uuid.UUID, str]:
+        """A mesma comparação do veto, entregue ao LLM como evidência em vez de
+        decisão: no passo 3 quem decide é ele. Só as entidades vetadas ou
+        ambíguas ganham linha — a ausência de veto não é evidência de
+        identidade (uma panela de arroz também fica mais perto da air fryer
+        que da fritadeira a óleo)."""
+        vetor = await self._vetor_consulta(generico)
+        if vetor is None or not candidatos:
+            return {}
+        polaridades = await self._repo.polarity(
+            vector_literal(vetor), model=self._embedder.model, entity_keys=[c.entity_key for c in candidatos]
+        )
+        evidencias: dict[uuid.UUID, str] = {}
+        for chave, p in polaridades.items():
+            if p.vetada:
+                evidencias[chave] = (
+                    f"the query is closer to {p.termo_antagonico!r}, a product this entry declares it is NOT "
+                    f"(distance {p.distancia_antagonico:.3f}), than to any of its own terms (nearest: "
+                    f"{p.termo_positivo!r}, {p.distancia_positivo:.3f})"
+                )
+            elif p.ambigua:
+                evidencias[chave] = (
+                    f"the query sits between this entry's own term {p.termo_positivo!r} "
+                    f"({p.distancia_positivo:.3f}) and {p.termo_antagonico!r}, a product it declares it is NOT "
+                    f"({p.distancia_antagonico:.3f}); the embedding cannot tell which side it is on"
+                )
+        return evidencias
+
     async def _vetorizar_pendentes(self, entity_key: uuid.UUID) -> None:
         """Gera o vetor dos aliases que esta resolução acabou de gravar.
 
@@ -632,14 +739,14 @@ class CatalogService:
         if not self._embedder.enabled:
             return
         try:
-            pendentes = await self._repo.aliases_without_embedding(
+            pendentes = await self._repo.pending_embeddings(
                 model=self._embedder.model, limit=1000, entity_key=entity_key
             )
             if not pendentes:
                 return
-            vetores = await self._embedder.embed([alias for _, alias in pendentes], input_type="document")
-            await self._repo.save_alias_embeddings(
-                [(id_, vector_literal(v)) for (id_, _), v in zip(pendentes, vetores, strict=True)],
+            vetores = await self._embedder.embed([texto for _, _, texto in pendentes], input_type="document")
+            await self._repo.save_embeddings(
+                [(t, id_, vector_literal(v)) for (t, id_, _), v in zip(pendentes, vetores, strict=True)],
                 model=self._embedder.model,
             )
             await self._session.commit()
@@ -648,7 +755,8 @@ class CatalogService:
             logger.warning(f"Aliases de {entity_key} ficaram sem vetor; o backfill completa: {exc}")
 
     async def backfill_embeddings(self, *, batch_size: int = 128) -> dict[str, int]:
-        """Gera o vetor de todo alias que não tem um do modelo atual.
+        """Gera o vetor de todo alias e termo antagônico que não tem um do
+        modelo atual.
 
         Cobre os aliases de antes da migration 052, os que `_vetorizar_pendentes`
         não conseguiu e, quando VOYAGE_EMBEDDING_MODEL muda, todos — vetores
@@ -663,12 +771,12 @@ class CatalogService:
         relatorio = {"aliases": 0, "lotes": 0, "tokens": 0}
         tokens_antes = self._embedder.tokens
         while True:
-            pendentes = await self._repo.aliases_without_embedding(model=self._embedder.model, limit=batch_size)
+            pendentes = await self._repo.pending_embeddings(model=self._embedder.model, limit=batch_size)
             if not pendentes:
                 break
-            vetores = await self._embedder.embed([alias for _, alias in pendentes], input_type="document")
-            await self._repo.save_alias_embeddings(
-                [(id_, vector_literal(v)) for (id_, _), v in zip(pendentes, vetores, strict=True)],
+            vetores = await self._embedder.embed([texto for _, _, texto in pendentes], input_type="document")
+            await self._repo.save_embeddings(
+                [(t, id_, vector_literal(v)) for (t, id_, _), v in zip(pendentes, vetores, strict=True)],
                 model=self._embedder.model,
             )
             await self._session.commit()
@@ -677,6 +785,67 @@ class CatalogService:
             logger.info(f"Backfill de embeddings: {relatorio['aliases']} aliases")
         relatorio["tokens"] = self._embedder.tokens - tokens_antes
         logger.info(f"Backfill de embeddings concluído: {relatorio}")
+        return relatorio
+
+    async def backfill_antagonists(
+        self, client: EnrichmentClient, *, batch_size: int = 50, refazer: bool = False
+    ) -> dict[str, int]:
+        """Gera `antagonist_terms` para as entidades criadas antes deles.
+
+        A MESMA chamada de enriquecimento que o /analyze faz, e não um prompt
+        próprio: produto novo já recebe os antagônicos nela, e manter duas
+        instruções para o mesmo campo seria manter dois critérios. Da resposta
+        só o `antagonist_terms` é aproveitado — o vocabulário de busca já
+        curado não é tocado, porque trocá-lo mudaria a demanda medida de
+        análises já feitas. Entidade cujos mercados já
+        trazem a chave `antagonist_terms` (mesmo vazia: "não há confundível" é
+        resposta) é pulada, a menos que `refazer`.
+
+        Commit por entidade: é uma chamada lenta e paga, e uma falha no meio
+        não pode jogar fora as anteriores. Falha de uma entidade é contada e
+        não interrompe as outras. Depois disso os antagônicos estão indexados
+        mas sem vetor; `backfill_embeddings` completa."""
+        relatorio = {"entidades": 0, "puladas": 0, "falhas": 0, "antagonicos": 0}
+        ultima: uuid.UUID | None = None
+        while True:
+            entidades = await self._repo.list_entities_with_markets(after=ultima, limit=batch_size)
+            if not entidades:
+                break
+            ultima = entidades[-1].entity_key
+            for entidade in entidades:
+                mercados = {k: v for k, v in (entidade.localized_markets or {}).items() if isinstance(v, dict)}
+                if not mercados or (
+                    not refazer and all("antagonist_terms" in m for m in mercados.values())
+                ):
+                    relatorio["puladas"] += 1
+                    continue
+                try:
+                    resposta = await client.localized_markets(
+                        product_name=entidade.canonical_title,
+                        brand=None,
+                        category=entidade.category,
+                        countries=[(iso3, m.get("search_language")) for iso3, m in mercados.items()],
+                    )
+                    gerados = {m.country: m.antagonist_terms for m in resposta if m.country in mercados}
+                except EnrichmentError as exc:
+                    logger.warning(f"Antagônicos de {entidade.canonical_title!r} falharam: {exc}")
+                    relatorio["falhas"] += 1
+                    continue
+                novos = {
+                    iso3: {**m, "antagonist_terms": gerados.get(iso3, m.get("antagonist_terms") or [])}
+                    for iso3, m in mercados.items()
+                }
+                # Dicionário novo, não mutação: o SQLAlchemy só percebe a troca
+                # de um JSONB pela atribuição.
+                entidade.localized_markets = {**(entidade.localized_markets or {}), **novos}
+                relatorio["antagonicos"] += await self._index_excluded_terms(entidade, novos)
+                relatorio["entidades"] += 1
+                await self._session.commit()
+                logger.info(
+                    f"Antagônicos de {entidade.canonical_title!r}: "
+                    f"{sorted({t for ts in gerados.values() for t in ts})[:8]}"
+                )
+        logger.info(f"Backfill de antagônicos concluído: {relatorio}")
         return relatorio
 
     async def backfill_terms(self, *, batch_size: int = 100) -> dict[str, int]:
@@ -799,7 +968,10 @@ class CatalogService:
         return await self._repo.create_aliases_bulk(aliases=novos, source="localized_market")
 
     async def _index_excluded_terms(
-        self, entity: ProductCatalog, localized_markets: dict[str, dict[str, Any]] | None
+        self,
+        entity: ProductCatalog,
+        localized_markets: dict[str, dict[str, Any]] | None,
+        source: str = "localized_market",
     ) -> int:
         """Grava os `excluded_terms` de cada mercado como evidência NEGATIVA.
 
@@ -818,35 +990,42 @@ class CatalogService:
         if not localized_markets:
             return 0
 
-        candidatos: dict[str, str] = {}
-        for market in localized_markets.values():
-            if not isinstance(market, dict):
-                continue
-            for term in as_term_list(market.get("excluded_terms")):
-                key = normalize_alias(term)
-                # Vazio em escrita não-latina, como nos aliases: sem
-                # representação normalizada, não há o que comparar.
-                if key:
-                    candidatos.setdefault(key, term)
+        gravados = 0
+        # `antagonist_terms` (migration 053) entram na MESMA tabela, depois
+        # dos excluídos: são evidência negativa para o trigram tanto quanto,
+        # e um termo que aparece nas duas listas é promovido a antagônico,
+        # que é o único tipo que o veto semântico lê.
+        for campo, kind in (("excluded_terms", "excluded"), ("antagonist_terms", "antagonist")):
+            candidatos: dict[str, str] = {}
+            for market in localized_markets.values():
+                if not isinstance(market, dict):
+                    continue
+                for term in as_term_list(market.get(campo)):
+                    key = normalize_alias(term)
+                    # Vazio em escrita não-latina, como nos aliases: sem
+                    # representação normalizada, não há o que comparar.
+                    if key:
+                        candidatos.setdefault(key, term)
 
-        if not candidatos:
-            return 0
-
-        donos = await self._repo.existing_alias_owners(set(candidatos))
-        novos: dict[str, str] = {}
-        for key, surface in candidatos.items():
-            if donos.get(key) == entity.entity_key:
-                logger.warning(
-                    f"Termo {surface!r} é search_term e excluded_term da mesma entidade "
-                    f"({entity.canonical_title!r}); mantido como positivo e NÃO indexado como exclusão"
-                )
+            if not candidatos:
                 continue
-            novos[key] = surface
-        # Reindexar a mesma entidade é idempotente pelo ON CONFLICT, então não
-        # há mais um SELECT de "o que já está indexado" antes de cada gravação.
-        return await self._repo.create_excluded_terms_bulk(
-            entity_key=entity.entity_key, termos=novos, source="localized_market"
-        )
+
+            donos = await self._repo.existing_alias_owners(set(candidatos))
+            novos: dict[str, str] = {}
+            for key, surface in candidatos.items():
+                if donos.get(key) == entity.entity_key:
+                    logger.warning(
+                        f"Termo {surface!r} é search_term e {campo} da mesma entidade "
+                        f"({entity.canonical_title!r}); mantido como positivo e NÃO indexado como exclusão"
+                    )
+                    continue
+                novos[key] = surface
+            # Reindexar a mesma entidade é idempotente pelo ON CONFLICT, então
+            # não há um SELECT de "o que já está indexado" antes de gravar.
+            gravados += await self._repo.create_excluded_terms_bulk(
+                entity_key=entity.entity_key, termos=novos, source=source, kind=kind
+            )
+        return gravados
 
     @staticmethod
     def _refresh_entity_fields(

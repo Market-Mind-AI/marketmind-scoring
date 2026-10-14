@@ -21,6 +21,16 @@ class BackfillEmbeddingsResponse(BaseModel):
     tokens: int
 
 
+class BackfillAntagonistsResponse(BaseModel):
+    entidades: int
+    puladas: int
+    falhas: int
+    # Linhas gravadas/promovidas em product_excluded_terms como antagônico.
+    antagonicos: int
+    # O backfill de vetores que roda logo depois, no mesmo pedido.
+    vetores: BackfillEmbeddingsResponse
+
+
 class BrandSplitRequest(BaseModel):
     entity_key: uuid.UUID
     brand: str = Field(..., min_length=1, description="A marca que o vocabulário da entidade realmente mede")

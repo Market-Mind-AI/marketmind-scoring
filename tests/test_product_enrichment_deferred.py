@@ -30,7 +30,7 @@ def _market(country: str, term: str, language: str = "en") -> SimpleNamespace:
     # que idioma os escreveu, e o dublê tem de refletir isso.
     return SimpleNamespace(
         country=country, primary_name=term, formal_name=None, search_language=language,
-        search_terms=[term], excluded_terms=[], confidence=0.9,
+        search_terms=[term], excluded_terms=[], antagonist_terms=[], contrast_attributes=[], confidence=0.9,
     )  # fmt: skip
 
 

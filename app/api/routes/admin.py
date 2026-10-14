@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import EntityNotFoundError, MarketMindCoreError
 from app.db.session import get_session
 from app.schemas.admin import (
+    BackfillAntagonistsResponse,
     BackfillEmbeddingsResponse,
     BackfillTermsResponse,
     BrandSplitRequest,
@@ -17,6 +18,7 @@ from app.schemas.admin import (
 from app.services.brand_split_service import BrandSplitService
 from app.services.catalog_service import CatalogService
 from app.services.embedding_client import EmbeddingError
+from app.services.enrichment_client import EnrichmentClient
 from app.services.macro_coverage import MacroPrewarmService
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key
@@ -59,6 +61,31 @@ async def backfill_embeddings(session: AsyncSession = Depends(get_session)) -> B
     except EmbeddingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return BackfillEmbeddingsResponse(**relatorio)
+
+
+@router.post(
+    "/catalog/backfill-antagonists",
+    response_model=BackfillAntagonistsResponse,
+    summary="Generate the antagonist products of catalog entities created before they existed",
+    description=(
+        "Runs the SAME enrichment call /analyze makes, once per entity, for the markets it already has, and "
+        "keeps only `antagonist_terms` from the answer — the curated search vocabulary is left untouched. "
+        "Antagonists are the products a buyer could confuse with it that differ in one defining attribute. "
+        "They are indexed as negative evidence and embedded, which is what the semantic veto of steps 2 and "
+        "3 compares a query against. Entities whose markets already carry the key are skipped unless "
+        "`refazer=true`. Costs model tokens; commits per entity."
+    ),
+)
+async def backfill_antagonists(
+    refazer: bool = False, session: AsyncSession = Depends(get_session)
+) -> BackfillAntagonistsResponse:
+    service = CatalogService(session)
+    relatorio = await service.backfill_antagonists(EnrichmentClient(), refazer=refazer)
+    try:
+        vetores = await service.backfill_embeddings()
+    except EmbeddingError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return BackfillAntagonistsResponse(**relatorio, vetores=BackfillEmbeddingsResponse(**vetores))
 
 
 @router.post(

@@ -227,6 +227,13 @@ class Settings(BaseSettings):
     # consulta mais lenta. 40 é o default do pgvector; ver
     # scripts/benchmark_semantic_recall.py para a curva medida.
     catalog_semantic_ef_search: int = 40
+    # Banda de abstenção do veto antagônico (ProductRepository.polarity): com o
+    # escore k-NN entre 0 e este valor, a consulta é ambígua e vai ao LLM em
+    # vez de o passo 2 aceitar por forma. Zero desliga a banda (só o sinal
+    # decide). 0,035 é o joelho da curva precisão x cobertura no conjunto
+    # sintético (14/10/2026: cobre 82% e acerta 99,3% do que decide), validado
+    # depois nas buscas reais — ver scripts/eval_antagonist_veto.py.
+    catalog_semantic_abstention_margin: float = 0.035
 
     # Fase 5 — identificação de produto por foto (app/services/vision_client.py,
     # product_identification_service.py). Anthropic tem endpoint de visão

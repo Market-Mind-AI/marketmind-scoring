@@ -83,6 +83,11 @@ class LocalizedMarket(BaseModel):
     formal_name: str | None = None
     search_terms: list[str] = Field(default_factory=list)
     excluded_terms: list[str] = Field(default_factory=list)
+    # Outros produtos que se confundem com este (mesmo nome quase, um atributo
+    # definidor oposto). Ver vision_client.MarketTerms.antagonist_terms.
+    antagonist_terms: list[str] = Field(default_factory=list)
+    # Os atributos que separam o produto dos antagônicos ('cooking medium: hot air vs oil').
+    contrast_attributes: list[str] = Field(default_factory=list)
     confidence: float
 
 

@@ -30,7 +30,8 @@ Daí a instrução para abster-se na dúvida — o erro barato é preferido de
 propósito.
 """
 
-from typing import TYPE_CHECKING
+import uuid
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -76,6 +77,16 @@ class CatalogMatchDecision(BaseModel):
     reasoning: str = Field(
         default="",
         description="One sentence naming the evidence that decided it.",
+    )
+    antagonist_terms: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Only when relationship is 'same': the 1-4 OTHER products a buyer searching in the QUERY'S "
+            "language could confuse with this one — same category, almost the same name, but one defining "
+            "attribute opposite or different (air vs oil, wired vs wireless, with vs without caffeine). "
+            "Written in the query's language, as the full names people search for those products. Empty "
+            "when there is no real confusable or the relationship is not 'same'."
+        ),
     )
 
 
@@ -136,7 +147,7 @@ _SYSTEM = (
 )
 
 
-def _describe(product: "ProductCatalog", max_terms: int = 12) -> str:
+def _describe(product: "ProductCatalog", max_terms: int = 12, evidencia: str | None = None) -> str:
     """Uma entidade como o LLM a vê: nome, categoria e uma amostra dos termos
     curados, nos DOIS sinais. Os termos são a evidência real — o
     `canonical_title` sozinho é o idioma de quem cadastrou primeiro, não o
@@ -159,7 +170,9 @@ def _describe(product: "ProductCatalog", max_terms: int = 12) -> str:
     for market in (product.localized_markets or {}).values():
         if not isinstance(market, dict):
             continue
-        for term in market.get("excluded_terms") or []:
+        # Antagônicos primeiro: são os que mais dizem sobre a fronteira do
+        # produto, e a amostra é cortada em `max_terms`.
+        for term in [*(market.get("antagonist_terms") or []), *(market.get("excluded_terms") or [])]:
             if term and term not in excluidos:
                 excluidos.append(term)
     amostra = ", ".join(termos[:max_terms]) if termos else "(sem termos curados)"
@@ -169,8 +182,21 @@ def _describe(product: "ProductCatalog", max_terms: int = 12) -> str:
         f"  category: {product.category or 'unknown'}",
         f"  known terms: {amostra}",
     ]
+    # Os atributos que separam o produto dos seus antagônicos, quando a
+    # curadoria os nomeou ('cooking medium: hot air vs oil'). É a pergunta que
+    # o modelo tem de responder sobre a consulta: de que lado deles ela está?
+    atributos: list[str] = []
+    for m in (product.localized_markets or {}).values():
+        if isinstance(m, dict):
+            atributos.extend(a for a in (m.get("contrast_attributes") or []) if a and a not in atributos)
+    if atributos:
+        linhas.append(f"  defining attributes vs. its confusables: {'; '.join(atributos[:6])}")
     if excluidos:
         linhas.append(f"  NOT this product: {', '.join(excluidos[:max_terms])}")
+    if evidencia:
+        # O veto semântico do passo 3a (CatalogService._evidencias_de_polaridade):
+        # medido, não decidido. Quem decide continua sendo o modelo.
+        linhas.append(f"  semantic check: {evidencia}")
     return "\n".join(linhas)
 
 
@@ -185,8 +211,9 @@ class CatalogMatcher:
         *,
         text: str,
         candidates: list["ProductCatalog"],
-        motivo: dict[str, str] | None = None,
+        motivo: dict[str, Any] | None = None,
         category: str | None = None,
+        evidencias: dict[uuid.UUID, str] | None = None,
     ) -> "ProductCatalog | None":
         """`motivo`, quando dado, recebe em `motivo["reasoning"]` o porquê da
         escolha — a evidência da coincidência SEMÂNTICA, que é o que este passo
@@ -199,7 +226,7 @@ class CatalogMatcher:
             return None
 
         provider = self._provider or resolve_catalog_match_llm()
-        listagem = "\n".join(_describe(c) for c in candidates)
+        listagem = "\n".join(_describe(c, evidencia=(evidencias or {}).get(c.entity_key)) for c in candidates)
         # A categoria do PEDIDO, que antes não era enviada. Sem ela o modelo
         # via a categoria dos candidatos e não tinha contra o que comparar:
         # medido em 24/09/2026, `jaguar` em Wildlife foi fundido com `jaguar`
@@ -241,6 +268,8 @@ class CatalogMatcher:
                     motivo["relationship"] = relacao
                     if decision.reasoning:
                         motivo["reasoning"] = decision.reasoning
+                    if relacao == "same" and decision.antagonist_terms:
+                        motivo["antagonist_terms"] = decision.antagonist_terms
                 rotulo = "é o mesmo produto" if relacao == "same" else "é sub-produto de"
                 logger.info(
                     f"Match de catálogo: {text!r} {rotulo} {candidate.canonical_title!r} ({decision.reasoning})"

@@ -139,6 +139,104 @@ compara con umbral: el vector **recupera**, el LLM **decide**. Sin clave o con V
 la anterior. `scripts/benchmark_semantic_recall.py` mide recall@k y latencia del HNSW contra la búsqueda exacta
 (fuerza bruta) para varios `ef_search`, en el catálogo real y en uno sintético mayor.
 
+#### 1.3.1 El veto por producto antagónico: de la distancia absoluta al contraste
+
+**El problema, medido.** Con `voyage-4`, `fritadeira a ar` y `fritadeira a óleo` distan 0,065; `fritadeira a ar` y
+`air fryer` distan 0,106. El producto OPUESTO está más cerca que el MISMO producto en otro idioma. Ni un modelo mayor
+(`voyage-4-large`) ni un reranker cross-encoder (`rerank-2.5`, con y sin instrucción) invierten ese orden: separan
+mejor, pero sigue sin existir un umbral que acepte `freidora de aire` ≈ `heißluftfritteuse` sin aceptar también
+`freidora sin aceite` ≈ `freidora con aceite`. Un embedding responde "¿habla de lo mismo?", y la fritadora de aceite
+habla de lo mismo. La pregunta del catálogo es otra: "¿es el mismo producto?", y la decide UN atributo.
+
+**La idea.** Si un umbral sobre la distancia al producto no separa, se compara contra algo más: lo que el catálogo
+declara que el producto NO es. Cada producto lleva, generado en la misma llamada de enriquecimiento que ya produce su
+vocabulario (sin llamada adicional), sus **productos antagónicos**: el mismo producto con UN atributo definidor
+invertido — aire × aceite, con × sin cafeína, inalámbrico × con cable. Son *pares mínimos*, en el sentido de los
+*contrast sets* de Gardner et al. (2020). La regla es RELATIVA y sin umbral: la consulta se archiva del lado al que
+está más cerca. Es la misma regla que ya funcionaba en el paso 2 con trigramas (44/102 fusiones → 0), transportada
+al espacio de embeddings. Vetar no decide: manda al LLM con la evidencia escrita ("más cerca de `fritteuse mit öl`,
+que esta entrada declara no ser, que de cualquier término propio").
+
+**Dos conjuntos de evaluación** (`evaluation/`): 180 consultas sintéticas escritas a mano para 15 productos en 6
+idiomas, tres de los cuales (fr, it, pl) no existen en el catálogo evaluado; y 97 búsquedas REALES de usuarios de la
+tabla `keyword_related` del colector Google Ads (6 productos, mercados US/BR/DE/IN/GB/JP), etiquetadas a mano. Cada
+consulta es `same` (es el producto) o `antagonist` (es el opuesto). El catálogo se construye con el pipeline real
+(`CatalogService.resolve`, vocabulario generado por `claude-opus-5`, vectores de Voyage).
+
+**Ablación de la regla de decisión** (`evaluation/veto_rules.py`, mismos vectores, sin LLM). Cinco reglas: 1-NN
+relativo, k-NN relativo (k=3), centroide más cercano (Rocchio como clasificador, Manning et al. IIR §14.2),
+proyección sobre el eje de Rocchio μ_producto − μ_antagónico, y LDA de Fisher con *shrinkage*. Y dos generaciones
+del conjunto de contraste: v1, lista libre de "confundibles"; v2, pares mínimos sobre UN atributo nombrado.
+
+| Regla | Sint. v1 | Sint. v2 | Real v1 | Real v2 |
+|---|---|---|---|---|
+| mejor umbral ABSOLUTO posible (con fuga del gabarito) | 87,8 % | — | 80,4 % | 81,4 % |
+| 1-NN relativo | 95,6 % | 93,9 % | 94,8 % | 93,8 % |
+| k-NN relativo (k=3) | 95,6 % | **95,0 %** | **97,9 %** | 93,8 % |
+| centroide | 83,9 % | 95,0 % | 89,7 % | 89,7 % |
+| eje de Rocchio | 90,0 % | 95,0 % | 90,7 % | 88,7 % |
+| LDA (shrinkage) | 90,0 % | 94,4 % | 95,9 % | **95,9 %** |
+
+Tres lecturas. (1) Cualquier regla relativa supera al mejor umbral absoluto por 8–15 puntos: el contraste aporta lo
+que la distancia sola no tiene. (2) Los métodos de centroide EXIGEN un conjunto de contraste limpio: con la lista
+libre (v1) el LLM mezclaba vecinos con opuestos (`toaster oven` y `pressure cooker` como antagónicos de la air fryer;
+`oat milk` como antagónico de la leche sin lactosa, que también carece de lactosa) y el centroide de los
+"antagónicos" caía junto al producto; con pares mínimos (v2) suben 5–11 puntos. El diagnóstico *leave-one-out* sobre
+el eje (`pureza_leave_one_out`) lo cuantifica: en v2 casi ningún antagónico proyecta del lado del producto. Los
+vecinos más cercanos, en cambio, toleran un antagónico erróneo — uno lejos de la consulta simplemente no cuenta — y
+por eso 1-NN/k-NN apenas cambian entre v1 y v2. (3) Forzar UN atributo cuesta cobertura: para `espresso machine` el
+LLM eligió "presión × filtro" y dejó fuera `moka pot` y las cápsulas; para `curl cream`, "crema × gel", y dejó fuera
+la crema alisadora. Un producto tiene VARIOS atributos definidores, y cada uno genera su familia de pares mínimos.
+La formulación que se adopta (v3) es la unión de los pares mínimos sobre cada atributo nombrado
+(`contrast_attributes`, 1–3 por producto): la cobertura de v1 con la pureza de v2. Para `espresso machine` el LLM
+nombra tres ('pump pressure vs drip filter', 'pump pressure vs stovetop moka', 'machine vs capsule system'); para
+`scotch whisky`, el origen contra Irlanda, Japón y EE. UU.
+
+| Regla | Sint. v3 | Real v3 |
+|---|---|---|
+| 1-NN relativo | 96,7 % | 94,8 % |
+| **k-NN relativo (k=3)** | 96,1 % | **96,9 %** |
+| centroide | 96,7 % | 90,7 % |
+| eje de Rocchio | 94,4 % | 90,7 % |
+| LDA (shrinkage) | 96,7 % | 95,9 % |
+
+Con v3 las cinco reglas convergen en el sintético (94–97 %) y k-NN es la mejor en las búsquedas reales. Es la regla
+de producción (`ProductRepository.polarity`): robusta a un antagónico erróneo, sin hiperparámetro de distancia, y
+O(k) por entidad. LDA la iguala pero exige una matriz 1024×1024 por entidad; el eje de Rocchio, aunque es la idea
+más elegante (la resta cancela lo que ambos lados comparten y deja la dirección del atributo), pierde en las
+búsquedas reales porque un producto con varios atributos definidores no tiene UN eje.
+
+**Clasificación selectiva.** El módulo del escore es una margen; por debajo de una banda de abstención la consulta
+es ambigua y va al LLM en vez de aceptarla el paso 2 por forma (Geifman & El-Yaniv, 2017: precisión × cobertura).
+La banda se calibra en el conjunto sintético y se valida en el real, nunca al revés: en el sintético (v3, k-NN) el
+codo de la curva está en t = 0,033 — cobertura 82 %, 99,3 % de acierto en lo decidido; a partir de ahí la precisión
+se estanca y sólo cae la cobertura. Se fija t = 0,035 (`CATALOG_SEMANTIC_ABSTENTION_MARGIN`).
+Aplicada FIJA a las búsquedas reales: cubre el 83,5 % y acierta el 100 % de lo que decide.
+
+**De extremo a extremo**, con el LLM real decidiendo el paso 3 y el catálogo reconstruido para cada modo
+(`--e2e`). Lo que importa es la FUSIÓN ERRÓNEA: el antagónico archivado como el producto, el error silencioso y
+permanente. "Acierto perdido" es el error barato (duplicado o subtipo), y en las búsquedas reales son cinco casos
+que el LLM declara subtipo (`compact espresso machine`), lectura defendible frente a la etiqueta manual.
+
+| | Reales (97) | Sintéticas (180) |
+|---|---|---|
+| fusiones erróneas sin veto | 7/40 | 9/90 |
+| **fusiones erróneas con veto + banda** | **0/40** | **0/90** |
+| producto reconocido | 52/57 (igual) | 89/90 (igual) |
+| llamadas al LLM | 47 → 53 | 114 → 124 |
+
+El coste es el 5–10 % de llamadas adicionales al LLM — los casos que la banda declara ambiguos — y una llamada de
+embedding (~0,2 s) en las consultas que el trigrama aceptaría. Ninguna llamada NUEVA al modelo: los antagónicos
+salen de la misma llamada de enriquecimiento, y cuando el paso 3 acepta una consulta en un idioma que el catálogo no
+tenía, devuelve en la misma respuesta los antagónicos en ese idioma (sin eso, 3 de las 4 fusiones que quedaban eran
+alias aprendidos sin contrapeso: `écouteurs filaires` contra el alias recién aprendido `écouteurs sans fil`).
+
+**Limitaciones, para decirlas antes de que las pregunten.** Las etiquetas de las búsquedas reales son de una
+persona; 277 consultas y 21 productos son una muestra pequeña, con intervalos de ±3–5 puntos; los antagónicos
+dependen de que el LLM de enriquecimiento nombre bien los atributos (el diagnóstico *leave-one-out* señala las
+listas sospechosas, no las corrige); y el prefijo `e-tretroller` × `tretroller` sigue siendo el caso que ni forma ni
+significado separan — cae en la banda y lo decide el LLM.
+
 ### 1.4 Coste asimétrico del error — lo que el diseño optimiza
 
 Los dos errores posibles no cuestan lo mismo:

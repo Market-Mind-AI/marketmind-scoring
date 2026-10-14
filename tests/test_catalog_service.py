@@ -20,7 +20,7 @@ def _match_primeiro_subtipo(motivo_dado: str = "versao mais estreita do primeiro
     é um produto mais estreito dentro dele. Quem chama cria entidade própria
     pendurada nesse candidato."""
 
-    def _pick(*, text, candidates, motivo=None, category=None):  # noqa: ANN001, ANN202
+    def _pick(*, text, candidates, motivo=None, category=None, evidencias=None):  # noqa: ANN001, ANN202
         if not candidates:
             return None
         if motivo is not None:
@@ -40,7 +40,7 @@ def _match_primeiro(motivo_dado: str = "mesmo produto, nomes diferentes") -> Asy
     Preenche `motivo` como o matcher real faz: é a evidência da coincidência
     por significado, e é ela que chega ao trace do Langfuse."""
 
-    def _pick(*, text, candidates, motivo=None, category=None):  # noqa: ANN001, ANN202
+    def _pick(*, text, candidates, motivo=None, category=None, evidencias=None):  # noqa: ANN001, ANN202
         if not candidates:
             return None
         if motivo is not None:

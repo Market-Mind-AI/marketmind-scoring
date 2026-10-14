@@ -83,7 +83,24 @@ _TASK = (
     "the local forms of those.\n"
     "Write them in the local language, lowercase, without accents where the language allows both "
     "spellings. Be generous: a term wrongly excluded costs a little demand, while a term wrongly "
-    "counted inflates a market against every other one."
+    "counted inflates a market against every other one.\n\n"
+    "ANTAGONIST PRODUCTS — `contrast_attributes` and `antagonist_terms`. These decide product "
+    "IDENTITY, not demand: the catalog compares a new query against what this product IS and "
+    "against these, and files the query under whichever side it is closer to. So they must be "
+    "MINIMAL PAIRS. First list the defining attributes (usually 1-3) whose flip turns this product "
+    "into ANOTHER real, commonly searched product — an espresso machine has several: 'brewing: pump "
+    "pressure vs drip filter', 'brewing: pump pressure vs stovetop moka', 'format: machine vs "
+    "capsule system'; a curl cream has 'result: define curls vs straighten' and 'texture: cream vs "
+    "gel'. Then, per country, list for EACH attribute the full names local buyers search for the "
+    "product with that one attribute flipped and nothing else changed ('fritadeira a óleo', never "
+    "just 'óleo'), generic, in the local language.\n"
+    "The test for every term: does it sit on the OPPOSITE side of one listed attribute? A product "
+    "that shares this product's value is NOT an antagonist, however close it is — oat milk is also "
+    "lactose-free, a toaster oven also cooks with hot air, a convection oven is not a fryer at all. "
+    "Neighbours in the category, accessories, and broader or narrower versions of the product are "
+    "NOT antagonists either: they belong, if anywhere, in excluded_terms. Usage, recipe and lookup "
+    "words stay in excluded_terms too. A product with no real minimal pair gets empty lists — an "
+    "empty list is a correct answer, a polluted one is not."
 )
 
 
@@ -140,3 +157,4 @@ class EnrichmentClient:
         if not isinstance(result, LocalizedMarketsResult):  # defensive; schema is provider-enforced
             raise EnrichmentError("Enrichment LLM returned an unexpected result type")
         return result.markets
+

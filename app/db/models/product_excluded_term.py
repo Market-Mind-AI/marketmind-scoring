@@ -55,6 +55,12 @@ class ProductExcludedTerm(Base):
     term: Mapped[str] = mapped_column(nullable=False)
     source: Mapped[str] = mapped_column(nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(nullable=False, default=utc_now)
+    # 'excluded' = não contar como demanda (uso, receita, outro produto de
+    # mesmo nome); 'antagonist' = produto que se confunde com este e é outro,
+    # o único tipo que recebe vetor e participa do veto semântico (migration
+    # 053). `embedding`/`embedding_model` existem na tabela e não são mapeados,
+    # pelo mesmo motivo dos de ProductAlias.
+    kind: Mapped[str] = mapped_column(nullable=False, default="excluded", server_default="excluded")
 
     __table_args__ = (
         CheckConstraint("btrim(term_normalized) <> ''", name="ck_product_excluded_terms_term_nao_vazio"),

@@ -76,6 +76,29 @@ class MarketTerms(BaseModel):
             "looking it up rather than shopping ('o que é', 'vs', 'wikipedia')."
         ),
     )
+    contrast_attributes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The defining attributes (usually 1-3) whose flip turns this product into ANOTHER real, "
+            "commonly searched product, each as 'attribute: this value vs opposite value' in English — "
+            "for an espresso machine: 'brewing: pump pressure vs drip filter', 'brewing: pump pressure vs "
+            "stovetop moka', 'format: machine vs capsule system'; for a curl cream: 'result: define curls vs "
+            "straighten', 'texture: cream vs gel'. Empty when no attribute flip yields another real product."
+        ),
+    )
+    antagonist_terms: list[str] = Field(
+        default_factory=list,
+        description=(
+            "MINIMAL PAIRS of this product: for EACH entry of contrast_attributes, the product with that one "
+            "attribute flipped to its opposite value and nothing else changed. Written as the full names "
+            "local buyers search for THAT product (never a lone word like 'óleo'), generic, no brands. "
+            "Every term must sit on the OPPOSITE side of one listed attribute: a product that shares this "
+            "product's value is NOT an antagonist (oat milk is also lactose-free; a toaster oven also cooks "
+            "with hot air). Neighbours, accessories and broader/narrower products are NOT antagonists. "
+            "Empty when contrast_attributes is empty. Example (Brazil, air fryer): ['fritadeira a óleo',"
+            "'fritadeira elétrica com óleo']. Example (Spain, decaf coffee): ['café con cafeína','café normal']."
+        ),
+    )
     confidence: float = Field(description="0-1 confidence in this market's terms; low values are flagged for review.")
 
 

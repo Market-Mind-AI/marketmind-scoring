@@ -5,6 +5,7 @@ from typing import Any, cast
 
 from sqlalchemy import CursorResult, bindparam, delete, func, literal_column, select, text
 from sqlalchemy import true as sa_true
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,31 @@ from app.utils.time import utc_now
 class TrigramMatch:
     product: ProductCatalog
     similarity: float
+
+
+@dataclass
+class Polaridade:
+    """De que lado de uma oposição a consulta caiu, para UMA entidade."""
+
+    # O termo mais próximo de cada lado: a evidência legível, para o log e
+    # para o LLM. A decisão é pelo `escore` (k-NN), não por estes dois.
+    termo_positivo: str
+    distancia_positivo: float
+    termo_antagonico: str
+    distancia_antagonico: float
+    # sim média dos k termos mais próximos do produto - a dos k antagônicos.
+    escore: float
+
+    @property
+    def vetada(self) -> bool:
+        # Empate veta, como no trigram: na dúvida, quem decide é o LLM.
+        return self.escore <= 0
+
+    @property
+    def ambigua(self) -> bool:
+        """Dentro da banda de abstenção: nenhum dos lados ganhou por margem
+        suficiente para o passo 2 decidir por forma. Vai ao LLM."""
+        return not self.vetada and self.escore <= settings.catalog_semantic_abstention_margin
 
 
 @dataclass
@@ -532,10 +558,16 @@ class ProductRepository:
         result = cast(CursorResult[Any], await self._session.execute(stmt))
         return int(result.rowcount or 0)
 
-    async def create_excluded_terms_bulk(self, *, entity_key: uuid.UUID, termos: dict[str, str], source: str) -> int:
+    async def create_excluded_terms_bulk(
+        self, *, entity_key: uuid.UUID, termos: dict[str, str], source: str, kind: str = "excluded"
+    ) -> int:
         """Mesma razão do bulk de aliases. O conflito aqui é por
         (entity_key, term_normalized): reindexar a mesma entidade não duplica,
-        e por isso o indexador não precisa mais ler antes de gravar."""
+        e por isso o indexador não precisa mais ler antes de gravar.
+
+        Um termo que chega como `antagonist` e já existia como `excluded` é
+        PROMOVIDO: o antagônico é o que mais diz sobre a identidade, e é o
+        único que o veto semântico lê. O contrário nunca rebaixa."""
         if not termos:
             return 0
         linhas = [
@@ -546,14 +578,19 @@ class ProductRepository:
                 "term": superficie,
                 "source": source,
                 "first_seen_at": utc_now(),
+                "kind": kind,
             }
             for normalizado, superficie in termos.items()
         ]
-        stmt = (
-            pg_insert(ProductExcludedTerm)
-            .values(linhas)
-            .on_conflict_do_nothing(constraint="uq_product_excluded_terms_entity_term")
-        )
+        stmt = pg_insert(ProductExcludedTerm).values(linhas)
+        if kind == "antagonist":
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_product_excluded_terms_entity_term",
+                set_={"kind": "antagonist"},
+                where=ProductExcludedTerm.kind != "antagonist",
+            )
+        else:
+            stmt = stmt.on_conflict_do_nothing(constraint="uq_product_excluded_terms_entity_term")
         result = cast(CursorResult[Any], await self._session.execute(stmt))
         return int(result.rowcount or 0)
 
@@ -606,6 +643,10 @@ class ProductRepository:
 
         stmt_excl = delete(ProductExcludedTerm).where(
             ProductExcludedTerm.entity_key == entity_key,
+            # A mesma restrição dos aliases. Sem ela, os antagônicos que o
+            # passo 3 aprende (source "catalog_match", fora de
+            # localized_markets) seriam apagados no próximo backfill.
+            ProductExcludedTerm.source == "localized_market",
             ProductExcludedTerm.term_normalized.notin_(excluidos) if excluidos else sa_true(),
         )
         resultado = cast(CursorResult[Any], await self._session.execute(stmt_excl))
@@ -750,32 +791,132 @@ class ProductRepository:
         por_chave = {e.entity_key: e for e in entidades.scalars()}
         return [(por_chave[chave], float(dist)) for chave, dist in linhas if chave in por_chave]
 
-    async def aliases_without_embedding(
+    async def pending_embeddings(
         self, *, model: str, limit: int, entity_key: uuid.UUID | None = None
-    ) -> list[tuple[uuid.UUID, str]]:
-        """Aliases sem vetor, ou com vetor de OUTRO modelo — que não é
-        comparável com os do modelo atual e conta como ausente."""
-        filtro_entidade = "AND entity_key = :entidade" if entity_key is not None else ""
+    ) -> list[tuple[str, uuid.UUID, str]]:
+        """Textos sem vetor do modelo atual: (tabela, id, texto normalizado).
+
+        Duas fontes. Os aliases, que o passo 3a recupera; e os termos
+        ANTAGÔNICOS, que o veto semântico compara com eles. Os demais termos
+        excluídos (uso, receita, consulta) ficam sem vetor de propósito — ver
+        migration 053. Vetor de outro modelo conta como ausente: não está no
+        mesmo espaço."""
+        filtro = "AND entity_key = :entidade" if entity_key is not None else ""
         stmt = text(
             f"""
-            SELECT id, alias_normalized FROM product_aliases
-            WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM :modelo) {filtro_entidade}
-            ORDER BY id
+            (SELECT 'product_aliases' AS tabela, id, alias_normalized AS texto FROM product_aliases
+              WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM :modelo) {filtro})
+            UNION ALL
+            (SELECT 'product_excluded_terms', id, term_normalized FROM product_excluded_terms
+              WHERE kind = 'antagonist'
+                AND (embedding IS NULL OR embedding_model IS DISTINCT FROM :modelo) {filtro})
+            ORDER BY 1, 2
             LIMIT :n
             """
         )
         params: dict[str, Any] = {"modelo": model, "n": limit}
         if entity_key is not None:
             params["entidade"] = entity_key
-        return [(id_, alias) for id_, alias in (await self._session.execute(stmt, params)).all()]
+        return [(t, id_, texto) for t, id_, texto in (await self._session.execute(stmt, params)).all()]
 
-    async def save_alias_embeddings(self, vetores: list[tuple[uuid.UUID, str]], *, model: str) -> None:
-        if not vetores:
-            return
-        await self._session.execute(
-            text("UPDATE product_aliases SET embedding = CAST(:v AS vector), embedding_model = :modelo WHERE id = :id"),
-            [{"id": id_, "v": vetor, "modelo": model} for id_, vetor in vetores],
+    async def save_embeddings(self, vetores: list[tuple[str, uuid.UUID, str]], *, model: str) -> None:
+        """Grava (tabela, id, vetor literal). A tabela vem de pending_embeddings,
+        nunca de fora, e mesmo assim é conferida contra a lista fechada antes
+        de entrar no SQL."""
+        por_tabela: dict[str, list[dict[str, Any]]] = {}
+        for tabela, id_, vetor in vetores:
+            if tabela not in ("product_aliases", "product_excluded_terms"):
+                raise ValueError(f"tabela sem vetor: {tabela!r}")
+            por_tabela.setdefault(tabela, []).append({"id": id_, "v": vetor, "modelo": model})
+        for tabela, linhas in por_tabela.items():
+            await self._session.execute(
+                text(f"UPDATE {tabela} SET embedding = CAST(:v AS vector), embedding_model = :modelo WHERE id = :id"),
+                linhas,
+            )
+
+    async def has_antagonist_vectors(self, entity_key: uuid.UUID, *, model: str) -> bool:
+        """Barato, e decide se o passo 2 paga a chamada de embedding: entidade
+        sem antagônico vetorizado não tem veto semântico possível."""
+        stmt = text(
+            "SELECT EXISTS (SELECT 1 FROM product_excluded_terms "
+            "WHERE entity_key = :e AND kind = 'antagonist' AND embedding_model = :m)"
         )
+        return bool((await self._session.execute(stmt, {"e": entity_key, "m": model})).scalar())
+
+    async def polarity(
+        self, query_vector: str, *, model: str, entity_keys: list[uuid.UUID], k: int = 3
+    ) -> dict[uuid.UUID, Polaridade]:
+        """Para cada entidade que TEM antagônicos vetorizados: de que lado da
+        oposição a consulta caiu, e com que margem.
+
+        É a regra do veto do trigram (ver trigram_search) transportada para o
+        espaço de embeddings, e pelo mesmo motivo: a distância absoluta não
+        separa produtos opostos (`fritadeira a ar` x `fritadeira a óleo` =
+        0,065), mas o lado mais próximo, sim. Entidade sem antagônico não
+        aparece no resultado — sem evidência negativa não há o que comparar.
+
+        k-NN POR LADO, NÃO 1-NN. O escore é a média das similaridades dos `k`
+        termos mais próximos do produto menos a dos `k` antagônicos mais
+        próximos. Medido em 14/10/2026 (evaluation/veto_rules.py) contra 1-NN,
+        centroide, eixo de Rocchio e LDA: o k-NN foi o melhor nas buscas reais
+        (97,9% contra 94,8% do 1-NN, 40/40 antagônicos vetados) e empatou nas
+        sintéticas. O 1-NN sofre com a assimetria — ~40 termos positivos contra
+        ~15 antagônicos, e o mínimo sobre mais pontos é menor por acaso. Os
+        métodos de centroide perderam porque exigem um conjunto de contraste
+        limpo; o vizinho mais próximo tolera um antagônico errado na lista.
+
+        O sinal decide (<= 0 veta; empate veta, como no trigram) e o módulo é
+        a margem: abaixo de `settings.catalog_semantic_abstention_margin` a
+        consulta é AMBÍGUA e vai ao LLM em vez de o passo 2 aceitar por forma.
+
+        Varredura exata, sem índice: são as linhas de poucas entidades já
+        escolhidas pelos passos anteriores."""
+        if not entity_keys:
+            return {}
+
+        async def _lados(tabela: str, coluna: str, filtro: str, chaves: list[uuid.UUID]) -> dict[uuid.UUID, list]:
+            stmt = text(
+                f"""
+                SELECT entity_key, {coluna}, distancia FROM (
+                    SELECT entity_key, {coluna}, embedding <=> CAST(:q AS vector) AS distancia,
+                           row_number() OVER (
+                               PARTITION BY entity_key ORDER BY embedding <=> CAST(:q AS vector)
+                           ) AS posicao
+                    FROM {tabela}
+                    WHERE entity_key = ANY(:chaves) AND embedding_model = :modelo {filtro}
+                ) t WHERE posicao <= :k
+                ORDER BY entity_key, distancia
+                """
+            ).bindparams(bindparam("chaves", type_=ARRAY(PG_UUID(as_uuid=True))))
+            linhas = await self._session.execute(
+                stmt, {"q": query_vector, "modelo": model, "chaves": chaves, "k": k}
+            )
+            por_entidade: dict[uuid.UUID, list] = {}
+            for chave, termo, distancia in linhas:
+                por_entidade.setdefault(chave, []).append((termo, float(distancia)))
+            return por_entidade
+
+        antagonicos = await _lados("product_excluded_terms", "term", "AND kind = 'antagonist'", entity_keys)
+        if not antagonicos:
+            return {}
+        positivos = await _lados("product_aliases", "alias_normalized", "", list(antagonicos))
+        resultado: dict[uuid.UUID, Polaridade] = {}
+        for chave, lado_antagonico in antagonicos.items():
+            lado_positivo = positivos.get(chave)
+            if not lado_positivo:
+                continue
+            media_positivo = sum(d for _, d in lado_positivo) / len(lado_positivo)
+            media_antagonico = sum(d for _, d in lado_antagonico) / len(lado_antagonico)
+            resultado[chave] = Polaridade(
+                termo_positivo=lado_positivo[0][0],
+                distancia_positivo=lado_positivo[0][1],
+                termo_antagonico=lado_antagonico[0][0],
+                distancia_antagonico=lado_antagonico[0][1],
+                # Distância coseno = 1 - similaridade, então a diferença das
+                # médias de distância é a diferença das médias de similaridade.
+                escore=media_antagonico - media_positivo,
+            )
+        return resultado
 
     async def existing_alias_owners(self, normalized: set[str]) -> dict[str, uuid.UUID]:
         """Quais destes aliases normalizados já existem, e de quem são.

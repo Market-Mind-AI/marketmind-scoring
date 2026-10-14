@@ -33,6 +33,11 @@ def _market_to_dict(market: MarketTerms) -> dict[str, Any]:
         "formal_name": market.formal_name,
         "search_terms": market.search_terms,
         "excluded_terms": market.excluded_terms,
+        # Produtos que se confundem com este e são outro (ver
+        # CatalogService._index_excluded_terms): a evidência negativa que o
+        # veto semântico compara com os termos do produto.
+        "antagonist_terms": market.antagonist_terms,
+        "contrast_attributes": market.contrast_attributes,
         # O idioma em que ESTES termos foram escritos, dito por quem os
         # escreveu. Era uma coluna preenchida à mão em `countries`, um valor
         # por país fixado para sempre — Índia e Canadá como "en", e nenhuma
@@ -52,6 +57,8 @@ def _fallback_market(iso3: str, product_name: str, brand: str | None) -> dict[st
         "formal_name": None,
         "search_terms": terms,
         "excluded_terms": [],
+        "antagonist_terms": [],
+        "contrast_attributes": [],
         "confidence": 0.3,
     }
 
