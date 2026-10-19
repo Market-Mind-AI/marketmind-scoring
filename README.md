@@ -1,37 +1,51 @@
 # MarketMind Scoring
 
 > **A arquitetura do sistema inteiro está em
-> [docs/marketmind-arquitetura.md](docs/marketmind-arquitetura.md).** Comece por
-> lá; este README cobre só este serviço.
+> [docs/marketmind-arquitetura.md](docs/marketmind-arquitetura.md)**, e o que
+> cada número do resultado significa em
+> [docs/marketmind-transparencia-tecnica.md](docs/marketmind-transparencia-tecnica.md).
+> Comece por lá; este README cobre só este serviço.
 
 O **método** do MarketMind. Já se chamou `marketmind-core` e orquestrava a
 análise; a orquestração é do agente (`marketmind-orchestrator`) desde 21/09/2026,
 e o que ficou aqui é o que nenhum outro serviço pode fazer.
 
 Não recolhe dado de API externa — isso é dos 4 microserviços de coleta
-(PyTrends, WorldBank, OECD, UnitedNationsData). Este serviço:
+(PyTrends/Google Ads, WorldBank, OECD, UnitedNationsData). Este serviço:
 
-- Mantém o catálogo único de produtos (`product_catalog`/`product_aliases`).
-- **Não** controla mais frescor: cada serviço de coleta é dono do próprio e
-  responde em `GET /freshness`. A `coverage_index` foi removida na migration 036
-  por ser uma segunda cópia do mesmo fato.
+- Mantém el catálogo único de productos (`product_catalog`/`product_aliases`),
+  particionado por marca (`brands`, migration 031).
+- **No** controla frescura: cada servicio de recolección es dueño de la suya y
+  responde en `GET /freshness`. La `coverage_index` fue removida en la
+  migration 036 por ser una segunda copia del mismo hecho.
 - Calcula los indicadores determinísticos del Capítulo 4 (`indicator_values`),
   usando una referencia de normalización fija y versionada por período
   (`normalization_reference`), no relativa a la consulta de cada usuario.
-- Calcula el MOS del Capítulo 5 (`mos_results`) — Entropy Weight + TOPSIS,
-  **siempre por país, independiente, nunca agregado entre países** — con pesos
-  fijos y versionados (`indicator_weights`) y un techo no compensatorio
-  basado en demanda real.
-- Orquesta la recolección bajo demanda cuando falta un dato (`jobs`/`job_tasks`).
+- Calcula el MOS del Capítulo 5 (`mos_results`) — **Rank Reciprocal + TOPSIS
+  contra anclas fijas (ideal 100 / anti-ideal 0)**, siempre por país,
+  independiente, nunca agregado entre países — con pesos fijos y versionados
+  (`indicator_weights`). **No hay techo no compensatorio** (decisión del
+  usuario, 2026-07-15): `mos_before_cap`/`capped_by` siguen en el contrato de
+  la API, siempre `mos`/`NULL`.
+- Pide la recolección que falta a los 4 servicios, por HTTP, y espera el
+  resultado (`jobs`/`job_tasks`).
+- Hace las llamadas a modelo que el método necesita (visión, enriquecimiento de
+  términos, mercados de referencia, arbitraje del catálogo, narrativa) y las
+  traza en Langfuse — ver [Observabilidad](#observabilidad).
 
 ## Lo que NO hace
 
-- No recolecta datos de Google Trends, World Bank, OECD o UN Data directamente.
-- No escribe en las bases de los 4 servicios de recolección — solo lee, con
-  usuario read-only.
+- No recolecta datos de Google Ads, World Bank, OECD o UN Data directamente.
+- No abre las bases de los 4 servicios de recolección — ni para leer. Todo
+  pasa por sus APIs HTTP (`PYTRENDS_API_BASE_URL`, etc.). No existe usuario
+  read-only, ni `db/external.py`, ni `scripts/create_readonly_roles.sql`.
 - No usa LLM para calcular o alterar indicadores, pesos o MOS — el LLM solo
-  participa en la identificación de producto (texto candidato) y en la
-  explicación de resultados ya calculados.
+  participa en la identificación de producto, en la traducción de términos por
+  mercado, en la elección de candidatos de mercado de referencia, en el
+  arbitraje de identidad del catálogo (paso 3) y en la explicación de
+  resultados ya calculados.
+- No orquesta la análisis: el grafo vive en `marketmind-orchestrator`, que llama
+  a `/internal/*` con `INTERNAL_API_TOKEN` y reanuda análisis huérfanas.
 
 ## Arquitectura
 
@@ -39,59 +53,47 @@ Misma Clean Architecture usada en los otros 4 servicios del workspace:
 
 ```
 app/
-  api/routes/         # Endpoints HTTP (sin lógica de negocio)
+  api/routes/         # 41 endpoints HTTP (sin lógica de negocio)
   core/               # Configuración, logging, excepciones
-  domain/             # Enums y entidades de dominio
-  db/models/          # Modelos SQLAlchemy (base propia del Core)
-  db/external.py      # Conexiones read-only a las 4 bases externas (SQLAlchemy Core, sin ORM)
-  repositories/        # Capa de acceso a datos (base propia)
+  domain/             # Enums de dominio
+  db/models/          # Modelos SQLAlchemy (base propia; 54 migrations en alembic/)
+  repositories/       # Capa de acceso a datos
   schemas/            # Schemas Pydantic de request/response
-  services/           # Orquestación
+  services/           # Catálogo, cobertura, indicadores, MOS, clientes LLM
+  observability.py    # Tracing Langfuse (generations, observations de colecta)
+  pricing.py          # Precio de cada llamada a modelo, por la tabla de Langfuse
+  prompts.py          # Prompts leídos de Langfuse Prompt Management (fallback: código)
   utils/              # Utilidades
 ```
+
+~15,8k líneas en `app/`.
 
 ## Stack
 
 Python 3.12, FastAPI + Pydantic v2, SQLAlchemy 2.x + asyncpg, Alembic,
-PostgreSQL 16, Docker + Docker Compose, Poetry — idéntico a los otros 4
-servicios.
+PostgreSQL 16 (`pgvector/pgvector:pg16`, extensiones `vector` y `pg_trgm`),
+Docker + Docker Compose, Poetry — idéntico a los otros 4 servicios. Langfuse
+para tracing, prompts y evaluación.
 
 ## Conectividad entre servicios (leer antes de ejecutar)
 
-El Core necesita leer directamente de las bases de los 4 microservicios de
-recolección (decisión de simplicidad documentada en
-`docs/marketmind-implementation-plan.md`, sección 2). **Esto no funciona
-automáticamente hoy**: los `docker-compose.yml` de los 4 servicios declaran
-una red `marketmind-network` sin `external: true`, por lo que Docker Compose
-aísla una red por proyecto — a pesar del nombre igual, no son la misma red
-física.
+Este servicio habla con los 4 recolectores **solo por HTTP**: despacha una
+recolección (`POST /.../collect`), hace polling del run (`GET /runs/{id}`) y lee
+el dato ya almacenado por sus endpoints de lectura. Como corre en un contenedor
+y los otros servicios publican puertos en el host, las URLs por defecto usan
+`host.docker.internal`:
 
-En vez de editar los 4 repositorios existentes para exponer una red
-compartida (más invasivo), el Core se conecta por los **puertos ya expuestos
-en el host** por cada servicio:
-
-| Servicio | Puerto por defecto del propio servicio | Puerto recomendado para ejecutar todo junto |
+| Servicio | Puerto HTTP en el host | Variable |
 |---|---|---|
-| PyTrends | `DATABASE_PORT` (default 5432) | 5432 |
-| OECD | `DATABASE_PORT_HOST` (default 5433) | 5433 |
-| WorldBank | `DATABASE_EXTERNAL_PORT` (default 5432) | **5434** (ajustar en el `.env` del WorldBank) |
-| UNData | `DATABASE_EXTERNAL_PORT` (default 5432) | **5435** (ajustar en el `.env` del UNData) |
-| Core (este) | `DATABASE_PORT_HOST` (default 5436) | 5436 |
+| PyTrends (Google Ads / DataForSEO) | 8000 | `PYTRENDS_API_BASE_URL` |
+| OECD | 8001 | `OECD_API_BASE_URL` |
+| UNData | 8002 | `UNDATA_API_BASE_URL` |
+| WorldBank | 8003 | `WORLDBANK_API_BASE_URL` |
+| Scoring (este) | 8004 | — |
 
-**Pasos manuales necesarios antes de ejecutar el Core por primera vez:**
-
-1. En los `.env` de WorldBank y de UNData, defina `DATABASE_EXTERNAL_PORT=5434` y
-   `DATABASE_EXTERNAL_PORT=5435` respectivamente (evita colisión de puerto 5432
-   con PyTrends cuando los 3 se ejecutan al mismo tiempo en el mismo host).
-2. Ejecute `scripts/create_readonly_roles.sql` contra cada una de las 4 bases
-   (instrucciones al inicio del archivo) — crea el usuario `marketmind_readonly`
-   usado por el Core.
-3. Confirme que los 4 servicios están en pie (`docker compose up -d` en cada
-   directorio) antes de levantar el Core.
-
-El endpoint `GET /health` del Core verifica y reporta la conectividad con las 4
-fuentes — es la forma más rápida de confirmar que los pasos anteriores
-funcionaron.
+Los 4 servicios deben estar arriba (`docker compose up -d` en cada directorio)
+antes de levantar este. `GET /health` reporta la conectividad con las 4 APIs;
+`GET /health/nightly` la verifica a fondo.
 
 ## Running Locally
 
@@ -117,230 +119,194 @@ API en `http://localhost:8004`, Swagger en `http://localhost:8004/docs`.
 
 Instancia única del workspace, consolidada aquí (los otros 4 servicios ya no
 tienen pgAdmin propio). `http://localhost:5054` — `admin@marketmind.dev` /
-`admin`. Ya viene con los 5 servidores pre-registrados (`pgadmin/servers.json` +
-`pgadmin/pgpass`): `marketmind-core` — el servidor sigue registrado con ese nombre porque la BASE DE
-DATOS no fue renombrada (ver `docs/marketmind-setup-ecossistema.md`) —, `marketmind-pytrends`,
-`marketmind-oecd`, `marketmind-worldbank`, `marketmind-undata` — los 4
-externos alcanzados mediante la misma estrategia de `host.docker.internal` +
-puertos de host descrita arriba, por lo que dependen de los mismos pasos
-manuales (puertos distintos + servicios en pie). Si algún servidor aparece con
-error de conexión, es señal de que el puerto de ese servicio en el host no
-coincide con `pgadmin/pgpass` — revise la tabla de la sección anterior.
+`admin`. Viene con los 5 servidores pre-registrados (`pgadmin/servers.json` +
+`pgadmin/pgpass`): `marketmind-core` — el servidor sigue registrado con ese
+nombre porque la BASE DE DATOS no fue renombrada (ver
+`docs/marketmind-setup-ecossistema.md`) —, `marketmind-pytrends`,
+`marketmind-oecd`, `marketmind-worldbank`, `marketmind-undata`. Es una
+comodidad de inspección para el desarrollador: el servicio en sí nunca abre
+esas bases.
 
-## Modelo de datos (Fase 0)
+## Modelo de datos
 
 | Tabla | Rol |
 |---|---|
-| `product_catalog` / `product_aliases` | Identidad única de producto (entity_key siempre local, `google_mid` es enriquecimiento opcional) |
-| `countries` | Tabla canónica ISO3 con correspondencia de las 4 fuentes — sembrada (migration 003) con una cesta de ~27 países (G20 + Iberia/Nórdicos) |
-| `monthly_snapshots` | Índice de cadencia mensual (mes abierto/cerrado) |
-| `coverage_index` | Qué ya fue recolectado, por indicador/período |
-| `indicator_values` | Indicadores del Cap. 4, normalizados, con ventana y estado de disponibilidad |
+| `product_catalog` / `product_aliases` / `product_excluded_terms` | Identidad única de producto; un vector Voyage por alias (`product_aliases.embedding`, HNSW, migration 052); términos excluidos como evidencia negativa |
+| `brands` / `brand_markets` / `brand_reference_candidates` / `brand_champions` | La marca como partición de la identidad (migration 031): vocabulario, candidatos y campeón por (producto, marca) |
+| `countries` | Tabla canónica ISO3 con los códigos de las 4 fuentes. **Cesta dinámica**: la migration 043 cargó 127 países MEDIDOS como teniendo los datos, con `analysis_ready = false`; el pre-calentamiento macro (`POST /admin/coverage/prewarm-macro`) los promueve cuando su dato llega. La 054 excluye CN/RU/BY porque el recolector de demanda los rechaza. `GET /countries` devuelve solo los `analysis_ready` |
+| `monthly_snapshots` | Índice de cadencia mensual |
+| `indicator_values` | Indicadores del Cap. 4, normalizados, con estado de disponibilidad |
 | `normalization_reference` | Bounds fijos de normalización, versionados por período |
-| `indicator_weights` | Pesos del Entropy Weight, fijos y versionados por período, agrupados por dimensión |
-| `mos_results` | MOS por país, siempre independiente, con techo anticompensación expuesto |
-| `jobs` / `job_tasks` | Orquestación asíncrona de recolección (nunca de cálculo de MOS) — `job_task` = exactamente un gap de cobertura / una llamada de recolección |
+| `indicator_weights` | Pesos Rank Reciprocal de las dimensiones, fijos y versionados por período |
+| `mos_results` | MOS por país, siempre independiente, con `library_mos` (pymcdm) para auditoría |
+| `metric_explanations` / `metric_band_phrases` | Texto determinístico por métrica y banda, que el LLM final solo narra |
+| `analysis_requests` | Registro de cada análisis (estado, heartbeat, reporte) que el orchestrator reclama y completa vía `/internal/*` |
+| `jobs` / `job_tasks` | Recolección asíncrona (nunca de cálculo de MOS) — `job_task` = exactamente un gap / una llamada de recolección |
 
-Ver `docs/marketmind-implementation-plan.md` para el racional completo y las
-próximas fases (motor de indicadores, motor de MOS, orquestación del frontend).
+## Cobertura y recolección bajo demanda
 
-## Fase 1 — Cobertura y recolección bajo demanda (implementada)
-
-- `POST /coverage/check` — lectura pura: reporta qué gaps ya están cubiertos
-  (fresh en `coverage_index`), sin disparar recolección.
-- `POST /jobs` — para cada gap: omite si ya está fresco, se adjunta a una task
-  pending/running ya existente si otro caller ya está recolectando el mismo gap
-  (dedup de carrera), o dispara la recolección en el servicio correcto (`app/services/collection_client.py`)
-  y hace polling en `GET /runs/{id}` hasta concluir. Síncrono en esta fase — la
-  Fase 5 decide cuándo esto necesita convertirse en 202+SSE.
-- `GET /jobs/{id}` — estado de un job ya creado.
-- `POST /admin/reconciliation/run` — compara `coverage_index` contra las
-  tablas crudas de los 3 servicios país por país (WorldBank/OECD/UNData; PyTrends
-  queda fuera en esta fase — depende del catálogo de productos de la Fase 2 para
-  resolver `entity_key` → `keyword`). Diagnóstico bajo demanda, sin scheduler
-  en proceso (ver `app/services/reconciliation_service.py`).
+- `POST /coverage/check` — lectura pura: pregunta a cada recolector qué gaps ya
+  están frescos, sin disparar recolección. **Sin consumidor hoy (API manual)**.
+- `POST /jobs` / `GET /jobs/{id}` — para cada gap: omite si ya está fresco, se
+  adjunta a una task pending/running si otro caller ya recolecta el mismo gap
+  (dedup de carrera), o dispara la recolección en el servicio correcto
+  (`app/services/collection_client.py`) y hace polling hasta concluir.
+  **Sin consumidor hoy (API manual)** — el orchestrator usa
+  `POST /internal/coverage/ensure` y `POST /internal/candidates/coverage`, que
+  pasan por el mismo `CoverageService`.
 - **Dedup de carrera:** índice único parcial en `job_tasks` (`status IN
-  ('pending','running')`) es el backstop real; `SELECT ... FOR UPDATE SKIP
-  LOCKED` (`app/repositories/job_repository.py`) es el camino rápido no propenso
-  a condiciones de carrera que la mayoría de los callers recorre.
-- **Traducción de código de país por fuente:** `app/services/collection_client.py`
-  resuelve el código que cada servicio espera a partir de la tabla `countries`
-  (con fallback a ISO3/ISO2 cuando el campo específico de la fuente está nulo —
-  solo UNData exige `location_id` numérico explícito, sin fallback posible).
-- **Bug corregido durante la implementación:** todo modelo con columna
-  `datetime` tenía un tipo ORM inconsistente con la migration (`TIMESTAMP`
-  sin timezone en el lado Python vs. `TIMESTAMPTZ` en la base de datos) — nunca
-  daba error en la Fase 0 porque nada hacía round-trip de datetime con
-  aritmética. Corregido de una vez para todos los modelos vía
-  `type_annotation_map` en `app/db/base.py`. `app/utils/time.utc_now()` pasó a
-  devolver un datetime timezone-aware.
+  ('pending','running')`) es el backstop; `SELECT ... FOR UPDATE SKIP LOCKED`
+  (`app/repositories/job_repository.py`) es el camino rápido.
+- **Traducción de código de país por fuente:** `collection_client.py` resuelve
+  el código que cada servicio espera a partir de `countries`. Para la demanda,
+  `location`/`language` viajan en `collection_params`, sacados del
+  `localized_markets[ISO3]` del producto.
+- **Frescura por fuente:** macro 90 días (`COUNTRY_INDICATOR_TTL_DAYS`),
+  demanda 30 días (`DEMAND_STALE_AFTER_DAYS`), ambas decididas aquí pero
+  medidas contra el `last_checked_at` que cada recolector reporta.
 
-## Fase 2 — Catálogo de productos (implementada)
+## Catálogo de productos
 
-Pipeline de resolución de identidad determinístico, del más barato al más caro
-(`app/services/catalog_service.py`, `POST /catalog/resolve`):
+Resolución de identidad del más barato al más caro
+(`app/services/catalog_service.py`, `POST /catalog/resolve`), siempre dentro de
+una partición de marca:
 
-1. **Alias exacto normalizado** (`product_aliases`, lookup O(1)) — `app/utils/text.normalize_alias`
-   (minúsculas, sin acento, sin puntuación, espacios colapsados).
-2. **Fuzzy trigram** (`pg_trgm`, índice GIN en `product_aliases.alias_normalized`)
-   — cubre error de tipeo/variación pequeña sin necesidad de embedding.
-3. **Similitud semántica** (`pgvector`, `product_catalog.embedding`,
-   distancia de coseno) — solo se ejecuta si los pasos 1-2 no dieron match.
-4. **Crea entidad nueva** — `entity_key` siempre generado localmente (uuid4),
-   nunca bloqueado por dependencia externa.
+1. **Alias exacto normalizado** (`product_aliases`, O(1)) —
+   `app/utils/text.normalize_alias`. La identidad es el par (nombre, categoría).
+2. **Fuzzy trigram** (`pg_trgm`, GIN sobre `alias_normalized`) **con veto por
+   producto antagónico**: la entidad solo se acepta si el texto está más cerca
+   de los términos que ella declara SER que de los que declara NO ser
+   (`excluded_terms`/`antagonist_terms`). Empate o inversión escala al paso 3.
+   Medido: 44/102 términos excluidos resolvían a la entidad que los excluye;
+   con el veto, 0/102, sin perder positivos (`scripts/eval_antagonist_veto.py`).
+3. **Decisión del LLM** entre candidatos del catálogo (`catalog_matcher.py`).
+   Los candidatos vienen de la **búsqueda semántica** (3a): embeddings Voyage
+   (`voyage-4`, 1024 dims, `VOYAGE_API_KEY`) sobre `product_aliases.embedding`
+   con HNSW en pgvector (migration 052). **El vector solo recupera candidatos;
+   nunca acepta un match** — la medición de 2026-08-14 mostró que ninguna
+   distancia separa `freidora de aire` de `freidora de aceite`.
+4. **Crea entidad nueva** — `entity_key` uuid4 local, nunca bloqueado por
+   dependencia externa.
 
-Un match en los pasos 2 o 3 graba un alias exacto nuevo apuntando a la entidad
-encontrada, de modo que la misma consulta caiga en el paso 1 (barato) la
-próxima vez.
+Un match en los pasos 2 o 3 graba un alias exacto, de modo que el mismo texto
+resuelve por el paso 1 la próxima vez. Los `search_terms` de cada mercado
+también se indexan como aliases, lo que hace al paso 2 alcanzar otros idiomas.
 
-- **El embedding es un stopgap vía OpenAI (decisión explícita del usuario, 2026-07-02):**
-  Anthropic no tiene endpoint de embeddings propio (la documentación oficial
-  recomienda Voyage AI) — usando `text-embedding-3-small` de OpenAI por ahora,
-  con migración planificada a modelo local después. Aislado por completo en
-  `app/services/embedding_client.py` para que ese cambio sea un solo archivo.
-  **Nunca bloquea** la resolución: si la llamada falla (o `OPENAI_API_KEY` no
-  está configurada), cae directo a la creación de entidad con `embedding=NULL`.
-  `POST /admin/catalog/backfill-embeddings` completa después las entidades que
-  quedaron sin embedding.
-- **`google_mid` es enriquecimiento best-effort, asíncrono, nunca bloqueante**
-  (`POST /admin/catalog/enrich-mid`) — reutiliza el `CollectionClient` de la
-  Fase 1 (`suggestions` del PyTrends) y lee el resultado de vuelta directo de
-  la base de PyTrends (mismo patrón de `reconciliation_service`). La elección
-  del candidato es una regla determinística (match exacto de título, si no el
-  primer resultado — Google ya devuelve ranqueado), nunca una decisión de LLM.
-- **Merge de duplicados** (`POST /admin/catalog/merge`) — entidades que
-  descubren compartir el mismo `google_mid` (solo después del enriquecimiento)
-  se fusionan: la más antigua (`created_at`) se convierte en canónica,
-  `merged_into` se setea en la otra, y los aliases de esta se repuntan
-  directamente a la canónica (el lookup exacto del paso 1 nunca necesita seguir
-  la cadena de merge). `GET /catalog/{entity_key}` expone `merged_into`
-  explícitamente en lugar de esconderlo — quien llama decide si lo sigue.
-- **Infra:** se cambió la imagen de Postgres de `postgres:16-alpine` a
-  `pgvector/pgvector:pg16` (misma major version, solo agrega la extensión) —
-  necesario para ejecutar `CREATE EXTENSION vector`.
+- `POST /catalog/identify-image` — identificación por visión (imagen y/o
+  texto), vision-only y rápida; el enriquecimiento por país y los candidatos de
+  mercado de referencia se difieren al `/analyze` en background.
+- `POST /admin/catalog/backfill-embeddings`, `backfill-terms`,
+  `backfill-antagonists`, `split-brand` — mantenimiento del catálogo.
 
-## Fase 3 — Motor de indicadores, Capítulo 4 (implementada)
+## Motor de indicadores (Capítulo 4)
 
-Una función de valor bruto por indicador (`app/services/indicators/{pytrends,worldbank,oecd,undata}.py`),
-fórmulas exactas transcritas en `docs/marketmind-capitulo4-metricas.md`
-(reanexado por el usuario en 2026-07-02 — la versión original nunca había sido
-guardada como archivo, solo compartida una vez en el chat). `app/services/indicator_engine.py`
-orquesta: calcula los 9 indicadores país por país (siempre, `entity_key=NULL`,
-compartidos entre productos del mismo país/período) + los 5 indicadores
-específicos de producto de PyTrends + el condicional Median Age Fit (solo si
-se informa `entity_key`), normaliza cada uno y lo graba en `indicator_values`.
+Una función de valor bruto por indicador
+(`app/services/indicators/{pytrends,worldbank,oecd,undata}.py`), fórmulas en
+`docs/marketmind-capitulo4-metricas.md`. `indicator_engine.py` calcula los
+indicadores país a país (compartidos entre productos, `entity_key=NULL`) + los
+de demanda específicos del producto, normaliza contra `normalization_reference`
+y graba en `indicator_values`.
 
-- `POST /indicators/compute` — calcula todo para un país (+ producto, si se
-  informa `entity_key`) y devuelve las líneas de `indicator_values`.
-- `POST /admin/indicators/refresh-reference` — recalcula `normalization_reference`
-  (bounds p5/p95) para los 9 indicadores empíricos, contra la población de
-  referencia (tabla `countries` sembrada, ~27 países — "crece
-  orgánicamente" vía consultas de usuario aún no se rastrea, simplificación
-  documentada). Nunca sobrescribe un período ya cerrado.
-- **La normalización sigue la corrección de la sección 7 del plan, no el texto
-  literal del Cap. 4:** los bounds vienen de `normalization_reference`
-  (población de referencia fija, versionada por período), nunca de los países
-  de la consulta actual — eso es lo que hace que el MOS sea absoluto y
-  comparable entre ejecuciones. Growth Score y Demand Stability (CV) usan
-  límites teóricos fijos (`GrowthRaw ∈ [-50,150]`, `CV ∈ [0,1]`, sembrados una
-  vez en la migration 005 con `period_key="FIXED"`), no población empírica —
-  no tienen un universo natural de países con el cual comparar.
-- **Fallback de inflación:** se intenta primero con OECD; solo cae a World
-  Bank (`availability_status=fallback`) si la serie de la OECD está
-  indisponible para el país/período — nunca ambos al mismo tiempo (Cap. 4
-  §4.7).
-- **Fallback de granularidad SKU→categoría:** si el Trend Score del término
-  específico del producto queda `unavailable` (pocas observaciones), se
-  intenta de nuevo con `product_catalog.category` como keyword; si eso
-  funciona, los 5 indicadores de PyTrends de ese producto quedan marcados
-  `availability_status=fallback` con nota explícita.
-- **Limitación documentada, no escondida:** la tabla cruda de la OECD
-  (`marketmind-oecd`) no persiste las dimensiones SDMX `EXPENDITURE`/
-  `TRANSFORMATION`/`ADJUSTMENT` como columnas — solo `MEASURE`/`FREQ`/`UNIT`
-  (confirmado leyendo el código de ingesta de ese servicio, no asumido). El
-  filtrado de inflación de la OECD usa solo `país + measure='CPI'`, confiando
-  en que la llamada de recolección en sí ya fue delimitada correctamente — ver
-  comentario en `app/services/indicators/oecd.py`.
-- **Suposición documentada:** el Cap. 4 no da una regla léxica para distinguir
-  "0.6 marca/variante" de "0.0 irrelevante" en el Search Intent Score — se
-  trata cualquier query de `related_queries.top` que no coincida con ninguna
-  regla específica como variante de producto (0.6), ya que vino de la propia
-  búsqueda del keyword. Ver `app/services/indicators/pytrends.py`.
-- **Fuera del alcance de esta fase, a propósito:** Regional Spread Insight (HHI)
-  y Rising Query Momentum (PyTrends) — el propio Cap. 4 marca "no entra al
-  MOS v1", son insight de narrativa para la explicación del LLM en la Fase 5.
+- **Demanda = volumen absoluto de búsqueda de Google Ads (DataForSEO), no Google
+  Trends** (cambio de 2026-07-15): `trend_score` es la SUMA del volumen mensual
+  de los términos aprobados del país (más expansión por `keywords_for_keywords`),
+  normalizada linealmente contra el techo del mercado de referencia
+  (`/internal/demand-ceiling`). Growth, Stability e Intent salen de la misma
+  serie mensual.
+- `POST /indicators/compute` — calcula todo para un país (+ producto).
+- **La normalización no es relativa a la consulta:** bounds de
+  `normalization_reference` (población fija, versionada por período), nunca de
+  los países de la consulta actual — eso es lo que hace al MOS absoluto.
+- **Fallback de inflación:** OECD primero; World Bank solo si la serie OECD no
+  está (Cap. 4 §4.7).
 
-## Fase 4 — Motor de MOS, Capítulo 5 (implementada)
+## Motor de MOS (Capítulo 5)
 
-Fórmulas exactas transcritas en `docs/marketmind-capitulo5-mos.md` (reanexado
-por el usuario en 2026-07-02, misma situación que el Cap. 4). Agregación en 2
-etapas: los 17 indicadores atómicos (Cap. 4) se agrupan en 5 dimensiones
-(`app/services/mos/dimension_mapping.py`), los pesos de las 5 dimensiones
-vienen de Rank Order Centroid — **no Entropy Weight** (sustituido en
-2026-07-03, ver abajo) — y TOPSIS (`app/services/mos/topsis.py`) calcula el
-score final — siempre por (producto, país, período), nunca agregando países
-entre sí.
+Fórmulas en `docs/marketmind-capitulo5-mos.md`. Agregación en 2 etapas: los
+indicadores atómicos se agrupan en dimensiones
+(`app/services/mos/dimension_mapping.py`), los pesos de las dimensiones vienen
+de **Rank Reciprocal** (`app/services/mos/rank_reciprocal.py`) y TOPSIS
+(`app/services/mos/topsis.py`) calcula el score final — siempre por (producto,
+marca, país, período).
 
-- **Pesos de dimensión vía Rank Order Centroid (ROC), no Entropy Weight —
-  corrección de 2026-07-03** (`app/services/mos/roc_weights.py`): una prueba
-  en vivo mostró que el Entropy Weight subvaloraba Demand repetidamente
-  (2,6%-5% del peso total, incluso con muestra real de 12 países) solo porque
-  el interés de búsqueda del producto probado variaba poco entre los países
-  de la muestra — "no discrimina entre mercados" no es lo mismo que "no
-  importa", más aún en una herramienta cuyo trabajo es justamente evaluar el
-  potencial de un producto específico. ROC convierte un **orden de prioridad
-  explícito** (decisión del usuario, fundamentada en el propósito del
-  producto — "indicar el potencial de venta") en pesos matemáticos (Barron &
-  Barrett, 1996), sin depender de ningún dato de indicador: Demand (45,7%) >
-  Economic Readiness (25,7%) > Market Size (15,7%) > Digital Readiness
-  (9,0%) > Demographic Sustainability (4,0%).
-- `POST /admin/mos/refresh-weights` — escribe los 5 pesos ROC para el período
-  informado (`app/services/weight_calibration_service.py`). Como los pesos ya
-  no dependen de ningún dato, el cálculo es instantáneo — pero sigue
-  versionado por `period_key` y nunca sobrescribe un período ya cerrado, por
-  el mismo motivo que `normalization_reference` funciona así: auditoría
-  ("qué peso fue usado en el período X") y posibilidad de revisar el orden de
-  prioridad en el futuro sin alterar resultados históricos ya cerrados.
-- `POST /mos/compute` — calcula el MOS para un producto en cada país de la
-  lista (`app/services/mos_engine.py`), un resultado independiente por país:
-  valida indicadores obligatorios (Cap. 5 §5.3 — todo indicador excepto
-  Median Age Fit condicional y el trío de inflación, que acepta OECD nivel +
-  volatilidad O el fallback World Bank solo), arma el vector de 5 sub-scores
-  de dimensión, busca los pesos calibrados (compartidos, sin `entity_key`),
-  ejecuta TOPSIS y aplica el techo anticompensación. Excluido (nunca
-  descartado silenciosamente) cuando falta un indicador obligatorio, una
-  dimensión entera o un peso calibrado para el `period_key` — el motivo
-  siempre queda en `excluded_reason`.
-- **MOS absoluto e independiente por país Y por producto — corrección sobre
-  el texto literal del Cap. 5** (ver sección 12 del plan): el ideal/anti-ideal
-  del TOPSIS son fijos en 100/0 (no "mejor/peor observado entre los países
-  comparados"), ya que el Cap. 4 ya normaliza cada indicador contra la
-  población de referencia fija. Esto también evita el paso clásico de
-  normalización vectorial del TOPSIS — solo la distancia ponderada permanece.
-  **El peso de Demand dejó de ser por producto (decisión revertida en
-  2026-07-03):** tener un peso diferente por producto rompía la
-  comparabilidad entre productos distintos (dos productos en el mismo país
-  tendrían el MOS calculado con fórmulas distintas) y exigía recolección
-  síncrona de PyTrends con cada producto nuevo — frágil en la práctica
-  (rate-limit real de Google Trends observado en prueba en vivo).
-- **Techo anticompensación — decisión del usuario, no está en el Cap. 5:**
-  los indicadores macro (población, PIB, internet) nunca pueden compensar un
-  producto sin demanda de búsqueda real. Basado en el Trend Score (reutiliza
-  los rangos de interpretación del Cap. 4 §4.2.1): `<20` → techo 39; `20–40` →
-  techo 59; `≥40` → sin techo. `mos_before_cap`/`capped_by` quedan expuestos
-  para transparencia en la explicación futura del LLM (Fase 5).
-- **Comparación con biblioteca de mercado (validación, no producción):** cada
-  cálculo de MOS también ejecuta, en paralelo, el TOPSIS + Entropy Weight
-  *clásicos* vía `pymcdm` (`app/services/mos/library_reference.py`),
-  guardados en `library_topsis_score`/`library_mos` en `mos_results` — para
-  comparación manual contra nuestra implementación corregida. Nunca decide el
-  MOS real del producto, es solo un artefacto de auditoría/defensa del TFM.
+- **Pesos vía Rank Reciprocal, no Entropy Weight ni ROC.** Entropy Weight fue
+  abandonado el 2026-07-03 (subvaloraba Demand solo porque el interés variaba
+  poco entre los países de la muestra); ROC lo sustituyó hasta el 2026-07-08,
+  cuando la 6ª dimensión forzó una fórmula que acercara Market Size y Economic
+  Readiness sin ajustar números a mano. El orden de prioridad es una decisión
+  explícita del usuario; `w_j = (1/j) / Σ(1/k)`. Demand Volume es la primera.
+- `POST /admin/mos/refresh-weights` — escribe los pesos del período
+  (`weight_calibration_service.py`). Versionados por `period_key`, nunca
+  sobrescriben un período cerrado: auditoría de "qué peso se usó".
+- `POST /mos/compute` — un resultado independiente por país: valida los
+  indicadores obligatorios (Cap. 5 §5.3), arma el vector de sub-scores por
+  dimensión, aplica los pesos, corre TOPSIS contra **anclas fijas 100/0** (no
+  "mejor/peor observado entre los países comparados" — el Cap. 4 ya normaliza
+  contra población fija, así que el paso de normalización vectorial del TOPSIS
+  desaparece). Excluido con `excluded_reason`, nunca descartado en silencio,
+  cuando falta un indicador obligatorio o un peso.
+- **Sin techo no compensatorio** (2026-07-15): la demanda ya es la dimensión
+  de mayor peso; no se le permite además cortar el score final.
+  `mos_before_cap`/`capped_by` se mantienen en el contrato por compatibilidad.
+- **Validación con biblioteca, no producción:** cada cálculo también corre el
+  TOPSIS + Entropy Weight *clásicos* de `pymcdm`
+  (`app/services/mos/library_reference.py`), guardados en
+  `library_topsis_score`/`library_mos`. Es el único lugar donde Entropy Weight
+  sigue existiendo, y nunca decide el MOS real.
+- `POST /internal/narrate`, `/narrate/revise`, `/evidence` — el paquete
+  determinístico de evidencia (`explanation_builder.py`) y la narrativa del
+  LLM, que solo relata lo ya calculado.
+
+## Observabilidad
+
+- **Tracing en Langfuse** (`app/observability.py`): cada llamada a modelo es
+  una *generation* con nivel (`ERROR` con el tipo de excepción, `WARNING` si el
+  proveedor no reportó tokens o si el prompt vino del código y no de Langfuse),
+  uso (tokens de entrada/salida, cache read y cache write por TTL) y costo. El
+  `traceparent` W3C que manda el orchestrator pone todo dentro del trace de la
+  análisis. Cada despacho de recolección es una *observation* con su latencia,
+  y lo que DataForSEO cobró entra como hijo con precio.
+- **Costo en dólares** (`app/pricing.py`): la tabla de precios se lee de la
+  API de Langfuse al arrancar (reintentada cada minuto hasta responder); una
+  llamada que no se puede tasar queda como `None`, nunca como cero.
+- **Headers de costo** en cada respuesta: `X-LLM-Input-Tokens`,
+  `X-LLM-Output-Tokens`, `X-LLM-Cache-Read-Tokens`, `X-LLM-Cache-Write-Tokens`,
+  `X-LLM-Calls`, `X-LLM-Cost-USD`, `X-LLM-Cost-By-Model`,
+  `X-LLM-Calls-Without-Cost`, y `X-DataForSEO-Cost-USD` / `X-DataForSEO-Calls`
+  (`app/services/demand_spend.py`). El orchestrator los suma en la línea COST
+  de la corrida.
+- **Prompts en Langfuse Prompt Management** (`app/prompts.py`,
+  `app/prompt_registry.py`): se editan allá; el texto en código es el fallback
+  y la semilla de `scripts/sync_prompts.py`.
+- `scripts/probe_tracing.py` — manda un trace estándar por situación que las
+  vistas de Langfuse filtran (ok, warning, error, slow, high cost, high tokens),
+  sin llamar a ningún modelo.
+- `scripts/run_eval.py` — corre datasets de casos como experimento de Langfuse
+  (`identify-product`, `reference-markets`), dice cuánto va a costar y pregunta
+  antes de gastar. Los datasets viven en `evals/`.
+- `scripts/benchmark_*.py`, `scripts/eval_antagonist_veto.py` — mediciones del
+  catálogo que respaldan los números citados arriba (`evaluation/`).
+- Variables: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`,
+  `LANGFUSE_TRACING_ENVIRONMENT` (`local`, `azure-dev`). Sin claves = sin
+  trace, y eso está permitido.
 
 ## Running Tests
 
+La suite **trunca tablas**. `tests/conftest.py` se niega a correr contra una
+base cuyo nombre no contenga `test`. Crear y migrar la base dedicada una vez:
+
 ```bash
-pytest
+DATABASE_HOST=localhost DATABASE_PORT=5436 DATABASE_NAME=marketmind_test alembic upgrade head
 ```
+
+y correr siempre así:
+
+```bash
+DATABASE_HOST=localhost DATABASE_PORT=5436 DATABASE_NAME=marketmind_test pytest tests -q
+```
+
+Nunca `pytest` a secas contra `marketmind_core`: borra `normalization_reference`
+y los datos de desarrollo. ~600 funciones de test (672 casos con parametrización).
 
 ## Running Migrations
 
@@ -350,10 +316,12 @@ alembic revision --autogenerate -m "description"
 alembic downgrade -1
 ```
 
+54 migrations en `alembic/versions/`.
+
 ## Linting and Type Checking
 
 ```bash
 ruff check .
-black .
+ruff format .
 mypy .
 ```

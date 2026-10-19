@@ -1,3 +1,13 @@
+> **SUPERADO / HISTÓRICO (2026-10-19) — ver [marketmind-arquitetura.md](marketmind-arquitetura.md) e [marketmind-transparencia-tecnica.md](marketmind-transparencia-tecnica.md).**
+>
+> Guia escrito quando o Core orquestrava a análise e lia as bases dos 4 coletores. A ordem de subida dos serviços continua útil; o resto, não:
+>
+> - Não há `scripts/create_readonly_roles.sql`, role `marketmind_readonly` nem `db/external.py`: o scoring só abre o próprio banco e fala com os coletores por HTTP (`PYTRENDS/OECD/UNDATA/WORLDBANK_API_BASE_URL`).
+> - O orquestrador da análise é `marketmind-orchestrator` (desde 21/09/2026); o antigo `marketmind-core` é `marketmind-scoring` e expõe `/internal/*` com `INTERNAL_API_TOKEN`.
+> - Embeddings: `VOYAGE_API_KEY` (`voyage-4`), não `OPENAI_API_KEY`. Tracing: `LANGFUSE_*` também no scoring.
+> - São 54 migrations (não 7) e ~600 testes, que só rodam com `DATABASE_NAME=marketmind_test` (a suíte trunca tabelas).
+> - Países: cesta dinâmica `analysis_ready` (migrations 043/054), não os 24/27 fixos.
+
 # Cómo levantar el ecosistema MarketMind desde cero
 
 Guía paso a paso para que otro desarrollador ejecute los 5 servicios en su propia máquina y procese la consulta de un

@@ -1,10 +1,13 @@
-> **SUPERADO em 21/09/2026 — ver [marketmind-arquitetura.md](marketmind-arquitetura.md).**
+> **SUPERADO / HISTÓRICO (2026-10-19) — ver [marketmind-arquitetura.md](marketmind-arquitetura.md) e [marketmind-transparencia-tecnica.md](marketmind-transparencia-tecnica.md).**
 >
-> Este documento planejava a orquestração dentro do `marketmind-core`. Essa
-> orquestração foi para o agente (`marketmind-orchestrator`) e o serviço passou
-> a se chamar `marketmind-scoring`. Fica aqui porque comentários no código ainda
-> citam suas seções, e porque registra o raciocínio de onde o método veio — não
-> como descrição do que o sistema é hoje.
+> Este documento planejava a orquestração dentro do `marketmind-core`. Ela foi para o agente (`marketmind-orchestrator`) e o serviço passou a se chamar `marketmind-scoring`. Fica porque comentários no código citam suas seções e porque registra de onde o método veio — não como descrição do que o sistema é hoje:
+>
+> - Hoje são 54 migrations (não as 7 das Fases 0-4), 41 rotas, ~15,8k linhas em `app/` e ~600 testes.
+> - Não há `db/external.py`, engines por fonte nem role `marketmind_readonly`: os coletores são lidos por HTTP.
+> - Pesos: Rank Reciprocal (2026-07-08), não Entropy Weight (abandonado 2026-07-03) nem ROC; sem teto anticompensação (2026-07-15). Entropy sobrevive só como validação `pymcdm`.
+> - Catálogo: alias exato → trigram com veto por produto antagônico → recall semântico Voyage (migration 052, só escolhe candidatos) → decisão do LLM.
+> - Países: cesta dinâmica `analysis_ready` (migrations 043/054), não 24/27 fixos.
+> - `/coverage/check` e `/jobs` existem, mas sem consumidor hoje (API manual); o orchestrator usa `/internal/coverage/ensure`.
 
 # MarketMind — Plan de Implementación Final
 

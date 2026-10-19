@@ -1,3 +1,13 @@
+> **SUPERADO / HISTÓRICO (2026-10-19) — ver [marketmind-arquitetura.md](marketmind-arquitetura.md) e [marketmind-transparencia-tecnica.md](marketmind-transparencia-tecnica.md).**
+>
+> A lista fixa de 24 países abaixo foi substituída por uma cesta DINÂMICA:
+>
+> - Migration 043 (2026-09-23) carregou 127 países MEDIDOS contra as APIs (World Bank 12 indicadores, UN Data 4, DataForSEO catálogo de localizações) com `analysis_ready = false`; o pré-aquecimento macro (`POST /admin/coverage/prewarm-macro`) os promove quando o dado chega.
+> - Migration 054 (2026-10-14) exclui China, Rússia e Belarus: o coletor Google Ads os recusa, e nada parcial é entregue.
+> - `GET /countries` devolve só os `analysis_ready`; a coluna `search_language` fixa por país deixou de ser a fonte do idioma — ele vem do `localized_markets[ISO3]` do produto.
+> - Não existe mais 'rate-limit do Google Trends': a demanda é volume absoluto do Google Ads via DataForSEO.
+> - A arquitetura de dados e o que a regra 'nada parcial' implica estão em marketmind-arquitetura.md.
+
 # Países disponíveis para análise
 
 Este documento define **quais países o MarketMind aceita numa análise** e

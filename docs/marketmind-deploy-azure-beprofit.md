@@ -238,9 +238,10 @@ Um **Azure PostgreSQL Flexible Server** (Burstable B1ms ou B2s) com 5 databases:
 
 Parâmetro de servidor: `azure.extensions = VECTOR,PG_TRGM`.
 
-Um servidor, 5 connection strings — que é exatamente como o Core já se conecta
-hoje (engines separadas por fonte). A role `marketmind_readonly` e o
-`scripts/create_readonly_roles.sql` continuam valendo **sem mudança de código**.
+Um servidor, 5 databases — mas o scoring só abre a SUA (`marketmind_core`).
+Os outros 4 bancos são lidos exclusivamente pelos respectivos serviços; o
+scoring fala com eles por HTTP (`*_API_BASE_URL`). Não existe mais role
+`marketmind_readonly` nem `scripts/create_readonly_roles.sql`.
 
 ⚠️ **Migrations:** o `Dockerfile` do Core roda `alembic upgrade head` no `CMD`, o
 que corre com múltiplas réplicas. Manter `replicaCount: 1` no Core. Se precisar
@@ -263,8 +264,15 @@ O ESO (External Secrets Operator) já está instalado no cluster dev.
 Menor caminho de setup: dar role `Key Vault Secrets User` ao UAMI `id-eso-dev`
 que já existe, sobre o vault novo.
 
-Secrets necessários: `OPENAI_API_KEY` (embeddings, `text-embedding-3-small`) e as
-senhas dos 5 databases.
+Secrets necessários no `marketmind-scoring-env`: `ANTHROPIC_API_KEY` (todas as
+chamadas a modelo), `VOYAGE_API_KEY` (embeddings da busca semântica do catálogo,
+`voyage-4`, 1024 dims — não há mais OpenAI/`text-embedding-3-small`),
+`INTERNAL_API_TOKEN` (compartilhado com o orchestrator), as senhas dos 5
+databases e, desde 2026-10-19, também as chaves do Langfuse —
+`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` — que até então
+só o orchestrator tinha, embora seja o scoring quem faz cada chamada a modelo.
+No values do scoring, `LANGFUSE_TRACING_ENVIRONMENT=azure-dev`, o MESMO valor
+do orchestrator: os dois serviços escrevem no mesmo trace.
 
 ## 5. Ordem de execução
 

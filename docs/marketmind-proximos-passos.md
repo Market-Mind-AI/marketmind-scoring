@@ -1,7 +1,12 @@
-> **SUPERADO em 21/09/2026 — ver [marketmind-arquitetura.md](marketmind-arquitetura.md), seção 8.**
+> **SUPERADO / HISTÓRICO (2026-10-19) — ver [marketmind-arquitetura.md](marketmind-arquitetura.md) e [marketmind-transparencia-tecnica.md](marketmind-transparencia-tecnica.md).**
 >
-> A lista de pendências aqui é anterior à virada agêntica, e o método mudou
-> depois dela: os pesos são Rank Reciprocal, não ROC.
+> A lista de pendências é anterior à virada agêntica (21/09/2026) e o método mudou depois dela. O que abaixo não vale mais:
+>
+> - Pesos são Rank Reciprocal, não ROC nem Entropy Weight; sem teto anticompensação (2026-07-15).
+> - Orquestração, retomada de órfãs e retry com orçamento vivem no `marketmind-orchestrator`, não aqui.
+> - Não há leitura read-only das bases dos coletores (`db/external.py`): tudo é HTTP.
+> - Países: cesta dinâmica `analysis_ready` (migrations 043/054), 127 candidatos medidos, não 24 fixos.
+> - Hoje: 54 migrations, 41 rotas, ~600 testes.
 
 # Próximos pasos
 

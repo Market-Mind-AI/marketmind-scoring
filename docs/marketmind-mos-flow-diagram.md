@@ -1,3 +1,13 @@
+> **SUPERADO / HISTÓRICO (2026-10-19) — ver [marketmind-arquitetura.md](marketmind-arquitetura.md) e [marketmind-transparencia-tecnica.md](marketmind-transparencia-tecnica.md).**
+>
+> O diagrama de 2026-07-08 continua correto no essencial do método (6 dimensões, Rank Reciprocal, TOPSIS contra 100/0), mas o entorno mudou:
+>
+> - Demanda vem do volume absoluto do Google Ads (DataForSEO) desde 2026-07-15, não do Google Trends; `trend_score` é a soma do volume mensal normalizada linearmente contra o teto do mercado de referência.
+> - Sem teto anticompensação (2026-07-15): `mos_before_cap`/`capped_by` ficam no contrato, sempre `mos`/`NULL`.
+> - Quem roda o fluxo é o `marketmind-orchestrator` via `/internal/*`; este serviço só calcula.
+> - A leitura dos coletores é por HTTP, não por conexão read-only às bases deles.
+> - Hoje são 54 migrations e ~600 testes.
+
 # Flujo de datos y composición del MOS — diagrama y leyenda
 
 > **Actualizado 2026-07-08 — implementado y testeado.** Incorpora la 6ª dimensión `Macro Demand Structure`

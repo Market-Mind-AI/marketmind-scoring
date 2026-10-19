@@ -1,7 +1,12 @@
-> **SUPERADO em 21/09/2026 — ver [marketmind-arquitetura.md](marketmind-arquitetura.md).**
+> **SUPERADO / HISTÓRICO (2026-10-19) — ver [marketmind-arquitetura.md](marketmind-arquitetura.md) e [marketmind-transparencia-tecnica.md](marketmind-transparencia-tecnica.md).**
 >
-> Descrevia o `marketmind-core` como porta de entrada e orquestrador. Hoje o
-> agente é as duas coisas, e este serviço é `marketmind-scoring`: o método.
+> Descrevia o `marketmind-core` como porta de entrada e orquestrador. Hoje o agente (`marketmind-orchestrator`) é as duas coisas, e este serviço é `marketmind-scoring`: o método. O que abaixo não vale mais:
+>
+> - `db/external.py` e as 4 conexões read-only às bases dos coletores não existem; a leitura é por HTTP (`*_API_BASE_URL`), sem role `marketmind_readonly`.
+> - Pesos do MOS são Rank Reciprocal (desde 2026-07-08), não Entropy Weight nem ROC; TOPSIS contra âncoras fixas 100/0; sem teto anticompensação (2026-07-15).
+> - Países: cesta dinâmica `analysis_ready` (migration 043 carregou 127 candidatos medidos; 054 exclui CN/RU/BY), não uma lista fixa.
+> - Hoje são 54 migrations, 41 rotas, ~15,8k linhas em `app/` e ~600 testes (672 casos), que só rodam contra um banco cujo nome contém `test`.
+> - Embeddings são Voyage (`voyage-4`, por alias, HNSW — migration 052) e só recuperam candidatos; a decisão é do LLM. Não há OpenAI.
 
 # Arquitectura técnica — stack Python de MarketMind Core
 
