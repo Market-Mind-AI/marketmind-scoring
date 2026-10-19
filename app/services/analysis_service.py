@@ -177,11 +177,15 @@ class AnalysisService:
             return
 
         payload = {"analysis_id": str(request_id)}
+        # The same secret the orchestrator sends on /internal/*, sent back on the
+        # one call that goes the other way: starting a run costs money, and the
+        # route that starts one is no more for the browser than /internal is.
+        headers = {"X-Internal-Token": settings.internal_api_token} if settings.internal_api_token else {}
 
         try:
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream(
-                    "POST", f"{settings.orchestrator_api_base_url}/run-analysis", json=payload
+                    "POST", f"{settings.orchestrator_api_base_url}/run-analysis", json=payload, headers=headers
                 ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():

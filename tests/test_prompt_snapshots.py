@@ -7,7 +7,16 @@ The snapshot was generated from the code before the move.
 The vision entries were regenerated on 2026-09-28, on purpose: the instructions
 became the (cached) system prompt with no variables, and the countries moved to
 the user message. Each entry is the system prompt, a separator, and the user
-message."""
+message.
+
+The `es` entries were regenerated on 2026-10-19, on purpose: Spanish got its own
+instruction (`explanation-system-es`) instead of the English one plus a "write
+in this language" line. The `fr` entries pin that fallback, which is what any
+language without texts of its own still gets.
+
+To regenerate: render each key below with the same calls these tests make and
+write the JSON back (ensure_ascii=False, indent=2, sort_keys=True); then check
+that only the entries you meant to change did."""
 
 import itertools
 import json
@@ -23,7 +32,7 @@ from app.services.vision_client import ProductIdentification, VisionClient
 _SNAPSHOT_FILE = Path(__file__).parent / "prompt_snapshots.json"
 
 _EXPLANATION_CASES = list(
-    itertools.product(("pt", "en", "es"), (True, False), (False, True), (None, "Quero vender no Chile"))
+    itertools.product(("pt", "en", "es", "fr"), (True, False), (False, True), (None, "Quero vender no Chile"))
 )
 
 _VISION_CASES = [

@@ -105,6 +105,7 @@ async def register_analysis(
         catalog_query_text=request.catalog_query_text,
         brand_key=request.brand_key,
         brand_name=request.brand_name,
+        language=request.language,
     )
     await session.commit()
     return RegisteredAnalysisResponse(request_id=analysis_request.id, status=analysis_request.status)
@@ -185,6 +186,7 @@ async def read_analysis(request_id: uuid.UUID, session: AsyncSession = Depends(g
         brand_name=analysis_request.brand_name,
         countries=list(analysis_request.countries or []),
         user_prompt=analysis_request.user_prompt,
+        language=analysis_request.language,
         progress=analysis_request.progress,
         explanation=analysis_request.explanation,
         error_message=analysis_request.error_message,
@@ -404,6 +406,7 @@ async def narrate(request: NarrateRequest, session: AsyncSession = Depends(get_s
         product_name=request.product_name,
         brand=request.brand,
         user_prompt=request.user_prompt,
+        language=request.language,
     )
     return NarrateResponse(narrative=narrative)
 
@@ -428,7 +431,9 @@ async def narrate(request: NarrateRequest, session: AsyncSession = Depends(get_s
 async def revise_narrative(
     request: ReviseNarrativeRequest, session: AsyncSession = Depends(get_session)
 ) -> NarrateResponse:
-    revista = await ExplanationClient(session).revise(narrative=request.narrative, claims=request.claims)
+    revista = await ExplanationClient(session).revise(
+        narrative=request.narrative, claims=request.claims, language=request.language
+    )
     return NarrateResponse(narrative=revista)
 
 

@@ -212,6 +212,56 @@ appetite).
 
 Human analyst tone, flowing prose throughout — no bullets, lists or sub-headings."""
 
+_SYSTEM_PROMPT_ES = """Eres un analista de entrada en mercados (market-entry) que ayuda a un negocio \
+a {{scope_intro}}, a partir de un "paquete de evidencias" ya calculado \
+por el motor determinístico de MOS (Market Opportunity Score) de MarketMind.
+
+REGLAS INVIOLABLES:
+- Usa SOLAMENTE los números proporcionados en el paquete. NUNCA inventes, estimes, redondees de forma \
+nueva ni recalcules ningún valor. No escribas ningún número que no esté en el input.
+- Tú EXPLICAS los resultados determinísticos; no los recalculas ni los discutes.
+- {{country_rule}}
+
+El PAQUETE trae, para CADA país: el MOS (con banda y un campo `explanation` en texto), la lista de \
+`dimensions` y la lista de `signals` (indicadores). CADA ítem — MOS, dimensión y señal — tiene un campo \
+`explanation`: una lectura en lenguaje natural del NÚMERO de ese score (lo que significa ese nivel). \
+Cada país trae también `context_signals`: números SIN score, que no son buenos ni malos por sí mismos — úsalos \
+para dar escala, nunca como elogio o crítica. El más importante es la demanda de la CATEGORÍA (términos \
+GENÉRICOS, no la demanda total del mercado), comparada con la de la marca: una fracción pequeña de una categoría \
+grande significa que el mercado existe y la marca no está en él, que es distinto de "aquí no hay mercado". \
+La marca PUEDE ser mayor que los términos genéricos, y entonces la lectura es que se la busca por nombre — nunca \
+presentes eso como una "cuota" por encima del 100%. \
+Hay además un `glossary` al inicio que define qué mide cada métrica. USA el `explanation` de cada score y el \
+`glossary` para construir una explicación RICA, aprovechando TODOS los datos que entran en el MOS \
+(todas las dimensiones y señales), no solo el volumen.
+
+FORMATO (MUY IMPORTANTE): escribe como un analista humano escribiría un informe para un ejecutivo — \
+PROSA CORRIDA, fluida y natural. Está PROHIBIDO usar viñetas, listas, tablas, subtítulos por dimensión o \
+enumerar "dimensión: score" ítem por ítem. Las dimensiones y los números van TEJIDOS en las frases, no en puntos.
+
+{{structure}}
+
+REGLA DE MEDIDA DEL VOLUMEN DE DEMANDA (`demand_ruler`) — explícala DENTRO del texto corrido (sin nota/sección \
+aparte):
+- Si `mode` = "reference": el score de Demand Volume de cada país se mide como % del MERCADO DE REFERENCIA \
+del producto — el país `country` (con `volume` búsquedas/mes), elegido como el de MAYOR volumen REAL entre los \
+mercados evaluados (`candidates` = candidatos propuestos + los propios países analizados). Deja claro que \
+100 sería igualar ese mayor mercado, y que los países analizados valen ese % de él. El mercado de referencia \
+es solo la regla de medida — NO forma parte {{ruler_scope}} (a menos que también haya sido solicitado).
+- Si `mode` = "fixed": no hubo volumen en ningún mercado evaluado; se usó un techo fijo genérico. \
+**Advierte claramente** que los scores de volumen son solo aproximados en ese caso.
+
+DISTINCIÓN CRÍTICA (hazla explícita usando la señal de volumen de demanda, cuyo `context` trae búsquedas \
+absolutas + población + penetración por 100 mil habitantes):
+- Separa "vende mucho principalmente porque el país es populoso" (volumen alto, pero penetración BAJA) \
+de "vende mucho porque una parte alta de la gente realmente quiere el producto" (penetración ALTA = \
+apetito real).
+- Deja claro que un mercado más pequeño, pero con penetración/calidad alta, aún puede ser una fuerte \
+oportunidad.
+- Cita concretamente los números reales (búsquedas absolutas, población, penetración por 100 mil).
+
+Tono humano de analista, prosa corrida de principio a fin — nada de viñetas, listas ni subtítulos."""
+
 
 # The output structure depends on how many countries were analyzed: with a
 # SINGLE country there is no ranking/ordering/comparison to make, so the prompt
@@ -265,6 +315,30 @@ the most weight but less than half the total).
 3) ONE CLOSING PARAGRAPH with the practical recommendation for THIS country (enter now / test / wait / \
 deprioritize) and the main reason — WITHOUT comparing to other countries."""
 
+_STRUCTURE_ES_MULTI = """PRODUCE, en este orden:
+1) Una frase/línea corta de recomendación — el orden de prioridad de los países por MOS (con el MOS de cada uno).
+2) UN PÁRRAFO CORRIDO POR PAÍS (un único párrafo fluido cada uno): cuenta la "historia" de ese mercado \
+hilando con naturalidad las dimensiones y señales que importan — los puntos fuertes Y los débiles, con los \
+números reales —, y explica, en lenguaje natural, por qué el MOS quedó donde quedó. Cubre lo esencial de las \
+dimensiones sin listarlas mecánicamente; deja claro, dentro del texto, por qué una dimensión fuerte (p. ej., \
+volumen) NO lleva el MOS al máximo — porque las demás dimensiones, sumadas a su peso, lo frenan (el Volumen de \
+Demanda es la de mayor peso, pero responde por menos de la mitad del total). Explica la lógica del peso con \
+palabras, sin necesidad de citar los pesos numéricos.
+3) UN PÁRRAFO FINAL comparando todos los países entre sí — quién lidera y por qué, los trade-offs (volumen \
+enorme vs. poder adquisitivo, nicho de alta calidad vs. escala) y la recomendación de priorización."""
+
+_STRUCTURE_ES_SINGLE = """PRODUCE (hay UN SOLO país en este análisis — por lo tanto NO uses lenguaje de "orden \
+de prioridad", "ranking" o "comparación entre países"; no hay con qué comparar):
+1) Una frase de apertura con el veredicto de este mercado — el país, su MOS y la banda (p. ej., buena/moderada/\
+débil oportunidad).
+2) UNO o DOS PÁRRAFOS CORRIDOS analizando ESTE mercado: cuenta su "historia" hilando con naturalidad las \
+dimensiones y señales que importan — los puntos fuertes Y los débiles, con los números reales —, y explica, en \
+lenguaje natural, por qué el MOS quedó donde quedó (incluso por qué una dimensión fuerte, p. ej., volumen, no \
+lleva el MOS al máximo, porque las demás dimensiones, sumadas a su peso, lo frenan; el Volumen de Demanda es la \
+de mayor peso pero responde por menos de la mitad del total).
+3) UN PÁRRAFO DE CIERRE con la recomendación práctica para ESTE país (entrar ahora / probar / esperar / \
+despriorizar) y el motivo principal — SIN comparar con otros países."""
+
 
 # Injected only when the buyer typed a free-text prompt/question. The LLM may
 # answer it, but STILL only from the deterministic packet — never inventing data.
@@ -285,6 +359,15 @@ say so plainly (e.g. "this analysis's data does not cover X"). Stay fully cohere
 
 User text: "{user_prompt}\""""
 
+_USER_PROMPT_BLOCK_ES = """PREGUNTA/CONTEXTO DEL USUARIO — el usuario escribió el texto de abajo al enviar el \
+producto. Si contiene PREGUNTAS o pedidos específicos, respóndelos a lo largo del análisis (de forma \
+tejida en la prosa, sin convertirlo en un bloque de preguntas y respuestas), pero rigen las MISMAS reglas \
+inviolables: usa SOLAMENTE los números del paquete, NUNCA inventes, estimes ni traigas datos externos. Si algo \
+preguntado no puede responderse con los datos disponibles, dilo con franqueza (p. ej.: "los datos de este \
+análisis no cubren X"). Mantén total coherencia con lo que se preguntó.
+
+Texto del usuario: "{user_prompt}\""""
+
 
 _CHAMPION_RULE_PT = (
     "MERCADO DESTAQUE (\"rei\" 👑): um país no pacote está marcado com `is_champion` = true e `requested` = false "
@@ -302,6 +385,14 @@ _CHAMPION_RULE_EN = (
     "or far they are from the best market). Do NOT treat it as a requested target nor include it in the "
     "prioritization recommendation for the requested markets."
 )
+_CHAMPION_RULE_ES = (
+    "MERCADO DESTACADO (\"rey\" 👑): un país del paquete está marcado con `is_champion` = true y `requested` = false "
+    "— es el mercado de MAYOR MOS para este producto entre los candidatos de referencia y NO fue solicitado por el "
+    "usuario. Inclúyelo como BENCHMARK: di que es el mercado de mayor potencial para el producto (con su MOS), "
+    "deja EXPLÍCITO que no estaba entre los mercados pedidos, y compara el/los mercado(s) solicitado(s) con él "
+    "(qué tan cerca o lejos están del mejor mercado). NO lo trates como un objetivo pedido ni lo incluyas en la "
+    "recomendación de priorización de los mercados solicitados."
+)
 
 
 _DEMAND_CONFIDENCE_RULE_PT = (
@@ -313,6 +404,11 @@ _DEMAND_CONFIDENCE_RULE_EN = (
     "DEMAND CONFIDENCE: if a country carries `demand_confidence` = \"low\" (with `demand_confidence_note`), "
     "explicitly WARN, within that country's prose, that its demand volume may be UNDERSTATED (likely a missing "
     "native search term) and treat its MOS with that caveat — do not present it as definitive."
+)
+_DEMAND_CONFIDENCE_RULE_ES = (
+    "CONFIANZA DE LA DEMANDA: si algún país trae `demand_confidence` = \"low\" (con `demand_confidence_note`), "
+    "ADVIERTE explícitamente, dentro de la prosa de ese país, que su volumen de demanda puede estar SUBESTIMADO "
+    "(probable término de búsqueda nativo faltante) y trata su MOS con esa salvedad — no lo presentes como definitivo."
 )
 
 _DEMAND_TERMS_RULE_PT = (
@@ -328,6 +424,13 @@ _DEMAND_TERMS_RULE_EN = (
     "LIST the words that were searched with each one's individual volume and the TOTAL monthly searches — "
     "faithful to the packet's numbers, never invented. If there are many terms, present the highest-volume ones "
     "individually and group the low-volume tail (e.g. \"and N other terms totalling X\"), but ALWAYS state the total."
+)
+_DEMAND_TERMS_RULE_ES = (
+    "PALABRAS BUSCADAS (obligatorio): para CADA país, el `context` de la señal de Demand Volume trae el detalle "
+    "\"Per-term monthly search volume — término volumen; término volumen; ...\" y el total. En la prosa de ese país, "
+    "LISTA las palabras que se buscaron con el volumen individual de cada una y el TOTAL de búsquedas mensuales — "
+    "fiel a los números del paquete, sin inventar. Si hay muchos términos, presenta los de mayor volumen uno a uno "
+    "y agrupa la cola de menor volumen (p. ej.: \"y otros N términos que suman X\"), pero SIEMPRE informa el total."
 )
 
 
@@ -369,6 +472,23 @@ _COUNTRY_RULE_EN = {
     ),
 }
 _RULER_SCOPE_EN = {True: "the analyzed market's score", False: "the ranking"}
+_SCOPE_INTRO_ES = {
+    True: "evaluar si UN mercado es una buena oportunidad para vender un producto",
+    False: "decidir EN QUÉ PAÍSES vender un producto",
+}
+_COUNTRY_RULE_ES = {
+    True: (
+        "Cita el MOS de este país EXACTAMENTE como está en el input — ya es final, no lo recalcules "
+        "por tu cuenta. Hay UN SOLO país en este análisis; NO uses lenguaje de ranking, "
+        "ordenación o comparación entre países."
+    ),
+    False: (
+        "Incluye TODOS los países del paquete (no omitas ninguno), en el orden del MOS (mayor primero). "
+        "Cita el MOS de cada país EXACTAMENTE como está en el input — el ranking ya es final, no lo reordenes "
+        "ni lo recalcules por tu cuenta."
+    ),
+}
+_RULER_SCOPE_ES = {True: "de la puntuación del mercado analizado", False: "del ranking"}
 
 
 
@@ -420,6 +540,23 @@ FLAGGED CLAIMS:
 ORIGINAL TEXT:
 {narrative}"""
 
+_REVISION_RULE_ES = """REVISIÓN. Escribiste el texto de abajo y un revisor señaló afirmaciones que la
+evidencia NO sustenta. Reescribe el texto entero corrigiendo cada una de ellas.
+
+Para cada señalamiento, elige una salida:
+  - reformula hasta que la frase diga solo lo que la evidencia muestra (en general existe
+    una versión honesta: "lidera el MOS" en lugar de "es la mejor apuesta");
+  - o elimina la frase.
+
+No añadas información nueva, no cambies ningún número y mantén la estructura, la
+extensión y el idioma del texto original. Devuelve SOLAMENTE el texto revisado.
+
+AFIRMACIONES SEÑALADAS:
+{claims}
+
+TEXTO ORIGINAL:
+{narrative}"""
+
 
 # Quando a análise tem marca. Os números vieram do vocabulário DELA — "juan
 # valdez café", não "café" —, então chamar o resultado de "o mercado de café"
@@ -438,6 +575,62 @@ Demand was measured with the brand's search terms, not the category's. So:
 - speak of the pair throughout ("{brand} in Brazil"), never of the category alone;
 - never attribute to the product at large a figure that belongs to the brand;
 - when the text compares against the category, say plainly that it is a comparison."""
+
+_BRAND_RULE_ES = """Este análisis es de una MARCA dentro de un producto: {brand} · {product}.
+
+La demanda se midió con los términos de búsqueda de la marca, no los de la categoría. Entonces:
+- habla del par todo el tiempo ("{brand} en Brasil"), nunca solo de la categoría;
+- no atribuyas al producto en general un número que es de la marca;
+- cuando el texto compare con la categoría, di explícitamente que es una comparación."""
+
+
+# --- the three languages the narrative has its own texts in ---
+#
+# A narrativa sai no idioma da INTERFACE de quem pediu (o frontend é EN/ES e o
+# padrão configurado era PT, então o texto chegava num idioma que o leitor não
+# tinha escolhido). O idioma viaja com a análise; sem ele vale o configurado.
+# Um idioma fora destes três recebe o prompt em inglês mais uma linha pedindo o
+# idioma, como antes — os textos só existem para o que a interface oferece.
+_ALIASES: dict[str, tuple[str, ...]] = {
+    "pt": ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português"),
+    "en": ("en", "en-us", "en_us", "english"),
+    "es": ("es", "es-es", "es_es", "es-419", "spanish", "espanol", "español", "castellano"),
+}
+_PROMPT_NAME = {"pt": "explanation-system-pt", "en": "explanation-system-en", "es": "explanation-system-es"}
+_SYSTEM_PROMPT = {"pt": _SYSTEM_PROMPT_PT, "en": _SYSTEM_PROMPT_EN, "es": _SYSTEM_PROMPT_ES}
+_STRUCTURE = {
+    "pt": {True: _STRUCTURE_PT_SINGLE, False: _STRUCTURE_PT_MULTI},
+    "en": {True: _STRUCTURE_EN_SINGLE, False: _STRUCTURE_EN_MULTI},
+    "es": {True: _STRUCTURE_ES_SINGLE, False: _STRUCTURE_ES_MULTI},
+}
+_SCOPE_INTRO = {"pt": _SCOPE_INTRO_PT, "en": _SCOPE_INTRO_EN, "es": _SCOPE_INTRO_ES}
+_COUNTRY_RULE = {"pt": _COUNTRY_RULE_PT, "en": _COUNTRY_RULE_EN, "es": _COUNTRY_RULE_ES}
+_RULER_SCOPE = {"pt": _RULER_SCOPE_PT, "en": _RULER_SCOPE_EN, "es": _RULER_SCOPE_ES}
+_DEMAND_CONFIDENCE_RULE = {
+    "pt": _DEMAND_CONFIDENCE_RULE_PT,
+    "en": _DEMAND_CONFIDENCE_RULE_EN,
+    "es": _DEMAND_CONFIDENCE_RULE_ES,
+}
+_DEMAND_TERMS_RULE = {"pt": _DEMAND_TERMS_RULE_PT, "en": _DEMAND_TERMS_RULE_EN, "es": _DEMAND_TERMS_RULE_ES}
+_CHAMPION_RULE = {"pt": _CHAMPION_RULE_PT, "en": _CHAMPION_RULE_EN, "es": _CHAMPION_RULE_ES}
+_BRAND_RULE = {"pt": _BRAND_RULE_PT, "en": _BRAND_RULE_EN, "es": _BRAND_RULE_ES}
+_USER_PROMPT_BLOCK = {"pt": _USER_PROMPT_BLOCK_PT, "en": _USER_PROMPT_BLOCK_EN, "es": _USER_PROMPT_BLOCK_ES}
+_REVISION_RULE = {"pt": _REVISION_RULE_PT, "en": _REVISION_RULE_EN, "es": _REVISION_RULE_ES}
+
+
+def _language_key(language: str | None) -> str | None:
+    """'pt', 'en' or 'es' when the language has its own texts; None otherwise."""
+    lang = (language or "").strip().lower()
+    for key, aliases in _ALIASES.items():
+        if lang in aliases:
+            return key
+    return None
+
+
+def _narrative_language(language: str | None) -> str:
+    """The language this analysis asked for, or the configured default."""
+    return (language or "").strip() or settings.ollama_llm_narrative_language
+
 
 def _system_prompt(
     language: str,
@@ -476,41 +669,28 @@ def _system_parts(
     brand, the user's own words — changes per analysis and goes after the
     cache breakpoint; kept in the cached part, every analysis would write a
     fresh cache entry nobody reads."""
-    lang = (language or "").strip().lower()
-    is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
-    if is_pt:
-        structure = _STRUCTURE_PT_SINGLE if single_country else _STRUCTURE_PT_MULTI
-        base = prompt_text(
-            "explanation-system-pt",
-            _SYSTEM_PROMPT_PT,
-            structure=structure,
-            scope_intro=_SCOPE_INTRO_PT[single_country],
-            country_rule=_COUNTRY_RULE_PT[single_country],
-            ruler_scope=_RULER_SCOPE_PT[single_country],
-        )
-    else:
-        structure = _STRUCTURE_EN_SINGLE if single_country else _STRUCTURE_EN_MULTI
-        base = prompt_text(
-            "explanation-system-en",
-            _SYSTEM_PROMPT_EN,
-            structure=structure,
-            scope_intro=_SCOPE_INTRO_EN[single_country],
-            country_rule=_COUNTRY_RULE_EN[single_country],
-            ruler_scope=_RULER_SCOPE_EN[single_country],
-        )
-        if lang not in ("en", "en-us", "en_us", "english"):
-            base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
-    base = f"{base}\n\n{_DEMAND_CONFIDENCE_RULE_PT if is_pt else _DEMAND_CONFIDENCE_RULE_EN}"
-    base = f"{base}\n\n{_DEMAND_TERMS_RULE_PT if is_pt else _DEMAND_TERMS_RULE_EN}"
+    known = _language_key(language)
+    key = known or "en"
+    base = prompt_text(
+        _PROMPT_NAME[key],
+        _SYSTEM_PROMPT[key],
+        structure=_STRUCTURE[key][single_country],
+        scope_intro=_SCOPE_INTRO[key][single_country],
+        country_rule=_COUNTRY_RULE[key][single_country],
+        ruler_scope=_RULER_SCOPE[key][single_country],
+    )
+    if known is None:
+        base = f'{base}\n\nWrite the entire narrative in this language: "{language}".'
+    base = f"{base}\n\n{_DEMAND_CONFIDENCE_RULE[key]}"
+    base = f"{base}\n\n{_DEMAND_TERMS_RULE[key]}"
     tail: list[str] = []
     if external_champion:
-        tail.append(_CHAMPION_RULE_PT if is_pt else _CHAMPION_RULE_EN)
+        tail.append(_CHAMPION_RULE[key])
     if brand:
-        modelo = _BRAND_RULE_PT if is_pt else _BRAND_RULE_EN
-        tail.append(modelo.replace("{brand}", brand).replace("{product}", product or ""))
+        tail.append(_BRAND_RULE[key].replace("{brand}", brand).replace("{product}", product or ""))
     user_text = (user_prompt or "").strip()
     if user_text:
-        tail.append((_USER_PROMPT_BLOCK_PT if is_pt else _USER_PROMPT_BLOCK_EN).replace("{user_prompt}", user_text))
+        tail.append(_USER_PROMPT_BLOCK[key].replace("{user_prompt}", user_text))
     return base, "\n\n".join(tail) or None
 
 
@@ -668,11 +848,15 @@ class ExplanationClient:
         product_name: str,
         brand: str | None = None,
         user_prompt: str | None = None,
+        language: str | None = None,
     ) -> str | None:
         """Best-effort: turn a deterministic evidence packet into a business
         narrative via the resolved explanation LLM. Any failure returns None and
         is logged — the analysis still completes with the numbers. The LLM only
-        EXPLAINS; it never computes or alters a score (Cap. 4 §4.0)."""
+        EXPLAINS; it never computes or alters a score (Cap. 4 §4.0).
+
+        `language` is the one the analysis asked for — the buyer's interface
+        language, stored with the request. None means the configured default."""
         countries = packet.get("countries") or []
         if not countries:
             return None
@@ -685,7 +869,7 @@ class ExplanationClient:
         external_champion = any(c.get("is_champion") and not c.get("requested", True) for c in countries)
         try:
             system, system_tail = _system_parts(
-                settings.ollama_llm_narrative_language,
+                _narrative_language(language),
                 single_country=single,
                 user_prompt=user_prompt,
                 external_champion=external_champion,
@@ -716,7 +900,7 @@ class ExplanationClient:
             logger.warning(f"Final LLM explanation skipped (provider unavailable or errored): {exc}")
             return None
 
-    async def revise(self, *, narrative: str, claims: list[str]) -> str | None:
+    async def revise(self, *, narrative: str, claims: list[str], language: str | None = None) -> str | None:
         """Reescreve o texto tirando as afirmações que a evidência não sustenta.
 
         Melhor esforço, como a narrativa: se falhar, o texto original continua
@@ -727,12 +911,11 @@ class ExplanationClient:
         """
         if not narrative or not claims:
             return None
-        lang = (settings.ollama_llm_narrative_language or "").strip().lower()
-        is_pt = lang in ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português")
-        modelo = _REVISION_RULE_PT if is_pt else _REVISION_RULE_EN
-        pedido = modelo.replace("{claims}", "\n".join(f"- {c}" for c in claims)).replace(
-            "{narrative}", narrative
-        )
+        # O pedido de revisão sai no idioma do texto: o modelo é instruído a
+        # manter o idioma do original, e um pedido em inglês sobre um texto em
+        # espanhol é um convite a traduzi-lo.
+        modelo = _REVISION_RULE[_language_key(_narrative_language(language)) or "en"]
+        pedido = modelo.replace("{claims}", "\n".join(f"- {c}" for c in claims)).replace("{narrative}", narrative)
         try:
             revisto = await resolve_explanation_llm().complete(
                 system="You revise business narratives for factual support. Return only the revised text.",

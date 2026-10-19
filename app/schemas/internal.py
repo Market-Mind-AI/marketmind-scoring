@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.domain.enums import NarrativeLanguage
 from app.schemas.coverage import JobTaskResult
 
 
@@ -35,6 +36,9 @@ class RegisterAnalysisRequest(BaseModel):
     # marca e quem não.
     brand_key: uuid.UUID | None = None
     brand_name: str | None = None
+    # O idioma da interface de quem pediu, em que a narrativa deve sair.
+    # Nulo é o configurado no serviço.
+    language: NarrativeLanguage | None = None
 
 
 class RegisteredAnalysisResponse(BaseModel):
@@ -95,6 +99,7 @@ class AnalysisDetailResponse(BaseModel):
     brand_name: str | None = None
     countries: list[str] = []
     user_prompt: str | None = None
+    language: NarrativeLanguage | None = None
     progress: str | None = None
     explanation: str | None = None
     error_message: str | None = None
@@ -135,6 +140,9 @@ class NarrateRequest(BaseModel):
     # atribuir à categoria o que se mediu da Juan Valdez.
     brand: str | None = None
     user_prompt: str | None = None
+    # O idioma que a análise pediu (lido do registro dela). Nulo é o
+    # configurado no serviço — o que toda análise recebia antes.
+    language: NarrativeLanguage | None = None
 
 
 class ReviseNarrativeRequest(BaseModel):
@@ -149,6 +157,9 @@ class ReviseNarrativeRequest(BaseModel):
 
     narrative: str = Field(..., min_length=1)
     claims: list[str] = Field(..., min_length=1)
+    # O mesmo idioma da narrativa: o pedido de revisão sai nele, senão um
+    # pedido em inglês sobre um texto em espanhol convida a traduzi-lo.
+    language: NarrativeLanguage | None = None
 
 
 class NarrateResponse(BaseModel):

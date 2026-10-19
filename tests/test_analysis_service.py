@@ -331,6 +331,53 @@ def _refusing_client(**kwargs: object) -> "_FakeClient":
     raise ConnectionError("connection refused")
 
 
+class _RecordingClient(_FakeClient):
+    """Keeps what the call to the orchestrator was made with."""
+
+    calls: list[dict[str, object]] = []
+
+    def stream(self, *args: object, **kwargs: object) -> _FakeStream:
+        _RecordingClient.calls.append({"args": args, **kwargs})
+        return _FakeStream(self._lines)
+
+
+async def _run_recorded(token: str) -> dict[str, object]:
+    from app.core.config import settings
+
+    _RecordingClient.calls = []
+    session, mocks = _patched_service(all_covered=True)
+    try:
+        with (
+            patch.object(settings, "internal_api_token", token),
+            patch("app.services.analysis_service.httpx.AsyncClient", lambda **kw: _RecordingClient([])),
+        ):
+            await AnalysisService(session).run(_REQUEST_ID)
+    finally:
+        for key, value in list(mocks.items()):
+            if key.startswith("_patcher_"):
+                value.stop()
+    assert len(_RecordingClient.calls) == 1
+    return _RecordingClient.calls[0]
+
+
+async def test_the_run_is_started_with_the_shared_secret() -> None:
+    """The same secret the orchestrator sends on /internal/*, sent back on the
+    one call that goes the other way: starting a run costs money, and the route
+    that starts one is no more for the browser than /internal is."""
+    call = await _run_recorded("segredo")
+
+    assert call["args"][1].endswith("/run-analysis")
+    assert call["headers"] == {"X-Internal-Token": "segredo"}
+
+
+async def test_an_unset_secret_is_not_sent_as_an_empty_one() -> None:
+    """The orchestrator refuses either way; a header that is present but empty
+    reads like a configuration that was attempted rather than never made."""
+    call = await _run_recorded("")
+
+    assert call["headers"] == {}
+
+
 # --- Coverage: the tool the agent calls, exercised directly ---
 #
 # These used to run through the in-process loop that sequenced them. The loop is

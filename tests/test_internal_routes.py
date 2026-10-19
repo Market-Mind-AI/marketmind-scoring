@@ -496,3 +496,63 @@ def test_a_match_with_no_score_is_not_borderline(client: TestClient) -> None:
     ).json()["request_id"]
 
     assert client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()["catalog_match_borderline"] is False
+
+
+# --- the narrative comes out in the buyer's language ---
+#
+# The interface is EN/ES and the configured default was PT, so a reader who
+# chose Spanish got a Portuguese explanation. The language is the buyer's
+# choice, not the service's: it is registered with the analysis and read back
+# when the run narrates.
+
+
+def test_the_language_asked_for_is_stored_and_read_back(client: TestClient) -> None:
+    request_id = client.post(
+        "/internal/analyses", json={"countries": ["ESP"], "language": "es"}, headers=_HEADERS
+    ).json()["request_id"]
+
+    lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
+
+    assert lido["language"] == "es"
+
+
+def test_an_analysis_registered_without_a_language_reads_back_null(client: TestClient) -> None:
+    """Null is "the configured default" — what every analysis got before the
+    language travelled with the request."""
+    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+
+    lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
+
+    assert lido["language"] is None
+
+
+def test_a_language_the_narrative_has_no_texts_for_is_refused(client: TestClient) -> None:
+    response = client.post("/internal/analyses", json={"countries": ["ESP"], "language": "fr"}, headers=_HEADERS)
+
+    assert response.status_code == 422
+
+
+def test_narrate_writes_in_the_language_the_analysis_asked_for(client: TestClient) -> None:
+    narrate = AsyncMock(return_value="España lidera.")
+    with patch("app.services.explanation_client.ExplanationClient.narrate", narrate):
+        response = client.post(
+            "/internal/narrate",
+            json={"packet": {"countries": []}, "product_name": "air fryer", "language": "es"},
+            headers=_HEADERS,
+        )
+
+    assert response.status_code == 200
+    assert narrate.await_args.kwargs["language"] == "es"
+
+
+def test_the_revision_is_asked_for_in_the_same_language(client: TestClient) -> None:
+    revise = AsyncMock(return_value="Texto revisado")
+    with patch("app.services.explanation_client.ExplanationClient.revise", revise):
+        response = client.post(
+            "/internal/narrate/revise",
+            json={"narrative": "España es la mejor apuesta.", "claims": ["no cubre costes"], "language": "es"},
+            headers=_HEADERS,
+        )
+
+    assert response.status_code == 200
+    assert revise.await_args.kwargs["language"] == "es"

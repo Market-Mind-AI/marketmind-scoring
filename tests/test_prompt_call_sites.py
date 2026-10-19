@@ -26,6 +26,7 @@ class EditedInLangfuse:
     _VARIABLES = {
         "explanation-system-pt": ("structure", "scope_intro", "country_rule", "ruler_scope"),
         "explanation-system-en": ("structure", "scope_intro", "country_rule", "ruler_scope"),
+        "explanation-system-es": ("structure", "scope_intro", "country_rule", "ruler_scope"),
     }
 
     def __init__(self) -> None:
@@ -178,7 +179,13 @@ async def test_vision_uses_its_prompt_and_keeps_the_users_text(langfuse: EditedI
 
 @pytest.mark.parametrize(
     ("language", "name"),
-    [("pt", "explanation-system-pt"), ("en", "explanation-system-en"), ("es", "explanation-system-en")],
+    [
+        ("pt", "explanation-system-pt"),
+        ("en", "explanation-system-en"),
+        ("es", "explanation-system-es"),
+        # A language with no texts of its own still gets the English ones.
+        ("fr", "explanation-system-en"),
+    ],
 )
 def test_explanation_uses_its_prompt_per_language(langfuse: EditedInLangfuse, language: str, name: str) -> None:
     rendered = _system_prompt(language, single_country=True)

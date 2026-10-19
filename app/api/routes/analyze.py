@@ -152,6 +152,7 @@ async def analyze(
         estimated_price=request.estimated_price,
         price_currency=request.price_currency,
         user_prompt=request.user_prompt,
+        language=request.language,
     )
     await session.commit()
 

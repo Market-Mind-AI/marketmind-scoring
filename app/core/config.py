@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     # explanation (analysis still completes without a narrative if it's down).
     ollama_llm_api_base_url: str = "http://host.docker.internal:8005"
     ollama_llm_timeout_seconds: float = 300.0
+    # The narrative's language when the analysis did not ask for one. Every
+    # analysis registered through the frontend carries the interface language
+    # (pt, en or es) and is written in it; this is the fallback for the rest.
     ollama_llm_narrative_language: str = "pt"
 
     # Shared secret the orchestrator sends on /internal/* calls. Those routes

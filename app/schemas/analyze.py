@@ -3,6 +3,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.domain.enums import NarrativeLanguage
+
 
 class AnalyzeRequest(BaseModel):
     # Same field names as IdentifyImageResponse (app/schemas/catalog.py) on
@@ -40,6 +42,13 @@ class AnalyzeRequest(BaseModel):
         ),
     )
     countries: list[str] = Field(..., min_length=1, description="ISO3 country codes")
+    language: NarrativeLanguage | None = Field(
+        default=None,
+        description=(
+            "The buyer's interface language (pt, en or es): the narrative is written "
+            "in it. Omitted means the service's configured default."
+        ),
+    )
 
 
 class AnalyzeAcceptedResponse(BaseModel):

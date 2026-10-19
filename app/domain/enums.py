@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 
 class DataSource(StrEnum):
@@ -142,3 +143,9 @@ class IndicatorDimension(StrEnum):
     MARKET_SIZE = "market_size"
     DEMOGRAPHIC_SUSTAINABILITY = "demographic_sustainability"
     MACRO_DEMAND_STRUCTURE = "macro_demand_structure"
+
+
+# Os idiomas em que a narrativa tem instrução própria (app/services/
+# explanation_client.py): os que a interface oferece, mais o padrão histórico.
+# A análise guarda o da interface de quem pediu; nulo é o configurado.
+NarrativeLanguage = Literal["pt", "en", "es"]

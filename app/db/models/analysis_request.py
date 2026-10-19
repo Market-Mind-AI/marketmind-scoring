@@ -59,6 +59,10 @@ class AnalysisRequest(Base):
     # answer what the user asked — strictly from the deterministic packet, never
     # inventing data (Cap. 4 §4.0). Nullable: analyses may be submitted without one.
     user_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # O idioma em que a narrativa deve sair: o da interface de quem pediu
+    # (`pt`, `en` ou `es`). NULO é o configurado no serviço — vale para toda
+    # análise anterior à migration 055 e para quem não manda idioma.
+    language: Mapped[str | None] = mapped_column(nullable=True)
     result: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     # The full per-country evidence packet the explanation service assembles
     # (glossary + weights + demand ruler + each country's MOS, the 7 dimension

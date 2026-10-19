@@ -29,6 +29,7 @@ class AnalysisRepository:
         catalog_query_text: str | None = None,
         brand_key: uuid.UUID | None = None,
         brand_name: str | None = None,
+        language: str | None = None,
     ) -> AnalysisRequest:
         row = AnalysisRequest(
             id=uuid.uuid4(),
@@ -45,6 +46,7 @@ class AnalysisRepository:
             catalog_query_text=catalog_query_text,
             brand_key=brand_key,
             brand_name=brand_name,
+            language=language,
             created_at=utc_now(),
         )
         self._session.add(row)
