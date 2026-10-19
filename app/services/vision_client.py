@@ -1,8 +1,8 @@
 """Vision provider for photo-based product identification (Fase 5,
 app/services/product_identification_service.py). The actual LLM call goes
 through the provider RESOLVER (app/services/llm) — provider (claude/gpt/ollama)
-and model are chosen per the `vision` site from .env (default: ollama /
-qwen3-vl:8b-instruct), so swapping is an env-only change. This module owns the
+and model are chosen per the `vision` site from .env (default: claude /
+claude-opus-5), so swapping is an env-only change. This module owns the
 prompt + the structured schema; the provider is pure transport.
 
 Structured output (``response_model``) guarantees a parseable, schema-valid

@@ -16,7 +16,7 @@ from app.domain.enums import IndicatorDimension
 
 
 def topsis_score(scores: dict[IndicatorDimension, float], weights: dict[IndicatorDimension, float]) -> float:
-    """scores/weights keyed by the same 5 dimensions (Cap. 5 §5.5).
+    """scores/weights keyed by the same 7 dimensions (Cap. 5 §5.5).
     Returns the TOPSIS relative-closeness coefficient in [0, 1] — MOS is
     this multiplied by 100 (Cap. 5 §5.7)."""
     d_plus_sq = 0.0

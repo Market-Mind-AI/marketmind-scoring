@@ -101,10 +101,10 @@ class ProductIdentificationService:
             if _has_terms(_market_to_dict(market))
         }
 
-        # A marca PARTICIONA a identidade (nunca é concatenada ao texto que mede
-        # semelhança, que foi o que fundia produtos da mesma marca). O que volta
-        # é a entidade da marca, com a família genérica ligada — ver
-        # catalog_service.resolve.
+        # A marca nunca entra no texto que mede semelhança (era o que fundia
+        # produtos da mesma marca) e, desde 24/09/2026, também não cria entidade:
+        # o catálogo guarda um produto por identidade e a marca é um vínculo da
+        # análise — ver catalog_service.resolve.
         resolved = await self._catalog_service.resolve(
             identification.product_name,
             source="image_identification" if image_base64 else "text_identification",

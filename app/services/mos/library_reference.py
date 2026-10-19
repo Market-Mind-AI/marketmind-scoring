@@ -19,9 +19,9 @@ from pymcdm.weights import entropy_weights as pymcdm_entropy_weights
 
 
 def classical_topsis_scores(matrix: list[list[float]]) -> list[float]:
-    """matrix: rows = alternatives (countries), columns = the 5 dimensions,
+    """matrix: rows = alternatives (countries), columns = the 7 dimensions,
     same column order for every row. Needs at least 2 rows — same
-    mathematical requirement as our own entropy_weight.py."""
+    mathematical requirement as any entropy-based weighting."""
     if len(matrix) < 2:
         raise ValueError("classical TOPSIS needs at least 2 alternatives in the comparison population")
 

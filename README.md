@@ -168,8 +168,9 @@ esas bases.
 ## Catálogo de productos
 
 Resolución de identidad del más barato al más caro
-(`app/services/catalog_service.py`, `POST /catalog/resolve`), siempre dentro de
-una partición de marca:
+(`app/services/catalog_service.py`, `POST /catalog/resolve`). La marca no crea
+entidad: el catálogo guarda un producto por identidad y la marca es un vínculo
+de la análisis, con su vocabulario de búsqueda en `brand_markets`:
 
 1. **Alias exacto normalizado** (`product_aliases`, O(1)) —
    `app/utils/text.normalize_alias`. La identidad es el par (nombre, categoría).
