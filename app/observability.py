@@ -49,6 +49,74 @@ def tracing_enabled() -> bool:
     return client() is not None
 
 
+class Observation:
+    """A handle on one open observation. Every method is safe to call when
+    tracing is off or broken: it then does nothing."""
+
+    def __init__(self, span: Any | None) -> None:
+        self._span = span
+
+    def update(self, **fields: Any) -> None:
+        if self._span is None:
+            return
+        try:
+            self._span.update(**{k: v for k, v in fields.items() if v is not None})
+        except Exception:  # noqa: BLE001 — tracing never fails the work it records
+            logger.debug("Could not update an observation", exc_info=True)
+
+    def record(self, name: str, *, as_type: str = "generation", **fields: Any) -> None:
+        """One instantaneous child observation: a fact that has its own cost
+        or usage, which the SDK only records on generation-like types. That
+        is how a collector's DataForSEO bill lands in the trace priced, under
+        the dispatch that spent it, without calling the dispatch a model."""
+        if self._span is None:
+            return
+        try:
+            child = self._span.start_observation(
+                name=name, as_type=as_type, **{k: v for k, v in fields.items() if v is not None}
+            )
+            child.end()
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not record the observation %s", name, exc_info=True)
+
+
+@contextmanager
+def observe(name: str, *, as_type: str = "tool", **fields: Any) -> Iterator[Observation]:
+    """Record one unit of non-model work in the current trace — a call to a
+    collector, say — with its latency, and ERROR with the exception if the
+    body raises. The exception passes through unchanged.
+
+    `fields` are the observation's opening attributes (input, metadata...).
+    A no-op when tracing is not configured, and a tracing failure never
+    reaches the body: a measurement that breaks the thing it measures is
+    worse than no measurement.
+    """
+    span = None
+    langfuse = client()
+    if langfuse is not None:
+        try:
+            span = langfuse.start_observation(name=name, as_type=as_type, **fields)
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not open the observation %s", name, exc_info=True)
+    handle = Observation(span)
+    try:
+        yield handle
+    except BaseException as exc:
+        handle.update(level="ERROR", status_message=f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__)
+        _end(span)
+        raise
+    _end(span)
+
+
+def _end(span: Any | None) -> None:
+    if span is None:
+        return
+    try:
+        span.end()
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not end an observation", exc_info=True)
+
+
 @contextmanager
 def adopt_trace_context(headers: Mapping[str, str]) -> Iterator[None]:
     """Make the caller's trace the current one for the length of a request.

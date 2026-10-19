@@ -65,8 +65,10 @@ def spans(monkeypatch: pytest.MonkeyPatch):
 
     def finished() -> dict[str, dict]:
         client.flush()
-        return {s.name: {"attrs": dict(s.attributes), "trace_id": format(s.context.trace_id, "032x")}
-                for s in exporter.get_finished_spans()}
+        return {
+            s.name: {"attrs": dict(s.attributes), "trace_id": format(s.context.trace_id, "032x")}
+            for s in exporter.get_finished_spans()
+        }
 
     return finished
 
@@ -167,7 +169,9 @@ async def test_a_failed_call_is_marked_and_the_error_is_unchanged(spans) -> None
     assert raised.value is boom
     gen = spans()["reference_market"]
     assert _attr(gen, "level") == "ERROR"
-    assert _attr(gen, "status_message") == "provider down"
+    # The type too, as the orchestrator's spans say it ("ScoringUnavailable:
+    # ..."), so a status reads the same wherever in the trace it appears.
+    assert _attr(gen, "status_message") == "RuntimeError: provider down"
 
 
 async def test_a_failed_calls_tokens_still_reach_its_generation(spans) -> None:
@@ -305,3 +309,138 @@ async def test_a_call_without_a_fetched_prompt_is_not_linked(spans) -> None:
     await TracedProvider(FakeProvider(), site="explanation").complete(user="x")
 
     assert _attr(spans()["explanation"], "prompt.name") is None
+
+
+# --- the levels every generation reports (2026-10-19) ------------------------
+#
+# The Tracing page's Quality view filters on level ERROR or WARNING. Only
+# exceptions were ERROR, and nothing was ever WARNING, so a degraded call — one
+# that could not be priced, or one that ran on the code text instead of the
+# prompt Langfuse holds — looked exactly like a healthy one.
+
+
+async def test_a_call_with_no_reported_usage_is_a_warning_that_says_so(spans) -> None:
+    provider = TracedProvider(FakeProvider(no_usage=True), site="enrichment")
+
+    with usage.collect():
+        await provider.complete(user="x")
+
+    gen = spans()["enrichment"]
+    assert _attr(gen, "level") == "WARNING"
+    assert _attr(gen, "status_message") == "the provider reported no token usage; the call is not priced"
+
+
+async def test_a_prompt_from_the_code_text_is_a_warning_naming_the_prompt(spans) -> None:
+    """Langfuse is configured but has not confirmed the name, so the model ran
+    on the code text and the generation cannot be linked to a prompt version."""
+    prompts._known.discard("enrichment-system")
+    system = prompts.prompt_text("enrichment-system", "the code text")
+
+    await TracedProvider(FakeProvider(), site="enrichment").complete(system=system, user="x")
+
+    gen = spans()["enrichment"]
+    assert _attr(gen, "level") == "WARNING"
+    assert _attr(gen, "status_message") == (
+        "prompt enrichment-system came from the code text (not confirmed by Langfuse yet)"
+    )
+    assert _attr(gen, "prompt.name") is None
+
+
+async def test_a_linked_prompt_leaves_the_level_alone(spans, monkeypatch: pytest.MonkeyPatch) -> None:
+    stored = TextPromptClient(
+        Prompt_Text(
+            name="enrichment-system", version=4, prompt="You localise.", labels=["production"], tags=[], config={}
+        )
+    )
+    monkeypatch.setattr(observability.client(), "get_prompt", lambda name, **_: stored)
+    prompts.warm({"enrichment-system": "the code text"})
+    system = prompts.prompt_text("enrichment-system", "the code text")
+
+    await TracedProvider(FakeProvider(tokens=(10, 5)), site="enrichment").complete(system=system, user="x")
+
+    gen = spans()["enrichment"]
+    assert _attr(gen, "level") in (None, "DEFAULT"), "unset is DEFAULT in Langfuse"
+    assert _attr(gen, "status_message") is None
+
+
+async def test_two_warnings_are_both_said(spans) -> None:
+    prompts._known.discard("enrichment-system")
+    system = prompts.prompt_text("enrichment-system", "the code text")
+
+    with usage.collect():
+        await TracedProvider(FakeProvider(no_usage=True), site="enrichment").complete(system=system, user="x")
+
+    message = _attr(spans()["enrichment"], "status_message")
+    assert "prompt enrichment-system came from the code text" in message
+    assert "reported no token usage" in message
+
+
+async def test_an_error_outranks_a_warning_and_names_the_exception_type(spans) -> None:
+    prompts._known.discard("enrichment-system")
+    system = prompts.prompt_text("enrichment-system", "the code text")
+
+    with pytest.raises(RuntimeError):
+        await TracedProvider(FakeProvider(error=RuntimeError("provider down")), site="enrichment").complete(
+            system=system, user="x"
+        )
+
+    gen = spans()["enrichment"]
+    assert _attr(gen, "level") == "ERROR"
+    assert _attr(gen, "status_message") == "RuntimeError: provider down"
+
+
+async def test_without_langfuse_a_fallback_is_not_a_warning_waiting_to_happen(monkeypatch) -> None:
+    """Unconfigured means untraced: the reason must not sit in the context
+    variable and surface on some later call once tracing is configured."""
+    monkeypatch.setattr(observability, "client", lambda: None)
+
+    prompts.prompt_text("enrichment-system", "the code text")
+
+    assert prompts.take_fallback_reason() is None
+
+
+class TtlCachedProvider(FakeProvider):
+    """Anthropic's usage, with the cache write split by TTL the way the API
+    reports it (usage.cache_creation.ephemeral_*_input_tokens)."""
+
+    async def complete(self, *, system=None, system_tail=None, user, image=None, response_model=None):
+        usage.record(
+            self.model,
+            SimpleNamespace(
+                input_tokens=200,
+                output_tokens=300,
+                cache_read_input_tokens=900,
+                cache_creation_input_tokens=100,
+                cache_creation=SimpleNamespace(ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=100),
+            ),
+        )
+        return self.reply
+
+
+async def test_a_cache_write_is_priced_by_its_ttl_when_the_provider_says_which(spans) -> None:
+    """A 1-hour write bills at 2x and a 5-minute one at 1.25x; under the
+    undifferentiated key Langfuse prices every write at the 5-minute rate."""
+    with usage.collect():
+        await TracedProvider(TtlCachedProvider(), site="explanation").complete(system="Stable.", user="Explain")
+
+    assert json.loads(_attr(spans()["explanation"], "usage_details")) == {
+        "input": 200,
+        "output": 300,
+        "input_cache_read": 900,
+        "input_cache_creation_1h": 100,
+    }
+
+
+def test_the_tally_splits_cache_writes_by_ttl() -> None:
+    with usage.collect() as spend:
+        usage.record(
+            "m",
+            SimpleNamespace(
+                input_tokens=10,
+                output_tokens=1,
+                cache_creation_input_tokens=30,
+                cache_creation=SimpleNamespace(ephemeral_5m_input_tokens=10, ephemeral_1h_input_tokens=20),
+            ),
+        )
+
+    assert (spend.cache_write_tokens, spend.cache_write_5m_tokens, spend.cache_write_1h_tokens) == (30, 10, 20)

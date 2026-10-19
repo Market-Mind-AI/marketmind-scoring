@@ -19,6 +19,7 @@ from app.api.routes.mos import router as mos_router
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.session import engine
+from app.services import demand_spend
 from app.services.analysis_resume_service import AnalysisResumeService
 from app.services.llm import usage as llm_usage
 
@@ -98,9 +99,11 @@ app = FastAPI(
     root_path=settings.root_path,
 )
 
+
 @app.middleware("http")
 async def report_llm_usage(request: Request, call_next) -> Response:
-    """Say, on every response, what that request spent on models.
+    """Say, on every response, what that request spent: tokens on models, and
+    dollars at DataForSEO for the demand data it had collected.
 
     The orchestrator decides; the model calls that decision causes happen here.
     Without this the only component able to report what a run cost is the one
@@ -110,8 +113,13 @@ async def report_llm_usage(request: Request, call_next) -> Response:
     at once, including the ones whose response shape is fixed by the method, and
     a caller that does not read them is unaffected.
     """
-    with llm_usage.collect() as spend:
+    with llm_usage.collect() as spend, demand_spend.collect() as demand:
         response = await call_next(request)
+    # What the Google Ads collector was billed by DataForSEO for the
+    # collections this request dispatched, relayed under the collector's own
+    # header names (see demand_spend). The one cost that is not a model.
+    for name, value in demand_spend.headers(demand).items():
+        response.headers[name] = value
     if spend.calls:
         response.headers["X-LLM-Input-Tokens"] = str(spend.input_tokens)
         response.headers["X-LLM-Output-Tokens"] = str(spend.output_tokens)

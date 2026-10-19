@@ -43,6 +43,12 @@ class Usage:
     # and written to it (~1.25x). Subsets, not additions.
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # The two halves of cache_write_tokens, when the provider says which TTL
+    # each write bought. Anthropic bills a 5-minute write at 1.25x and a
+    # 1-hour write at 2x, so a cost computed from the total alone is wrong by
+    # the difference. Both zero when the provider does not split them.
+    cache_write_5m_tokens: int = 0
+    cache_write_1h_tokens: int = 0
     calls: int = 0
     # Calls whose provider gave no usage figures. Kept apart so a total of zero
     # tokens over three calls reads as "not reported" and not as "free".
@@ -101,6 +107,11 @@ def record(model: str, raw_usage: Any) -> None:
     usage.output_tokens += saida or 0
     usage.cache_read_tokens += lido
     usage.cache_write_tokens += escrito
+    criacao = getattr(raw_usage, "cache_creation", None)
+    if criacao is None and isinstance(raw_usage, dict):
+        criacao = raw_usage.get("cache_creation")
+    usage.cache_write_5m_tokens += _first_int(criacao, "ephemeral_5m_input_tokens") or 0
+    usage.cache_write_1h_tokens += _first_int(criacao, "ephemeral_1h_input_tokens") or 0
 
 
 def _first_int(raw_usage: Any, *names: str) -> int | None:

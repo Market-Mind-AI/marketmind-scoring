@@ -41,6 +41,13 @@ _FETCH_TIMEOUT_SECONDS = 3
 
 _linked: ContextVar[Any | None] = ContextVar("linked_prompt", default=None)
 
+# Why the last prompt_text call answered with the code text although Langfuse
+# is configured — None when it answered with the stored prompt, or when there
+# is no Langfuse to answer from. The generation that follows reports it as a
+# WARNING: a model that ran on the code text cannot be linked to a prompt
+# version, and a trace that keeps quiet about it reads like a healthy one.
+_fallback_reason: ContextVar[str | None] = ContextVar("prompt_fallback_reason", default=None)
+
 # Names Langfuse has confirmed it holds. Only these are ever fetched inline;
 # everything else uses the code text with no network on the request path.
 _known: set[str] = set()
@@ -59,10 +66,15 @@ def prompt_text(name: str, default: str, **variables: str) -> str:
     """The instruction called `name`, with its variables filled in."""
     compiled_default = TemplateParser.compile_template(default, variables)
     client = observability.client()
-    if client is None or name not in _known:
-        # Unconfigured, or a name Langfuse has never confirmed: no network on
-        # the request path.
+    _fallback_reason.set(None)
+    if client is None:
+        # Unconfigured: no network on the request path, and nothing to warn.
         _linked.set(None)
+        return compiled_default
+    if name not in _known:
+        # A name Langfuse has never confirmed: no network on the request path.
+        _linked.set(None)
+        _fallback_reason.set(f"prompt {name} came from the code text (not confirmed by Langfuse yet)")
         return compiled_default
     try:
         stored = client.get_prompt(
@@ -77,6 +89,7 @@ def prompt_text(name: str, default: str, **variables: str) -> str:
         logger.debug("Could not fetch prompt %s; using the text in code", name, exc_info=True)
         _known.discard(name)
         _linked.set(None)
+        _fallback_reason.set(f"prompt {name} came from the code text (the fetch failed)")
         return compiled_default
     # A fallback is the code text wearing a prompt's clothes: Langfuse cannot
     # link a generation to it, and it must not inherit a stale link either.
@@ -85,11 +98,15 @@ def prompt_text(name: str, default: str, **variables: str) -> str:
     if stored.is_fallback:
         _known.discard(name)
         _linked.set(None)
+        _fallback_reason.set(f"prompt {name} came from the code text (Langfuse answered with the fallback)")
         return compiled_default
     expected = TemplateParser.find_variable_names(default)
     if set(stored.variables) != set(expected):
         _warn_about_drift(name, stored, expected)
         _linked.set(None)
+        _fallback_reason.set(
+            f"prompt {name} came from the code text (v{stored.version} in Langfuse has different variables)"
+        )
         return compiled_default
     _linked.set(stored)
     return stored.compile(**variables)
@@ -118,6 +135,14 @@ def take_linked_prompt() -> Any | None:
     stored = _linked.get()
     _linked.set(None)
     return stored
+
+
+def take_fallback_reason() -> str | None:
+    """Why the next generation runs on the code text, handed over once; None
+    when it runs on the stored prompt or when Langfuse is not configured."""
+    reason = _fallback_reason.get()
+    _fallback_reason.set(None)
+    return reason
 
 
 def warm(registry: Mapping[str, str]) -> int:

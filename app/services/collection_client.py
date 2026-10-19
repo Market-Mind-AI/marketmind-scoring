@@ -23,10 +23,12 @@ from typing import Any
 
 import httpx
 
+from app import observability
 from app.core.config import settings
 from app.core.exceptions import MarketMindCoreError
 from app.db.models.country import Country
 from app.domain.enums import DataSource, IngestionRunStatus
+from app.services import demand_spend
 
 _BASE_URLS: dict[DataSource, str] = {
     DataSource.PYTRENDS: settings.pytrends_api_base_url,
@@ -205,28 +207,77 @@ def _why(exc: BaseException) -> str:
     return str(exc) or type(exc).__name__
 
 
+def _charge(observation: observability.Observation, headers: httpx.Headers) -> None:
+    """What the collector was billed for this dispatch: into the request's
+    tally, and onto the dispatch's observation as its cost."""
+    reported = demand_spend.read(headers)
+    if reported is None:
+        return
+    demand_spend.add(reported)
+    detail: dict[str, Any] = {"dataforseo_tasks": reported.calls}
+    if reported.calls_without_cost:
+        detail["dataforseo_tasks_without_cost"] = reported.calls_without_cost
+    observation.update(metadata=detail)
+    # The bill itself, priced as DataForSEO states it (cost_details is taken
+    # as given, no model table involved), as a child the SDK will carry a
+    # cost on. Named after the vendor, not the source: it is the invoice line.
+    observation.record(
+        "dataforseo",
+        model="dataforseo/google-ads",
+        usage_details={"tasks": reported.calls},
+        cost_details={"total": reported.usd},
+        metadata={"provider": "DataForSEO"},
+    )
+    if reported.calls_without_cost:
+        observation.update(
+            level="WARNING",
+            status_message=f"DataForSEO reported no cost for {reported.calls_without_cost} of {reported.calls} tasks",
+        )
+
+
 class CollectionClient:
     """One instance per call site; a fresh httpx.AsyncClient per request
     keeps this stateless. Call volume here is bounded by job_task creation
     (gap-driven), not a hot path, so pooling is not worth the complexity."""
 
     async def dispatch(self, req: CollectionRequest) -> uuid.UUID:
+        """Ask the source's service to collect one gap. Returns its ingestion run id.
+
+        One observation in the analysis's trace per dispatch, named after the
+        source, with its latency and — for the Google Ads collector — what
+        DataForSEO billed for it, read from the response headers the collector
+        sets (its app/core/spend.py) and relayed on this request's own tally
+        (demand_spend). The only cost of an analysis that is not a model, put
+        in the trace next to the call that spent it.
+        """
         path, payload = _build_request(req)
         base_url = _BASE_URLS[req.source]
-        try:
-            async with httpx.AsyncClient(
-                base_url=base_url, timeout=settings.collection_dispatch_timeout_seconds
-            ) as client:
-                response = await client.post(path, json=payload)
-                response.raise_for_status()
-                return _extract_ingestion_run_id(req.source, response.json())
-        except httpx.HTTPError as exc:
-            # Some httpx exceptions (e.g. ReadTimeout) stringify to an empty
-            # message — always include the exception type so a failure is
-            # still diagnosable from job_tasks.error_message alone.
-            raise CollectionDispatchError(
-                f"Failed to dispatch {req.source.value} collection: {type(exc).__name__}: {exc}"
-            ) from exc
+        country = req.country.iso3 if req.country is not None else None
+        with observability.observe(
+            f"collect {req.source.value}",
+            input={"indicator_code": req.indicator_code, "country": country, "request": payload},
+            metadata={"source": req.source.value, "indicator_code": req.indicator_code, "country": country},
+        ) as observation:
+            try:
+                async with httpx.AsyncClient(
+                    base_url=base_url, timeout=settings.collection_dispatch_timeout_seconds
+                ) as client:
+                    response = await client.post(path, json=payload)
+                    # Before the status check: a task DataForSEO failed is
+                    # still billed, and the collector says so on its error
+                    # responses too.
+                    _charge(observation, response.headers)
+                    response.raise_for_status()
+                    run_id = _extract_ingestion_run_id(req.source, response.json())
+            except httpx.HTTPError as exc:
+                # Some httpx exceptions (e.g. ReadTimeout) stringify to an empty
+                # message — always include the exception type so a failure is
+                # still diagnosable from job_tasks.error_message alone.
+                raise CollectionDispatchError(
+                    f"Failed to dispatch {req.source.value} collection: {type(exc).__name__}: {exc}"
+                ) from exc
+            observation.update(output={"ingestion_run_id": str(run_id)})
+            return run_id
 
     async def freshness(
         self, source: DataSource, *, countries: list[str], indicators: list[str], stale_after_days: int
