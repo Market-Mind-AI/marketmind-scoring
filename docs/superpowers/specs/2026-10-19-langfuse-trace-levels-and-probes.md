@@ -88,6 +88,29 @@ Resultado: o custo total de uma análise no Langfuse passa a incluir a demanda,
 cada coleta aparece com o que custou, e as outras três fontes (World Bank,
 OECD, UN Data) continuam sem custo e sem header.
 
+## O custo total, em dólares, no log (terceira rodada, mesmo dia)
+
+Até aqui o único lugar com o total em dólares era o Langfuse, porque só ele
+tinha a tabela de preços. Em vez de copiar a tabela para o código (desatualiza
+em silêncio a cada modelo novo), cada serviço **lê a tabela do próprio
+Langfuse** ao subir (`api.models.list`, paginada; definições do projeto vencem
+as gerenciadas, como o Langfuse faz) e precifica a chamada no momento em que
+ela acontece. `app/pricing.py` nos dois serviços; o scoring soma no
+`llm_usage` e manda `X-LLM-Cost-USD`, `X-LLM-Cost-By-Model` e
+`X-LLM-Calls-Without-Cost`; o orchestrator precifica o juiz e soma tudo.
+
+No fim de cada execução, uma linha e um score:
+
+```
+COST analysis=<id> total_usd=1.6355 models_usd=0.5555 (claude-opus-5 0.5091, gpt-5.1 0.0464) dataforseo_usd=1.0800 (12 tasks)
+```
+
+Score `analysis_cost_usd`, ao lado de `token_consumption` e `dataforseo_cost_usd`.
+Chamada que não dá para precificar (tabela ainda não lida, modelo
+desconhecido, provider sem usage) é **contada, não zerada**: a linha ganha
+`unpriced_calls=N (the total is a floor)`. Langfuse fora do ar no startup: o
+serviço sobe sem preços e tenta de novo a cada 60 s.
+
 ## Entrega
 
 - Scoring: `app/services/llm/traced.py`, `app/prompts.py` (`take_fallback_reason`),
@@ -100,6 +123,9 @@ OECD, UN Data) continuam sem custo e sem header.
 - Scoring (custo): `app/services/demand_spend.py`, `observability.observe`/`Observation.record`,
   `collection_client.dispatch`; testes em `tests/test_demand_spend.py`.
 - Orchestrator (custo): `spend.Spend.dataforseo_*`, `metrics.demand_cost`.
+- Custo total: `app/pricing.py` (scoring e orchestrator), `usage.charge`, headers
+  `X-LLM-Cost-*`, `spend.charge_model`, `metrics.analysis_cost`; testes em
+  `tests/test_pricing.py` dos dois lados.
 - Infra: chaves do Langfuse no `scoring-external-secret.yaml` (mesmas entradas
   do vault), `LANGFUSE_HOST` e `LANGFUSE_TRACING_ENVIRONMENT=azure-dev` nos dois
   `values.yaml`. Entra em vigor no dev depois de commit + sync do ArgoCD.

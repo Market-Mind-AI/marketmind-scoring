@@ -54,6 +54,13 @@ class Usage:
     # tokens over three calls reads as "not reported" and not as "free".
     calls_without_usage: int = 0
     models: list[str] = field(default_factory=list)
+    # What the calls cost, in USD by the price table Langfuse holds
+    # (app/pricing.py), and how many could not be priced — an unknown model,
+    # a provider that reported no usage. Kept apart for the same reason as
+    # calls_without_usage: unknown is not free.
+    cost_usd: float = 0.0
+    calls_without_cost: int = 0
+    cost_by_model: dict[str, float] = field(default_factory=dict)
 
     @property
     def total_tokens(self) -> int:
@@ -112,6 +119,19 @@ def record(model: str, raw_usage: Any) -> None:
         criacao = raw_usage.get("cache_creation")
     usage.cache_write_5m_tokens += _first_int(criacao, "ephemeral_5m_input_tokens") or 0
     usage.cache_write_1h_tokens += _first_int(criacao, "ephemeral_1h_input_tokens") or 0
+
+
+def charge(model: str, usd: float | None) -> None:
+    """Add what one completed call cost to the current tally, if one is open.
+    ``None`` is a call that could not be priced, counted as such."""
+    usage = _current.get()
+    if usage is None:
+        return
+    if usd is None:
+        usage.calls_without_cost += 1
+        return
+    usage.cost_usd += usd
+    usage.cost_by_model[model] = usage.cost_by_model.get(model, 0.0) + usd
 
 
 def _first_int(raw_usage: Any, *names: str) -> int | None:

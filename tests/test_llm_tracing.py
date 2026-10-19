@@ -33,8 +33,9 @@ class FakeProvider(LLMProvider):
         error: Exception | None = None,
         tokens: tuple[int, int] = (0, 0),
         no_usage: bool = False,
+        model: str = "fake-model",
     ):
-        super().__init__("fake-model")
+        super().__init__(model)
         self.reply, self.error, self.tokens, self.no_usage = reply, error, tokens, no_usage
         self.calls: list[dict] = []
 

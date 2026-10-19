@@ -22,13 +22,15 @@ Tracing never fails a call. Every Langfuse operation is guarded; the provider's
 answer, or its exception, passes through unchanged.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel
 
-from app import observability, prompts
+from app import observability, pricing, prompts
 from app.services.llm import usage
 from app.services.llm.base import ImageInput, LLMProvider, joined_system
 
@@ -78,14 +80,17 @@ class TracedProvider(LLMProvider):
                 system=system, user=user, image=image, response_model=response_model, **tail
             )
         except BaseException as exc:
+            spent = _spent_since(before)
+            _charge(self.model, spent, before)
             _finish(
                 opened,
                 level="ERROR",
                 status_message=f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__,
-                usage_details=_spent_since(before),
+                usage_details=spent,
             )
             raise
         spent = _spent_since(before)
+        _charge(self.model, spent, before)
         if spent is None and _reported_no_usage(before):
             _warn(opened, NO_USAGE_WARNING)
         _finish(opened, output=result, usage_details=spent)
@@ -117,6 +122,16 @@ class TracedProvider(LLMProvider):
         except Exception:  # noqa: BLE001 — tracing never fails a call
             logger.debug("Could not open the %s generation", self.site, exc_info=True)
             return None
+
+
+def _charge(model: str, spent: dict[str, int] | None, before: _Tally | None) -> None:
+    """Price the call that just ran into the request's tally. Only when a
+    tally is open and the call was counted in it: outside a request there is
+    nothing to add to, and a call the provider never reported stays unpriced
+    (counted as such by `charge`), never free."""
+    if before is None or usage.current() is None:
+        return
+    usage.charge(model, pricing.price(model, spent))
 
 
 def _warn(opened: _Open | None, message: str) -> None:

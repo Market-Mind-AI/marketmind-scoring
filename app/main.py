@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from app import observability, prompts
+from app import observability, pricing, prompts
 from app.api.routes.admin import router as admin_router
 from app.api.routes.analyze import router as analyze_router
 from app.api.routes.catalog import router as catalog_router
@@ -35,6 +35,12 @@ async def _manter_prompts_aquecidos(registry: Mapping[str, str]) -> None:
     """
     while True:
         await asyncio.to_thread(prompts.warm, registry)
+        if not pricing.loaded():
+            # The model price table, read once from Langfuse (app/pricing.py)
+            # and retried here until it answers, so a Langfuse that was down
+            # at startup does not leave every model call unpriced for the
+            # life of the process.
+            await asyncio.to_thread(pricing.load)
         await asyncio.sleep(60)
 
 
@@ -133,6 +139,16 @@ async def report_llm_usage(request: Request, call_next) -> Response:
             # So a total of zero over three calls reads as "not reported by the
             # provider" rather than as "free".
             response.headers["X-LLM-Calls-Without-Usage"] = str(spend.calls_without_usage)
+        # In dollars, by the price table Langfuse holds (app/pricing.py), so
+        # the orchestrator can say what the whole run cost without waiting
+        # for Langfuse to ingest the trace. By model too, for the breakdown.
+        response.headers["X-LLM-Cost-USD"] = f"{spend.cost_usd:.6f}"
+        if spend.cost_by_model:
+            response.headers["X-LLM-Cost-By-Model"] = ",".join(
+                f"{model}={usd:.6f}" for model, usd in sorted(spend.cost_by_model.items())
+            )
+        if spend.calls_without_cost:
+            response.headers["X-LLM-Calls-Without-Cost"] = str(spend.calls_without_cost)
     return response
 
 
