@@ -42,7 +42,50 @@ env:
   VALUES_FILE: env/marketmind-dev/scoring-values.yaml
 
 jobs:
+  test:
+    # The suite needs a real Postgres with pgvector and pg_trgm (the migrations
+    # create both extensions) whose name contains "test": conftest.py refuses
+    # any other database because the suite truncates tables after each test.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: marketmind
+          POSTGRES_PASSWORD: marketmind
+          POSTGRES_DB: marketmind_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marketmind -d marketmind_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_HOST: localhost
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: marketmind_test
+      DATABASE_USER: marketmind
+      DATABASE_PASSWORD: marketmind
+      DATABASE_SSL_MODE: disable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install poetry==1.8.4
+          poetry install --no-interaction --no-root
+      - name: Migrate the test database
+        run: poetry run alembic upgrade head
+      - name: Run the test suite
+        run: poetry run pytest -q
+
   build-and-push:
+    needs: test
     # Native arm64, nothing emulated. Every node in the BeProfit AKS clusters is
     # Ampere arm64 (Standard_D4pls_v5 / D2ps_v5), so an amd64 image never
     # schedules — it fails as an unsatisfiable node constraint at rollout, long
