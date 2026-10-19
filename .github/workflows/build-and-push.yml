@@ -68,6 +68,11 @@ jobs:
       DATABASE_USER: marketmind
       DATABASE_PASSWORD: marketmind
       DATABASE_SSL_MODE: disable
+      # Placeholder keys: the suite fakes every provider below the resolver,
+      # which still refuses to build a provider without a key.
+      ANTHROPIC_API_KEY: test-key
+      OPENAI_API_KEY: test-key
+      INTERNAL_API_TOKEN: test-token
     steps:
       - name: Checkout
         uses: actions/checkout@v4
