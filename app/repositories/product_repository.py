@@ -77,11 +77,6 @@ class ProductRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_by_alias_exact(self, alias_normalized: str) -> ProductAlias | None:
-        stmt = select(ProductAlias).where(ProductAlias.alias_normalized == alias_normalized)
-        result = await self._session.execute(stmt)
-        return result.scalar_one_or_none()
-
     async def get_entity_by_alias_exact(
         self, alias_normalized: str, category: str | None = None
     ) -> tuple[ProductAlias, ProductCatalog] | None:
@@ -121,9 +116,7 @@ class ProductRepository:
             return linhas[0][0], linhas[0][1]
         return None
 
-    async def markets_for(
-        self, entity: ProductCatalog, brand_key: uuid.UUID | None
-    ) -> dict[str, dict[str, Any]]:
+    async def markets_for(self, entity: ProductCatalog, brand_key: uuid.UUID | None) -> dict[str, dict[str, Any]]:
         """O vocabulário de busca deste produto, para ESTA marca (ou sem marca).
 
         O único lugar que decide de onde os termos vêm. Sem marca, são os do
@@ -140,9 +133,7 @@ class ProductRepository:
         if brand_key is None:
             return dict(entity.localized_markets or {})
         linhas = await self._session.execute(
-            select(BrandMarket).where(
-                BrandMarket.entity_key == entity.entity_key, BrandMarket.brand_key == brand_key
-            )
+            select(BrandMarket).where(BrandMarket.entity_key == entity.entity_key, BrandMarket.brand_key == brand_key)
         )
         return {linha.country: dict(linha.market) for linha in linhas.scalars().all()}
 
@@ -194,9 +185,7 @@ class ProductRepository:
         linha = await self._session.get(BrandReferenceCandidate, (entity.entity_key, brand_key))
         if linha is None:
             self._session.add(
-                BrandReferenceCandidate(
-                    entity_key=entity.entity_key, brand_key=brand_key, candidates=candidates
-                )
+                BrandReferenceCandidate(entity_key=entity.entity_key, brand_key=brand_key, candidates=candidates)
             )
         else:
             linha.candidates = candidates
@@ -552,8 +541,15 @@ class ProductRepository:
         ]
         # `''` literal pelo mesmo motivo de set_alias: parâmetro só casa com o
         # índice enquanto o plano é customizado.
-        stmt = pg_insert(ProductAlias).values(linhas).on_conflict_do_nothing(
-            index_elements=[ProductAlias.alias_normalized, func.coalesce(ProductAlias.category, literal_column("''"))]
+        stmt = (
+            pg_insert(ProductAlias)
+            .values(linhas)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    ProductAlias.alias_normalized,
+                    func.coalesce(ProductAlias.category, literal_column("''")),
+                ]
+            )
         )
         result = cast(CursorResult[Any], await self._session.execute(stmt))
         return int(result.rowcount or 0)
@@ -888,9 +884,7 @@ class ProductRepository:
                 ORDER BY entity_key, distancia
                 """
             ).bindparams(bindparam("chaves", type_=ARRAY(PG_UUID(as_uuid=True))))
-            linhas = await self._session.execute(
-                stmt, {"q": query_vector, "modelo": model, "chaves": chaves, "k": k}
-            )
+            linhas = await self._session.execute(stmt, {"q": query_vector, "modelo": model, "chaves": chaves, "k": k})
             por_entidade: dict[uuid.UUID, list] = {}
             for chave, termo, distancia in linhas:
                 por_entidade.setdefault(chave, []).append((termo, float(distancia)))
@@ -996,4 +990,3 @@ class ProductRepository:
         entity.champion_period_key = period_key
         entity.champion_computed_at = utc_now()
         await self._session.flush()
-

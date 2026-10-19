@@ -1,5 +1,5 @@
 """Cap. 5 §5.5 correction — 2-stage aggregation: the ~16 atomic indicators
-(Cap. 4) are grouped into 5 dimensions before Entropy Weight runs, so Demand
+(Cap. 4) are grouped into dimensions before the weights apply, so Demand
 (5 indicators) isn't diluted against the macro block (11 indicators) just
 for having fewer atomic signals. See memory marketmind_mos_engine."""
 

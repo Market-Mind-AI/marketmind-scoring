@@ -71,9 +71,9 @@ class CollectionTimeoutError(MarketMindCoreError):
 class CollectionRequest:
     source: DataSource
     indicator_code: str
-    # None only for pytrends indicator_codes that don't take a country at all
-    # (currently "suggestions") — see _build_pytrends_request. WorldBank,
-    # OECD, and UNData always require one.
+    # WorldBank, OECD and UNData need it to resolve the source's own country
+    # code. The demand collector (pytrends) does not read it: its location and
+    # language travel in collection_params — see _build_pytrends_request.
     country: Country | None
     collection_params: dict[str, Any]
 
@@ -105,9 +105,7 @@ def _require_country_code(source: DataSource, country: Country | None) -> str:
     return resolve_source_country_code(source, country)
 
 
-def _build_pytrends_request(
-    indicator_code: str, country: Country | None, params: dict[str, Any]
-) -> tuple[str, dict[str, Any]]:
+def _build_pytrends_request(indicator_code: str, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     path = _PYTRENDS_ENDPOINTS.get(indicator_code)
     if path is None:
         raise CollectionDispatchError(f"Unknown pytrends indicator_code '{indicator_code}'")
@@ -132,7 +130,7 @@ def _build_request(req: CollectionRequest) -> tuple[str, dict[str, Any]]:
     params = req.collection_params
 
     if req.source == DataSource.PYTRENDS:
-        return _build_pytrends_request(req.indicator_code, req.country, params)
+        return _build_pytrends_request(req.indicator_code, params)
 
     if req.source == DataSource.WORLDBANK:
         return "/indicators/collect", {

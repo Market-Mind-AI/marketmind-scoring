@@ -1,8 +1,7 @@
 """Cap. 4 §4.2 — raw value computation for the Demand indicators, now sourced
 from Google Ads keyword data (ABSOLUTE monthly search volume via DataForSEO),
-NOT Google Trends. Reads read-only from the collector service's own database
-over its read API — the stored search-volume and
-`keyword_related` tables.
+NOT Google Trends. Reads the collector service's stored search-volume and
+`keyword_related` data over its HTTP read API, never its database.
 
 Why the switch (2026-07-15): Google Trends is structurally RELATIVE (values
 are normalized per query / per region and only comparable across countries for
@@ -170,19 +169,6 @@ def _monthly_volumes(monthly_searches: Any) -> list[tuple[int, int, float]]:
         vol = item.get("search_volume")
         out.append((int(year), int(month), 0.0 if vol is None else float(vol)))
     return out
-
-
-async def _fetch_volume_rows(
-    search_terms: list[str], location: str
-) -> list[tuple[float, list[tuple[int, int, float]]]]:
-    """Freshest row per approved term for this country → the distinct terms to
-    SUM, after dropping ~zero-volume terms and collapsing Google's duplicate
-    reports of the same query (see _dedup_volume_rows). Growth/Stability use this
-    (approved terms only); the demand VOLUME additionally folds in expansion
-    (see compute_trend_score). Returns (volume, monthly_series)."""
-    product_tokens = frozenset().union(*(_tokens(t) for t in search_terms)) if search_terms else frozenset()
-    approved = await _fetch_approved_raw(search_terms, location)
-    return await asyncio.to_thread(_dedup_volume_rows, approved, product_tokens)
 
 
 async def _fetch_approved_raw(

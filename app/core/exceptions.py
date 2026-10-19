@@ -3,20 +3,10 @@ class MarketMindCoreError(Exception):
 
 
 class ExternalSourceUnavailableError(MarketMindCoreError):
-    """Raised when a read-only connection to one of the 4 collection services' databases fails."""
+    """Raised when one of the 4 collection services' HTTP APIs is unreachable or answers with an error."""
 
     pass
 
 
 class EntityNotFoundError(MarketMindCoreError):
-    pass
-
-
-class JobNotFoundError(MarketMindCoreError):
-    pass
-
-
-class InsufficientDataError(MarketMindCoreError):
-    """Raised when fewer than the minimum required indicators/countries are available to compute a MOS."""
-
     pass

@@ -41,12 +41,6 @@ class ExplanationCatalog:
         entry = self.metrics.get(code)
         return entry.meaning if entry else None
 
-    def band_phrase(self, code: str, band: str | None) -> str | None:
-        entry = self.metrics.get(code)
-        if entry is None or band is None:
-            return None
-        return entry.band_phrases.get(band)
-
     def render(self, *, code: str, score: float | None, band: str | None, detail: str | None = None) -> str | None:
         """The stored per-score sentence: "<label> - <band> (<score>/100): <band
         phrase>. <detail>". Returns None if the metric is unknown (nothing to

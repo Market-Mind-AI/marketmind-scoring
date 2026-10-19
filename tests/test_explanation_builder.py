@@ -68,5 +68,3 @@ def test_helpers_read_the_catalog() -> None:
     cat = _catalog()
     assert cat.label("trend_score") == "Demand Volume"
     assert cat.meaning("mos") == "overall verdict"
-    assert cat.band_phrase("mos", "Good Opportunity") == "A solid market worth pursuing"
-    assert cat.band_phrase("trend_score", None) is None

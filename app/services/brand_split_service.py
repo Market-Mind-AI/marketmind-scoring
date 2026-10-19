@@ -43,7 +43,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import EntityNotFoundError, MarketMindCoreError
 from app.core.logging import logger
-from app.db.models.product_alias import ProductAlias
 from app.repositories.product_repository import ProductRepository
 from app.utils.text import normalize_alias
 
@@ -130,8 +129,3 @@ class BrandSplitService:
             f"{len(report.mercados_movidos)} mercados foram para a marca {report.brand!r}"
         )
         return report
-
-    async def aliases_de(self, entity_key: uuid.UUID) -> list[ProductAlias]:
-        """Só para inspeção em teste — a leitura normal é get_by_entity_key."""
-        entity = await self._repo.get_by_entity_key(entity_key)
-        return list(entity.aliases) if entity is not None else []

@@ -38,10 +38,7 @@ class IngestionRunStatus(StrEnum):
 
 class PeriodType(StrEnum):
     MONTH = "month"
-    QUARTER = "quarter"
-    SEMESTER = "semester"
     YEAR = "year"
-    CUSTOM = "custom"
 
 
 class AvailabilityStatus(StrEnum):
@@ -49,7 +46,6 @@ class AvailabilityStatus(StrEnum):
 
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
-    FALLBACK = "fallback"
     CONDITIONAL = "conditional"
 
 

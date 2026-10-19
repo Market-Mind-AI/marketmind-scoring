@@ -12,7 +12,3 @@ class HealthResponse(BaseModel):
     external_sources: list[ExternalSourceStatus]
     app_name: str
     environment: str
-
-
-class ErrorResponse(BaseModel):
-    detail: str

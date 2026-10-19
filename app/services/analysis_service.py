@@ -23,9 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import logger
-from app.db.models.indicator_value import IndicatorValue
 from app.db.models.mos_result import MosResult
-from app.domain.enums import AvailabilityStatus, DataSource, IndicatorCode
+from app.domain.enums import DataSource
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
@@ -116,34 +115,6 @@ def _champion_candidates(candidatos: list[dict[str, Any]], requested: list[str])
         if len(out) == _MAX_REFERENCE_CANDIDATES:
             break
     return out
-
-
-# Raw PyTrends collection -> the computed demand indicators it feeds (Cap. 4
-# §4.2). Coverage is tracked per raw collection, but "covered" must mean "the
-# indicator is usable", NOT merely "a collection run finished": a run can
-# succeed yet leave its indicator unavailable (e.g. related keywords returned
-# with no search volume). So a demand gap is force-recollected whenever ANY
-# indicator it feeds is still missing/unavailable — the analysis always retries
-# exactly the countries/signals that lack data instead of skipping them as
-# already covered (user 2026-07-22: "o grande problema foi não tentar coletar
-# os outros países").
-_DEMAND_COLLECTION_OUTPUTS: dict[str, tuple[IndicatorCode, ...]] = {
-    "search_volume": (
-        IndicatorCode.TREND_SCORE,
-        IndicatorCode.GROWTH_SCORE,
-        IndicatorCode.DEMAND_STABILITY_SCORE,
-    ),
-    "keywords_for_keywords": (IndicatorCode.SEARCH_INTENT_SCORE,),
-}
-
-
-def _is_available(values: dict[str, IndicatorValue], code: IndicatorCode) -> bool:
-    iv = values.get(code.value)
-    return (
-        iv is not None
-        and iv.normalized_score is not None
-        and iv.availability_status != AvailabilityStatus.UNAVAILABLE.value
-    )
 
 
 def _idioma_do_mercado(market: dict[str, Any] | None, country) -> str:  # noqa: ANN001
@@ -535,15 +506,6 @@ class AnalysisService:
             return []
         _job_id, resultados = await self._coverage_service.check_or_collect(missing, requested_by="analysis_service")
         return resultados
-
-    @staticmethod
-    def _demand_gap_needs_recollect(current: dict[str, IndicatorValue], collection_code: str) -> bool:
-        """True when a demand collection must (re-)run: any computed indicator it
-        feeds is still missing/unavailable for this country/period. Keeps the
-        analysis filling exactly the gaps a previous run left empty, without
-        re-collecting what is already usable."""
-        outputs = _DEMAND_COLLECTION_OUTPUTS.get(collection_code, ())
-        return any(not _is_available(current, code) for code in outputs)
 
     async def ensure_candidates_coverage(
         self,

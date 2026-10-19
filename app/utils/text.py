@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 
 def normalize_alias(text: str) -> str:
@@ -61,25 +61,3 @@ def as_term_list(value: object) -> list[str]:
     if isinstance(value, Sequence):
         return [t for t in value if isinstance(t, str) and t.strip()]
     return []
-
-
-def merge_localized_terms(
-    existing: Mapping[str, object] | None, new: Mapping[str, object] | None
-) -> dict[str, list[str]]:
-    """Union two `{lang: [term variations]}` maps into an accumulating acervo,
-    deduping per language by `normalize_alias` (case/accent-insensitive) while
-    preserving the first-seen surface form and order (existing terms first,
-    then any genuinely new ones). Tolerates the legacy single-string shape.
-    Pure — callers persist the result. See marketmind_mos_engine (keyword
-    localization by data arbitration)."""
-    merged: dict[str, list[str]] = {}
-    for source in (existing or {}), (new or {}):
-        for language, raw in source.items():
-            bucket = merged.setdefault(language, [])
-            seen = {normalize_alias(t) for t in bucket}
-            for term in as_term_list(raw):
-                key = normalize_alias(term)
-                if key and key not in seen:
-                    seen.add(key)
-                    bucket.append(term)
-    return {language: terms for language, terms in merged.items() if terms}

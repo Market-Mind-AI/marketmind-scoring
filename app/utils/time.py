@@ -9,8 +9,3 @@ def utc_now() -> datetime:
     "now" — not just writes it — must use this, not a naive helper, to avoid
     ``TypeError: can't compare offset-naive and offset-aware datetimes``."""
     return datetime.now(UTC)
-
-
-def elapsed_ms(start: datetime) -> int:
-    delta = utc_now() - start
-    return int(delta.total_seconds() * 1000)

@@ -12,12 +12,6 @@ from app.repositories.job_repository import JobRepository
 from app.schemas.coverage import CoverageGap, GapStatus, JobTaskResult
 from app.services.collection_client import CollectionClient, CollectionRequest
 
-# PyTrends indicators collected worldwide (no country), dispatched under the
-# sentinel ISO3 "WLD" — see analysis_service._ensure_worldwide_demand_coverage
-# and collection_client._build_pytrends_request.
-_COUNTRYLESS_INDICATORS = frozenset({"interest_by_country"})
-WORLD_SENTINEL_ISO3 = "WLD"
-
 
 class CoverageService:
     """Fase 1: coverage detection + on-demand collection dispatch. Does not
@@ -214,19 +208,12 @@ class CoverageService:
         return await self._dispatch_and_poll(claimed_task, gap)
 
     async def _dispatch_and_poll(self, task: JobTask, gap: CoverageGap) -> JobTaskResult:
-        # Country-less indicators (the worldwide PyTrends interest-by-country
-        # breakdown) use the sentinel ISO3 "WLD" and carry no real country —
-        # the collection request is built without a country code, so skip the
-        # canonical-countries lookup instead of failing on "WLD not found".
-        if gap.indicator_code in _COUNTRYLESS_INDICATORS:
-            country = None
-        else:
-            country = await self._country_repo.get_by_iso3(gap.country)
-            if country is None:
-                await self._job_repo.mark_failed(
-                    task, error_message=f"Unknown country {gap.country} (not in canonical countries table)"
-                )
-                return job_task_to_result(task)
+        country = await self._country_repo.get_by_iso3(gap.country)
+        if country is None:
+            await self._job_repo.mark_failed(
+                task, error_message=f"Unknown country {gap.country} (not in canonical countries table)"
+            )
+            return job_task_to_result(task)
 
         try:
             ingestion_run_id = await self._collection_client.dispatch(

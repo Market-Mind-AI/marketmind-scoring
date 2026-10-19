@@ -10,10 +10,11 @@ from app.db.base import Base
 
 
 class IndicatorWeight(Base):
-    """Pesos do Entropy Weight, calculados periodicamente contra a população de
-    referência fixa — nunca por consulta (correção ao Cap. 5 §5.8, ver
-    marketmind_mos_engine). indicator_code guarda o valor da dimensão (Cap. 5
-    §5.5 — agregação em 2 estágios: Entropy Weight roda sobre as 5 dimensões,
+    """Pesos das dimensões, versionados por período — Rank Reciprocal sobre a
+    ordem de prioridade explícita (app/services/mos/rank_reciprocal.py), nunca
+    recalculados a partir de dados nem por consulta (correção ao Cap. 5 §5.8,
+    ver marketmind_mos_engine). indicator_code guarda o valor da dimensão (Cap. 5
+    §5.5 — agregação em 2 estágios: o peso incide sobre as dimensões,
     não sobre indicadores crus), redundante com a coluna dimension por
     conveniência de query. 100% país/período, sem exceção por produto
     (correção de 2026-07-03 — ver marketmind_mos_engine): mesmo o peso de

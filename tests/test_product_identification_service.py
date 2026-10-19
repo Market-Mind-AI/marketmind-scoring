@@ -1,5 +1,4 @@
 import uuid
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,8 +7,6 @@ from pydantic import ValidationError
 from app.schemas.catalog import CatalogResolveResponse, IdentifyImageRequest
 from app.services.product_identification_service import ProductIdentificationService
 from app.services.vision_client import MarketTerms, ProductIdentification
-
-_SUPPORTED = ["USA", "BRA", "DEU", "JPN"]
 
 
 def _identification(**overrides: object) -> ProductIdentification:
@@ -37,29 +34,17 @@ def _identification(**overrides: object) -> ProductIdentification:
     return ProductIdentification(**base)  # type: ignore[arg-type]
 
 
-def _clients(*, fill: list[MarketTerms] | None = None, candidates: list[MarketTerms] | None = None):
-    enrichment = AsyncMock()
-    enrichment.localized_markets = AsyncMock(return_value=fill or [])
-    reference = AsyncMock()
-    reference.candidates = AsyncMock(return_value=candidates or [])
-    return enrichment, reference
-
-
 def _patch_collaborators(entity_key: uuid.UUID | None = None):
-    """Patches CatalogService + CountryRepository the service constructs."""
+    """Patches the CatalogService the service constructs."""
     entity_key = entity_key or uuid.uuid4()
     catalog = patch("app.services.product_identification_service.CatalogService")
-    country = patch("app.services.product_identification_service.CountryRepository")
     catalog_cls = catalog.start()
-    country_cls = country.start()
     catalog_cls.return_value.resolve = AsyncMock(
         return_value=CatalogResolveResponse(
             entity_key=entity_key, canonical_title="Philips air fryer", method="created"
         )
     )
-    country_cls.return_value.list_all = AsyncMock(return_value=[SimpleNamespace(iso3=c) for c in _SUPPORTED])
-    country_cls.return_value.get_by_iso3 = AsyncMock(return_value=SimpleNamespace(search_language="pt"))
-    return catalog_cls, country_cls, [catalog, country]
+    return catalog_cls, [catalog]
 
 
 async def test_identify_resolves_by_generic_name_and_passes_brand_apart(mock_session: AsyncMock) -> None:
@@ -73,12 +58,9 @@ async def test_identify_resolves_by_generic_name_and_passes_brand_apart(mock_ses
     entity_key = uuid.uuid4()
     vision = AsyncMock()
     vision.identify_product.return_value = _identification()
-    enrichment, reference = _clients()
-    catalog_cls, _country_cls, patchers = _patch_collaborators(entity_key)
+    catalog_cls, patchers = _patch_collaborators(entity_key)
     try:
-        service = ProductIdentificationService(
-            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
-        )
+        service = ProductIdentificationService(mock_session, vision_client=vision)
         result = await service.identify(
             image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
         )
@@ -93,9 +75,8 @@ async def test_identify_resolves_by_generic_name_and_passes_brand_apart(mock_ses
     assert call_args.kwargs["reference_candidates"] is None  # deferred
     assert result.entity_key == entity_key
     assert result.reference_candidates is None
-    # The slow LLM calls are NOT made at identify time.
-    enrichment.localized_markets.assert_not_awaited()
-    reference.candidates.assert_not_awaited()
+    # The slow LLM calls (enrichment, reference markets) have no client here at
+    # all: they live in AnalysisService and run in the /analyze background task.
 
 
 async def test_identify_is_vision_only_defers_enrichment(mock_session: AsyncMock) -> None:
@@ -103,12 +84,9 @@ async def test_identify_is_vision_only_defers_enrichment(mock_session: AsyncMock
     # (that happens later in the background), so only the vision market is kept.
     vision = AsyncMock()
     vision.identify_product.return_value = _identification()
-    enrichment, reference = _clients()
-    _catalog_cls, _country_cls, patchers = _patch_collaborators()
+    _catalog_cls, patchers = _patch_collaborators()
     try:
-        service = ProductIdentificationService(
-            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
-        )
+        service = ProductIdentificationService(mock_session, vision_client=vision)
         result = await service.identify(
             image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA", "BRA"]
         )
@@ -116,7 +94,6 @@ async def test_identify_is_vision_only_defers_enrichment(mock_session: AsyncMock
         for p in patchers:
             p.stop()
 
-    enrichment.localized_markets.assert_not_awaited()
     assert result.localized_markets is not None
     assert set(result.localized_markets) == {"USA"}  # only vision's market; BRA deferred
     assert result.localized_markets["USA"].search_terms == ["air fryer", "airfryer"]
@@ -127,12 +104,9 @@ async def test_identify_text_only_no_image(mock_session: AsyncMock) -> None:
     # client is called with image_base64=None and the provenance is text-sourced.
     vision = AsyncMock()
     vision.identify_product.return_value = _identification()
-    enrichment, reference = _clients()
-    catalog_cls, _country_cls, patchers = _patch_collaborators()
+    catalog_cls, patchers = _patch_collaborators()
     try:
-        service = ProductIdentificationService(
-            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
-        )
+        service = ProductIdentificationService(mock_session, vision_client=vision)
         result = await service.identify(
             image_base64=None,
             image_media_type=None,
@@ -166,12 +140,9 @@ async def test_identify_returns_no_markets_when_vision_finds_none(mock_session: 
     # here; the background enrichment handles that at /analyze time).
     vision = AsyncMock()
     vision.identify_product.return_value = _identification(markets=[])
-    enrichment, reference = _clients()
-    _catalog_cls, _country_cls, patchers = _patch_collaborators()
+    _catalog_cls, patchers = _patch_collaborators()
     try:
-        service = ProductIdentificationService(
-            mock_session, vision_client=vision, enrichment_client=enrichment, reference_market_client=reference
-        )
+        service = ProductIdentificationService(mock_session, vision_client=vision)
         result = await service.identify(
             image_base64="ZmFrZQ==", image_media_type="image/jpeg", hint_text=None, countries=["USA"]
         )
@@ -179,6 +150,5 @@ async def test_identify_returns_no_markets_when_vision_finds_none(mock_session: 
         for p in patchers:
             p.stop()
 
-    enrichment.localized_markets.assert_not_awaited()
     assert result.localized_markets is None
     assert result.reference_candidates is None

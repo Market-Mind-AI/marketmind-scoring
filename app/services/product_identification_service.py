@@ -18,12 +18,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import logger
-from app.repositories.country_repository import CountryRepository
 from app.schemas.catalog import IdentifyImageResponse, ImageMediaType
 from app.services.catalog_service import CatalogService
-from app.services.enrichment_client import EnrichmentClient, EnrichmentError
-from app.services.reference_market_client import ReferenceMarketClient, ReferenceMarketError
 from app.services.vision_client import MarketTerms, VisionClient
 
 
@@ -49,7 +45,8 @@ def _market_to_dict(market: MarketTerms) -> dict[str, Any]:
 
 def _fallback_market(iso3: str, product_name: str, brand: str | None) -> dict[str, Any]:
     """Last-resort entry so a country is never left without search terms: the
-    product's own name/brand as the term (low confidence, flagged for review)."""
+    product's own name/brand as the term (low confidence, flagged for review).
+    Used by AnalysisService's deferred enrichment."""
     base = f"{brand} {product_name}".strip() if brand else product_name
     terms = list(dict.fromkeys(t for t in (base, product_name, brand) if t))
     return {
@@ -72,15 +69,10 @@ class ProductIdentificationService:
         self,
         session: AsyncSession,
         vision_client: VisionClient | None = None,
-        enrichment_client: EnrichmentClient | None = None,
-        reference_market_client: ReferenceMarketClient | None = None,
     ) -> None:
         self._session = session
         self._vision_client = vision_client or VisionClient()
-        self._enrichment_client = enrichment_client or EnrichmentClient()
-        self._reference_market_client = reference_market_client or ReferenceMarketClient()
         self._catalog_service = CatalogService(session)
-        self._country_repo = CountryRepository(session)
 
     async def identify(
         self,
@@ -139,59 +131,3 @@ class ProductIdentificationService:
             price_currency=identification.price_currency,
             confidence=identification.confidence,
         )
-
-    async def _enrich(
-        self,
-        localized_markets: dict[str, dict[str, Any]],
-        *,
-        countries: list[str],
-        product_name: str,
-        brand: str | None,
-        category: str | None,
-    ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-        """One enrichment call does both: fill the localized markets vision
-        missed AND propose the ranked reference-market candidates. Guarantees
-        localized_markets covers every requested country (enrichment, then
-        deterministic fallback). The candidates are best-effort (empty if the LLM
-        errors — the analysis then falls back to another ruler); real volume
-        picks the winner among them later."""
-        supported = [c.iso3 for c in await self._country_repo.list_all()]
-        supported_set = set(supported)
-        missing = [c for c in countries if not _has_terms(localized_markets.get(c))]
-
-        # (1) localized_markets for the countries vision missed — local TEXT LLM.
-        try:
-            # Sem dica de idioma — ver a nota em analysis_service.
-            fill = [(iso3, None) for iso3 in missing]
-            for market in await self._enrichment_client.localized_markets(
-                product_name=product_name, brand=brand, category=category, countries=fill
-            ):
-                entry = _market_to_dict(market)
-                if market.country in missing and _has_terms(entry):
-                    localized_markets[market.country] = entry
-        except EnrichmentError as exc:
-            logger.warning(f"localized_markets enrichment failed, using deterministic fallback: {exc}")
-
-        # (2) reference-market candidates — a REAL cloud LLM (real market knowledge).
-        reference_candidates: list[dict[str, Any]] = []
-        try:
-            seen: set[str] = set()
-            for cand in await self._reference_market_client.candidates(
-                product_name=product_name, brand=brand, category=category, supported_countries=supported
-            ):
-                entry = _market_to_dict(cand)
-                if cand.country in supported_set and cand.country not in seen and _has_terms(entry):
-                    reference_candidates.append({"country": cand.country, **entry})
-                    seen.add(cand.country)
-        except ReferenceMarketError as exc:
-            logger.warning(f"Reference-market candidates unavailable: {exc}")
-
-        still_missing = [c for c in countries if not _has_terms(localized_markets.get(c))]
-        for iso3 in still_missing:
-            localized_markets[iso3] = _fallback_market(iso3, product_name, brand)
-        if still_missing:
-            logger.info(f"localized_markets deterministic fallback used for: {', '.join(still_missing)}")
-        if not reference_candidates:
-            logger.info("No reference-market candidates — analysis will fall back to another Demand Volume ruler")
-        return localized_markets, reference_candidates
-

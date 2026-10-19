@@ -197,7 +197,6 @@ def _patched_service(
     coverage_service.check_or_collect = AsyncMock(return_value=(uuid.uuid4(), []))
 
     indicator_engine.compute_all = AsyncMock(return_value=[])
-    mos_engine.find_incomplete_countries = AsyncMock(return_value={})  # completeness gate: nothing missing
     mos_engine.compute_mos = AsyncMock(return_value=[_mos_result("USA")])
     weight_calibration.calibrate = AsyncMock(return_value={})
 
@@ -298,9 +297,7 @@ async def test_the_core_does_not_complete_what_the_agent_owns() -> None:
     """The scoring step emits its markets several steps before the champion is
     crowned and the evidence assembled. Completing on that event would bill a
     partial answer while the agent was still working on the rest of it."""
-    mocks = await _run_via_orchestrator(
-        ['data: {"score": {"mos_results": [{"country": "USA", "mos": 70.0}]}}']
-    )
+    mocks = await _run_via_orchestrator(['data: {"score": {"mos_results": [{"country": "USA", "mos": 70.0}]}}'])
 
     mocks["analysis_repo"].mark_done.assert_not_awaited()
     mocks["analysis_repo"].mark_failed.assert_not_awaited()
@@ -334,8 +331,6 @@ def _refusing_client(**kwargs: object) -> "_FakeClient":
     raise ConnectionError("connection refused")
 
 
-
-
 # --- Coverage: the tool the agent calls, exercised directly ---
 #
 # These used to run through the in-process loop that sequenced them. The loop is
@@ -366,11 +361,7 @@ async def test_only_what_is_missing_is_collected() -> None:
 async def test_nothing_is_collected_when_everything_is_fresh() -> None:
     mocks = await _ensure_coverage(all_covered=True)
 
-    dispatched = [
-        gap
-        for call in mocks["coverage_service"].check_or_collect.await_args_list
-        for gap in call.args[0]
-    ]
+    dispatched = [gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]]
     assert dispatched == []
 
 
@@ -379,11 +370,7 @@ async def test_only_genuinely_new_terms_are_downloaded() -> None:
     never fetched again — every one of those calls is billed."""
     mocks = await _ensure_coverage(all_covered=False, missing_terms=["airfryer"], related_exists=False)
 
-    dispatched = [
-        gap
-        for call in mocks["coverage_service"].check_or_collect.await_args_list
-        for gap in call.args[0]
-    ]
+    dispatched = [gap for call in mocks["coverage_service"].check_or_collect.await_args_list for gap in call.args[0]]
     terms = [t for gap in dispatched for t in (gap.collection_params or {}).get("keywords", [])]
     assert "airfryer" in terms
     assert "air fryer" not in terms, "a term that already has volume must not be re-collected"

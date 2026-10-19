@@ -25,7 +25,7 @@ class CoverageGap(BaseModel):
     indicator_code: str = Field(..., min_length=1)
     period_key: str = Field(..., min_length=1)
     is_closed: bool = False
-    ttl_days: int | None = Field(None, description="Overrides settings.default_coverage_ttl_days when set")
+    ttl_days: int | None = Field(None, description="Freshness window in days for this gap, when the caller wants one")
     collection_params: dict[str, Any] = Field(default_factory=dict)
     force: bool = Field(
         False,
