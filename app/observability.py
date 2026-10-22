@@ -108,6 +108,47 @@ def observe(name: str, *, as_type: str = "tool", **fields: Any) -> Iterator[Obse
     _end(span)
 
 
+@contextmanager
+def run(name: str, **fields: Any) -> Iterator[Observation]:
+    """One trace for a job that is not part of any analysis, with everything
+    it does underneath.
+
+    `observe` records a unit of work in the CURRENT trace; with none current,
+    each call became a trace of its own. The nightly prewarm makes hundreds of
+    collector calls, and on 22/10/2026 a 50-minute UN Data outage showed up as
+    twenty unrelated ERROR traces. Opened as the current observation, this
+    puts them under one trace per run, and the run's own level says whether
+    the night went well.
+    """
+    langfuse = client()
+    manager = None
+    span = None
+    if langfuse is not None:
+        try:
+            manager = langfuse.start_as_current_observation(name=name, as_type="span", **fields)
+            span = manager.__enter__()
+        except Exception:  # noqa: BLE001
+            manager, span = None, None
+            logger.debug("Could not open the run %s", name, exc_info=True)
+    handle = Observation(span)
+    try:
+        yield handle
+    except BaseException as exc:
+        handle.update(level="ERROR", status_message=f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__)
+        _exit(manager, exc)
+        raise
+    _exit(manager, None)
+
+
+def _exit(manager: Any | None, exc: BaseException | None) -> None:
+    if manager is None:
+        return
+    try:
+        manager.__exit__(type(exc) if exc else None, exc, exc.__traceback__ if exc else None)
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not close a run", exc_info=True)
+
+
 def _end(span: Any | None) -> None:
     if span is None:
         return

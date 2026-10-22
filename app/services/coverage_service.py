@@ -40,12 +40,19 @@ class CoverageService:
 
         One request per source, for every pair at once.
         """
-        por_fonte: dict[DataSource, list[CoverageGap]] = {}
+        # Grouped by source AND by window. Each gap carries its own freshness
+        # window (`ttl_days`): country indicators are published once a year and
+        # stay good for 90 days (`country_indicator_ttl_days`). Until 22/10/2026
+        # every question went out with the general 30-day window, so yearly
+        # figures that had not changed were downloaded again every month -- the
+        # opposite of collecting only what is needed.
+        por_fonte: dict[tuple[DataSource, int], list[CoverageGap]] = {}
         for gap in gaps:
-            por_fonte.setdefault(gap.source, []).append(gap)
+            janela = gap.ttl_days or settings.coverage_stale_after_days
+            por_fonte.setdefault((gap.source, janela), []).append(gap)
 
         stale: dict[int, bool] = {}
-        for source, do_source in por_fonte.items():
+        for (source, janela), do_source in por_fonte.items():
             if source == DataSource.PYTRENDS:
                 # Não é "demanda nunca vence" — vence, e desde 23/09/2026 tem
                 # janela própria (`demand_stale_after_days`, 30 dias, a cadência
@@ -73,7 +80,7 @@ class CoverageService:
                 source,
                 countries=sorted({c for c in como_pedir.values() if c}),
                 indicators=indicadores,
-                stale_after_days=settings.coverage_stale_after_days,
+                stale_after_days=janela,
             )
             for gap in do_source:
                 # A pair the service did not report on was never checked there,

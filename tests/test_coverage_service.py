@@ -258,3 +258,33 @@ async def test_the_other_services_keep_being_asked_in_iso3(db_session: AsyncSess
     await service.check_coverage([gap])
 
     assert client.freshness.await_args.kwargs["countries"] == ["BRA"]
+
+
+async def test_a_country_indicator_is_asked_with_its_own_window(db_session: AsyncSession) -> None:
+    """Yearly figures stay good for 90 days. Asked with the general 30-day
+    window, a figure that had not changed was downloaded again every month
+    (22/10/2026: 52 UN Data and 13 OECD pairs would have been re-fetched)."""
+    client = _mock_client(fresh=True)
+    service = CoverageService(db_session, collection_client=client)
+    gaps = [
+        CoverageGap(
+            source=DataSource.WORLDBANK,
+            country="USA",
+            indicator_code="NY.GDP.PCAP.CD",
+            period_key="FIXED",
+            ttl_days=90,
+            collection_params={"start_year": 2016, "end_year": 2026},
+        ),
+        CoverageGap(
+            source=DataSource.WORLDBANK,
+            country="USA",
+            indicator_code="SP.POP.TOTL",
+            period_key="FIXED",
+            collection_params={"start_year": 2016, "end_year": 2026},
+        ),
+    ]
+
+    await service.check_coverage(gaps)
+
+    windows = sorted(call.kwargs["stale_after_days"] for call in client.freshness.call_args_list)
+    assert windows == [30, 90], "a gap with its own window keeps it; one without uses the default"

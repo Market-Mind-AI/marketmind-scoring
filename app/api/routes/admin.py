@@ -3,6 +3,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import observability
 from app.core.exceptions import EntityNotFoundError, MarketMindCoreError
 from app.db.session import get_session
 from app.schemas.admin import (
@@ -131,7 +132,16 @@ async def split_brand(request: BrandSplitRequest, session: AsyncSession = Depend
 async def prewarm_macro(
     request: MacroPrewarmRequest | None = None, session: AsyncSession = Depends(get_session)
 ) -> MacroPrewarmResponse:
-    relatorio = await MacroPrewarmService(session).prewarm(countries=request.countries if request else None)
+    with observability.run("prewarm-macro", metadata={"countries": request.countries if request else "all"}) as run:
+        relatorio = await MacroPrewarmService(session).prewarm(countries=request.countries if request else None)
+        # Failed collections stay stale and are asked again the next night, so
+        # a night with failures is a warning on the run; each failed call is
+        # still an ERROR underneath it.
+        run.update(
+            output=relatorio,
+            level="WARNING" if relatorio.get("falhados") else None,
+            status_message=f"{relatorio['falhados']} coleta(s) falharam" if relatorio.get("falhados") else None,
+        )
     return MacroPrewarmResponse(**relatorio)
 
 
