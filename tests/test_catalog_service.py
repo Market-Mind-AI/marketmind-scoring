@@ -91,14 +91,7 @@ async def test_resolve_persists_localized_markets_on_new_entity(db_session: Asyn
     assert entity.localized_markets == localized_markets
 
 
-async def test_resolve_merges_curated_terms_on_reanalysis(db_session: AsyncSession) -> None:
-    # Re-analysis of an existing product (exact alias hit) MERGES its curated
-    # terms — never overwrites (2026-07-27): keywords accumulate in the base, and
-    # a re-identify only ADDS genuinely new terms (keeping the demand cache
-    # stable). A new country is added; an existing country's terms are unioned
-    # (existing first + new appended).
-    service = CatalogService(db_session, matcher=_sem_match())
-    text = f"Presunto {uuid.uuid4()}"
+def _presunto_markets() -> tuple[dict, dict]:
     at_creation = {
         "PRT": {
             "primary_name": "presunto pata negra",
@@ -109,14 +102,14 @@ async def test_resolve_merges_curated_terms_on_reanalysis(db_session: AsyncSessi
         }
     }
     refreshed = {
-        "PRT": {  # same country, a NEW term → unioned
+        "PRT": {  # same country, a NEW term
             "primary_name": "presunto pata negra",
             "formal_name": None,
             "search_terms": ["presunto ibérico"],
             "excluded_terms": [],
             "confidence": 0.6,
         },
-        "ESP": {  # new country → added
+        "ESP": {  # new country
             "primary_name": "jamón pata negra",
             "formal_name": None,
             "search_terms": ["jamón pata negra"],
@@ -124,6 +117,19 @@ async def test_resolve_merges_curated_terms_on_reanalysis(db_session: AsyncSessi
             "confidence": 0.6,
         },
     }
+    return at_creation, refreshed
+
+
+async def test_a_reidentified_product_keeps_its_terms_for_the_semester(db_session: AsyncSession) -> None:
+    """Every identification returns a slightly different list of terms. Adding
+    them changed the seed the related keywords are stored under, and a repeat
+    analysis minutes after the first bought every country's Google Ads data
+    again (jamón ibérico, 23/10/2026: 0,90 USD). Inside the semester a country
+    that already has terms keeps them; a country nobody asked about before is
+    still added, and so are new reference candidates."""
+    service = CatalogService(db_session, matcher=_sem_match())
+    text = f"Presunto {uuid.uuid4()}"
+    at_creation, refreshed = _presunto_markets()
     candidates = [{"country": "ESP", "primary_name": "jamón", "search_terms": ["jamon"], "confidence": 0.9}]
 
     created = await service.resolve(text, source="test", localized_markets=at_creation)
@@ -136,11 +142,71 @@ async def test_resolve_merges_curated_terms_on_reanalysis(db_session: AsyncSessi
     entity = await ProductRepository(db_session).get_by_entity_key(again.entity_key)
     assert entity is not None
     lm = entity.localized_markets
-    assert set(lm) == {"PRT", "ESP"}  # existing country kept, new country added
-    # PRT terms unioned (existing first, new appended) — nothing lost
-    assert lm["PRT"]["search_terms"] == ["presunto pata negra", "presunto ibérico"]
-    assert lm["ESP"]["search_terms"] == ["jamón pata negra"]
-    assert entity.reference_candidates == candidates  # newly persisted on re-analysis
+    assert set(lm) == {"PRT", "ESP"}
+    assert lm["PRT"]["search_terms"] == ["presunto pata negra"], "the semester's terms stay as they were"
+    assert lm["ESP"]["search_terms"] == ["jamón pata negra"], "a new country still gets its terms"
+    assert entity.reference_candidates == candidates
+    assert entity.vocabulary_at is not None
+
+
+async def test_after_the_semester_the_new_terms_are_merged(db_session: AsyncSession) -> None:
+    """Past the window the old rule returns: terms accumulate, nothing curated
+    is lost, and the window starts again from that identification."""
+    from datetime import timedelta
+
+    from app.core.config import settings
+    from app.repositories.product_repository import ProductRepository
+    from app.utils.time import utc_now
+
+    service = CatalogService(db_session, matcher=_sem_match())
+    text = f"Presunto {uuid.uuid4()}"
+    at_creation, refreshed = _presunto_markets()
+
+    created = await service.resolve(text, source="test", localized_markets=at_creation)
+    entity = await ProductRepository(db_session).get_by_entity_key(created.entity_key)
+    assert entity is not None
+    entity.vocabulary_at = utc_now() - timedelta(days=settings.search_terms_ttl_days + 1)
+    await db_session.flush()
+
+    await service.resolve(text, source="test", localized_markets=refreshed)
+
+    entity = await ProductRepository(db_session).get_by_entity_key(created.entity_key)
+    assert entity is not None
+    assert entity.localized_markets["PRT"]["search_terms"] == ["presunto pata negra", "presunto ibérico"]
+    assert entity.vocabulary_at is not None
+    assert utc_now() - entity.vocabulary_at < timedelta(minutes=5), "the window restarts"
+
+
+async def test_a_brand_keeps_its_terms_for_the_semester(db_session: AsyncSession) -> None:
+    """The same rule for a brand's own vocabulary, which used to be replaced
+    country by country on every identification."""
+    from datetime import timedelta
+
+    from app.core.config import settings
+    from app.db.models.brand_market import BrandMarket
+    from app.repositories.product_repository import ProductRepository
+    from app.utils.time import utc_now
+
+    repo = ProductRepository(db_session)
+    entity = await repo.create_entity(canonical_title=f"whisky {uuid.uuid4()}")
+    marca = await repo.get_or_create_brand(name=f"Marca {uuid.uuid4().hex[:8]}")
+    first = {"GBR": {"primary_name": "marca 12", "search_terms": ["marca 12", "marca whisky"]}}
+    second = {
+        "GBR": {"primary_name": "marca 12", "search_terms": ["marca 12 years"]},
+        "ESP": {"primary_name": "marca 12", "search_terms": ["marca 12 años"]},
+    }
+
+    await repo.save_brand_markets(entity.entity_key, marca.brand_key, first, keep_fixed=True)
+    await repo.save_brand_markets(entity.entity_key, marca.brand_key, second, keep_fixed=True)
+    assert (await repo.markets_for(entity, marca.brand_key))["GBR"]["search_terms"] == ["marca 12", "marca whisky"]
+    assert (await repo.markets_for(entity, marca.brand_key))["ESP"]["search_terms"] == ["marca 12 años"]
+
+    linha = await db_session.get(BrandMarket, (entity.entity_key, marca.brand_key, "GBR"))
+    assert linha is not None
+    linha.updated_at = utc_now() - timedelta(days=settings.search_terms_ttl_days + 1)
+    await db_session.flush()
+    await repo.save_brand_markets(entity.entity_key, marca.brand_key, second, keep_fixed=True)
+    assert (await repo.markets_for(entity, marca.brand_key))["GBR"]["search_terms"] == ["marca 12 years"]
 
 
 async def test_resolve_does_not_wipe_curated_fields_when_none_provided(db_session: AsyncSession) -> None:

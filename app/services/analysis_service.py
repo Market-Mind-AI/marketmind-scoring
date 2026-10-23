@@ -44,6 +44,7 @@ from app.services.reference_market_client import ReferenceMarketClient, Referenc
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key
 from app.utils.text import as_term_list
+from app.utils.time import utc_now
 
 # The reference-market shortlist is a ranked list from the LLM (biggest markets
 # first), and every candidate beyond the requested countries costs a full
@@ -249,6 +250,11 @@ class AnalysisService:
             await self._product_repo.save_brand_markets(entity.entity_key, marca.brand_key, mercados)
             return
         entity.localized_markets = _merge_localized_markets(entity.localized_markets, mercados)
+        # Only countries that had no terms reach this point, so it never changes
+        # a fixed one; it does start the semester for a product whose first
+        # vocabulary was written here rather than at identification.
+        if getattr(entity, "vocabulary_at", None) is None:
+            entity.vocabulary_at = utc_now()
 
     async def ensure_product_enrichment(
         self, entity: Any, countries: list[str], *, marca: Any | None = None, com_candidatos: bool = True

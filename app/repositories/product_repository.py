@@ -20,6 +20,7 @@ from app.db.models.brand_reference_candidate import BrandReferenceCandidate
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.db.models.product_excluded_term import ProductExcludedTerm
+from app.services.vocabulary_window import vocabulary_is_fixed
 from app.utils.text import normalize_alias
 from app.utils.time import utc_now
 
@@ -138,13 +139,24 @@ class ProductRepository:
         return {linha.country: dict(linha.market) for linha in linhas.scalars().all()}
 
     async def save_brand_markets(
-        self, entity_key: uuid.UUID, brand_key: uuid.UUID, markets: dict[str, dict[str, Any]]
+        self,
+        entity_key: uuid.UUID,
+        brand_key: uuid.UUID,
+        markets: dict[str, dict[str, Any]],
+        *,
+        keep_fixed: bool = False,
     ) -> None:
         """Grava (ou atualiza) o vocabulário de uma marca, país a país.
 
         Mercado vazio é ignorado em vez de gravado: uma linha sem termos não
         diz "não tem", diz "ninguém escreveu ainda", e as duas coisas precisam
         continuar distinguíveis para o enriquecimento saber o que fazer.
+
+        `keep_fixed`: quem traz os termos de uma nova identificação não troca
+        os de um país gravado há menos de um semestre (`search_terms_ttl_days`).
+        É a mesma regra do vocabulário do produto: lista de termos nova é
+        semente nova para as palavras relacionadas, e semente nova é Google Ads
+        pago de novo em todos os países.
         """
         for country, market in (markets or {}).items():
             if not market or not market.get("search_terms"):
@@ -154,6 +166,8 @@ class ProductRepository:
                 self._session.add(
                     BrandMarket(entity_key=entity_key, brand_key=brand_key, country=country, market=market)
                 )
+            elif keep_fixed and vocabulary_is_fixed(existente.updated_at):
+                continue
             else:
                 existente.market = market
         await self._session.flush()
@@ -351,6 +365,7 @@ class ProductRepository:
             canonical_title=canonical_title,
             category=category,
             localized_markets=localized_markets,
+            vocabulary_at=utc_now() if localized_markets else None,
             reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,

@@ -175,6 +175,21 @@ class Settings(BaseSettings):
     # contrário das fontes macro.
     demand_stale_after_days: int = 30
 
+    # Por quanto tempo o vocabulário de busca de um produto num país fica
+    # fixo. Cada identificação devolve uma lista de termos um pouco diferente,
+    # e somar os termos novos a cada análise mudava a semente das palavras
+    # relacionadas — que são guardadas pela lista exata — e fazia pagar de novo
+    # o Google Ads de todos os países. Medido em 23/10/2026: a segunda análise
+    # do jamón ibérico, minutos depois da primeira, pagou 0,90 USD que nada
+    # pedia (5 países × relacionadas + volume dos termos novos).
+    #
+    # Um semestre porque o vocabulário muda devagar — o modo como se procura
+    # um produto não muda de um mês para o outro — e porque termos fixos
+    # também deixam a nota estável: mesmo produto, mesmos termos, mesma nota.
+    # Os VOLUMES continuam com a janela de 30 dias acima; o que fica fixo é a
+    # lista de palavras cujo volume se mede.
+    search_terms_ttl_days: int = 182
+
     # Silêncio maior que isto significa que a análise morreu, não que está
     # demorando: é mais que o passo mais longo entre dois batimentos (a
     # cobertura de UM país). Quem varre para retomar respeita esta janela, então

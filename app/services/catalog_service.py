@@ -73,7 +73,9 @@ from app.schemas.catalog import CatalogResolveResponse
 from app.services.catalog_matcher import CatalogMatcher
 from app.services.embedding_client import EmbeddingClient, EmbeddingError, vector_literal
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
+from app.services.vocabulary_window import vocabulary_is_fixed
 from app.utils.text import as_term_list, normalize_alias
+from app.utils.time import utc_now
 
 
 def _union_terms(*lists: list[str] | None) -> list[str]:
@@ -116,6 +118,24 @@ def _merge_localized_markets(
             "confidence": max(float(cur.get("confidence") or 0.0), float(new.get("confidence") or 0.0)),
         }
     return merged
+
+
+def only_new_countries(
+    existing: dict[str, dict[str, Any]] | None, incoming: dict[str, dict[str, Any]] | None
+) -> dict[str, dict[str, Any]]:
+    """The part of `incoming` for countries that have no terms yet.
+
+    Inside the window a country that already has terms keeps them: a fresh
+    identification returns a slightly different list every time, and adding
+    those words changed the seed the related keywords are stored under, so
+    every country's Google Ads data was bought again (0,90 USD on 23/10/2026
+    for a repeat analysis minutes after the first). A country nobody asked
+    about before still gets its terms."""
+    return {
+        iso3: market
+        for iso3, market in (incoming or {}).items()
+        if not ((existing or {}).get(iso3) or {}).get("search_terms")
+    }
 
 
 def _merge_reference_candidates(
@@ -290,7 +310,7 @@ class CatalogService:
             resolvido.marca = marca
             if localized_markets:
                 await self._repo.save_brand_markets(
-                    resolvido.entity.entity_key, marca.brand_key, localized_markets
+                    resolvido.entity.entity_key, marca.brand_key, localized_markets, keep_fixed=True
                 )
         # A família vem dos passos que a DECIDEM; quem apenas reencontra a
         # entidade (alias, trigram) não a traz. Carregada aqui para que a
@@ -551,7 +571,7 @@ class CatalogService:
         """Reanálise refresca a entidade com o que o chamador trouxe e indexa o
         vocabulário novo — os dois sempre juntos, porque indexar sem refrescar
         deixaria alias apontando para termo que a entidade não declara."""
-        self._refresh_entity_fields(
+        aplicado = self._refresh_entity_fields(
             entity,
             category=category,
             localized_markets=localized_markets,
@@ -559,7 +579,7 @@ class CatalogService:
             target_age_min=target_age_min,
             target_age_max=target_age_max,
         )
-        await self._index_terms(entity, localized_markets)
+        await self._index_terms(entity, aplicado)
 
     async def _registrar_chave(
         self,
@@ -1036,20 +1056,45 @@ class CatalogService:
         reference_candidates: list[dict[str, Any]] | None,
         target_age_min: int | None,
         target_age_max: int | None,
-    ) -> None:
+    ) -> dict[str, dict[str, Any]] | None:
         """Update an already-resolved entity with the fields a re-analysis
         brought, so its curated data stays current. Only NON-None values are
         applied — a text-only resolve (no markets) never wipes existing data.
-        The entity is session-attached, so the surrounding commit persists it."""
+        The entity is session-attached, so the surrounding commit persists it.
+
+        Returns the vocabulary actually applied, which is what gets indexed:
+        indexing words the entity does not keep would point aliases at terms
+        it never declares."""
         if category is not None:
             entity.category = category
-        # Merge, never overwrite: curated keywords accumulate in the base; a
-        # re-identify only adds genuinely new terms (keeps the demand cache stable).
+        aplicado = localized_markets
+        fixo = vocabulary_is_fixed(entity.vocabulary_at)
         if localized_markets is not None:
-            entity.localized_markets = _merge_localized_markets(entity.localized_markets, localized_markets)
+            if fixo:
+                # Inside the semester the countries that already have terms keep
+                # them; only countries missing from the base are added.
+                aplicado = only_new_countries(entity.localized_markets, localized_markets)
+                if aplicado:
+                    entity.localized_markets = {**(entity.localized_markets or {}), **aplicado}
+            else:
+                # Merge, never overwrite: curated keywords accumulate, and the
+                # window starts again from here.
+                entity.localized_markets = _merge_localized_markets(entity.localized_markets, localized_markets)
+                entity.vocabulary_at = utc_now()
         if reference_candidates is not None:
-            entity.reference_candidates = _merge_reference_candidates(entity.reference_candidates, reference_candidates)
+            if fixo:
+                # Same rule for the ruler's candidates: their terms are bought
+                # on Google Ads exactly like a requested country's.
+                conhecidos = {c.get("country") for c in (entity.reference_candidates or [])}
+                novos = [c for c in reference_candidates if c.get("country") not in conhecidos]
+                if novos:
+                    entity.reference_candidates = [*(entity.reference_candidates or []), *novos]
+            else:
+                entity.reference_candidates = _merge_reference_candidates(
+                    entity.reference_candidates, reference_candidates
+                )
         if target_age_min is not None:
             entity.target_age_min = target_age_min
         if target_age_max is not None:
             entity.target_age_max = target_age_max
+        return aplicado

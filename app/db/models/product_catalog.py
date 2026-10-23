@@ -33,6 +33,10 @@ class ProductCatalog(Base):
     # intent call. Replaces the old Trends-era {lang: [names]} `localized_terms`.
     # See marketmind_mos_engine.
     localized_markets: Mapped[dict[str, dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    # Quando o vocabulário acima foi fixado. Dentro de `search_terms_ttl_days`
+    # uma nova identificação só acrescenta países que faltam; os termos dos
+    # países que já existem não mudam (migration 057).
+    vocabulary_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # reference_candidates (2026-07-22): a RANKED shortlist (up to 5) of the
     # supported countries most likely to be this product's biggest market,
     # proposed by the enrichment LLM, each a localized-market entry plus a
