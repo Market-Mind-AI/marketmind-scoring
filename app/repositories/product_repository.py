@@ -1,3 +1,4 @@
+import math
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -1011,9 +1012,9 @@ class ProductRepository:
         return {alias: key for alias, key in result.all()}
 
     async def champion_for(
-        self, entity: ProductCatalog, brand_key: uuid.UUID | None, period_key: str
+        self, entity: ProductCatalog, brand_key: uuid.UUID | None, period_key: str, *, demand_ceiling: float | None
     ) -> tuple[bool, str | None, Decimal | None]:
-        """(já calculado neste período?, país, mos) para ESTA marca.
+        """(já calculado neste período COM esta régua?, país, mos) para ESTA marca.
 
         Sem marca, o campeão é o do produto. Com marca, o dela — o produto
         passou a ser um só, e compartilhar campeão entre marcas faria o melhor
@@ -1023,33 +1024,47 @@ class ProductRepository:
         própria: campeão conhecido faz a análise PULAR a coleta dos mercados de
         referência. Um campeão herdado nunca seria corrigido, porque existir já
         impede a medição que o desmentiria.
+
+        A régua entra na pergunta pelo mesmo motivo: um campeão calculado
+        contra a régua de antes de ela subir tem um MOS que a régua de agora
+        não daria, e reaproveitá-lo é coroar um número que não existe mais.
         """
         if brand_key is None:
-            return (
-                entity.champion_period_key == period_key,
+            periodo, pais, mos, regua = (
+                entity.champion_period_key,
                 entity.champion_country,
                 entity.champion_mos,
+                entity.champion_demand_ceiling,
             )
-        linha = await self._session.get(BrandChampion, (entity.entity_key, brand_key, period_key))
-        if linha is None:
+        else:
+            linha = await self._session.get(BrandChampion, (entity.entity_key, brand_key, period_key))
+            if linha is None:
+                return False, None, None
+            periodo, pais, mos, regua = period_key, linha.country, linha.mos, linha.demand_ceiling
+        if periodo != period_key or not _mesma_regua(regua, demand_ceiling):
             return False, None, None
-        return True, linha.country, linha.mos
+        return True, pais, mos
 
-    async def forget_champion(self, entity: ProductCatalog, brand_key: uuid.UUID | None, period_key: str) -> None:
-        """Esquece o campeão do período: foi calculado com uma régua que mudou."""
+    async def forget_champion(
+        self, entity: ProductCatalog, brand_key: uuid.UUID | None, period_key: str | None
+    ) -> None:
+        """Esquece o campeão: o que o produto ou a marca eram mudou.
+
+        `period_key` nulo esquece o de qualquer período. Inteiro, inclusive
+        quando foi calculado: um campeão sem período mas com data seria um
+        campeão pela metade, e quem lê a data acharia que houve cálculo."""
         if brand_key is None:
-            if entity.champion_period_key == period_key:
+            if period_key is None or entity.champion_period_key == period_key:
                 entity.champion_period_key = None
                 entity.champion_country = None
                 entity.champion_mos = None
+                entity.champion_computed_at = None
+                entity.champion_demand_ceiling = None
             return
-        await self._session.execute(
-            delete(BrandChampion).where(
-                BrandChampion.entity_key == entity.entity_key,
-                BrandChampion.brand_key == brand_key,
-                BrandChampion.period_key == period_key,
-            )
-        )
+        condicoes = [BrandChampion.entity_key == entity.entity_key, BrandChampion.brand_key == brand_key]
+        if period_key is not None:
+            condicoes.append(BrandChampion.period_key == period_key)
+        await self._session.execute(delete(BrandChampion).where(*condicoes))
 
     async def set_champion(
         self,
@@ -1058,9 +1073,11 @@ class ProductRepository:
         country: str | None,
         mos: Decimal | None,
         period_key: str,
+        demand_ceiling: float | None,
         brand_key: uuid.UUID | None = None,
     ) -> None:
-        """Record the product's standout reference market for a period.
+        """Record the product's standout reference market for a period, and
+        the demand ruler it was computed against.
 
         Called with country=None when no candidate could be scored, and that is
         deliberately still a write: period_key is what marks the work as done, so
@@ -1068,6 +1085,7 @@ class ProductRepository:
         every analysis. Distinguishing it from "never computed" is the whole
         reason champion_period_key exists separately from champion_country.
         """
+        regua = None if demand_ceiling is None else Decimal(str(demand_ceiling))
         if brand_key is not None:
             linha = await self._session.get(BrandChampion, (entity.entity_key, brand_key, period_key))
             if linha is None:
@@ -1078,14 +1096,25 @@ class ProductRepository:
                         period_key=period_key,
                         country=country,
                         mos=mos,
+                        demand_ceiling=regua,
                     )
                 )
             else:
-                linha.country, linha.mos, linha.computed_at = country, mos, utc_now()
+                linha.country, linha.mos, linha.demand_ceiling = country, mos, regua
+                linha.computed_at = utc_now()
             await self._session.flush()
             return
         entity.champion_country = country
         entity.champion_mos = mos
         entity.champion_period_key = period_key
         entity.champion_computed_at = utc_now()
+        entity.champion_demand_ceiling = regua
         await self._session.flush()
+
+
+def _mesma_regua(guardada: Decimal | None, atual: float | None) -> bool:
+    """Se o campeão guardado foi calculado contra a régua de agora. Teto
+    nulo (régua fixa) só bate com teto nulo."""
+    if guardada is None or atual is None:
+        return guardada is None and atual is None
+    return math.isclose(float(guardada), float(atual), rel_tol=1e-9)

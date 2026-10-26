@@ -53,7 +53,7 @@ async def _entidade_poluida(session: AsyncSession, sufixo: str) -> tuple[uuid.UU
     await repo.create_excluded_terms_bulk(
         entity_key=entity.entity_key, termos={normalize_alias(f"cardhu bar {sufixo}"): "cardhu bar"}, source="test"
     )
-    await repo.set_champion(entity, country="GBR", mos=66.9, period_key="2026-08")
+    await repo.set_champion(entity, country="GBR", mos=66.9, period_key="2026-08", demand_ceiling=None)
     await session.commit()
     return entity.entity_key, titulo
 

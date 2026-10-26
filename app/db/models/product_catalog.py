@@ -121,6 +121,10 @@ class ProductCatalog(Base):
     champion_mos: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     champion_period_key: Mapped[str | None] = mapped_column(nullable=True)
     champion_computed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # A régua de demanda com que o campeão foi calculado (migration 061). Ele
+    # só vale para ESTA régua: quando ela sobe, o MOS dele foi medido contra
+    # outra. Ver ProductRepository.champion_for.
+    champion_demand_ceiling: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     merged_into: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("product_catalog.entity_key"), nullable=True
     )

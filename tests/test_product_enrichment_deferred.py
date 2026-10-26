@@ -202,7 +202,9 @@ async def test_a_requested_country_above_the_ruler_becomes_the_ruler_and_stays()
 
     assert (teto, regua["country"]) == (17020, "BRA")
     assert [c["country"] for c in entity.reference_candidates] == ["BRA", "USA", "DEU"], "no topo, e gravado"
-    esquecer.assert_awaited_once()  # o campeão do mês foi calculado com a régua antiga
+    # Nada a apagar: o campeão do mês carrega a régua com que foi calculado e
+    # deixa de valer sozinho (ver ProductRepository.champion_for).
+    esquecer.assert_not_awaited()
 
 
 async def test_a_requested_country_below_the_ruler_changes_nothing() -> None:

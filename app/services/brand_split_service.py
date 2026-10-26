@@ -114,10 +114,7 @@ class BrandSplitService:
         # O campeão foi eleito com a demanda DA MARCA, então não vale para o
         # produto. Apagado em vez de herdado: um campeão errado é pior que
         # nenhum, porque faz a próxima análise pular a coleta que o corrigiria.
-        poluida.champion_country = None
-        poluida.champion_mos = None
-        poluida.champion_period_key = None
-        poluida.champion_computed_at = None
+        await self._repo.forget_champion(poluida, None, None)
 
         poluida.localized_markets = None
         poluida.reference_candidates = None

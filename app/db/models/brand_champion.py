@@ -39,3 +39,5 @@ class BrandChampion(Base):
     country: Mapped[str | None] = mapped_column(String(3), nullable=True)
     mos: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     computed_at: Mapped[datetime] = mapped_column(nullable=False, default=utc_now)
+    # A régua com que foi calculado; o campeão só vale para ela (migration 061).
+    demand_ceiling: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)

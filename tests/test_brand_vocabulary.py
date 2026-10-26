@@ -90,17 +90,24 @@ async def test_o_campeao_de_uma_marca_nao_vira_o_da_outra(db_session: AsyncSessi
     cardhu = await repo.get_or_create_brand(name=f"Cardhu{sufixo}", source="test")
     glen = await repo.get_or_create_brand(name=f"Glen{sufixo}", source="test")
 
-    await repo.set_champion(produto, country="GBR", mos=None, period_key="2026-09", brand_key=cardhu.brand_key)
+    await repo.set_champion(
+        produto, country="GBR", mos=None, period_key="2026-09", demand_ceiling=15800.0, brand_key=cardhu.brand_key
+    )
     await db_session.flush()
 
-    ja_tem, pais, _ = await repo.champion_for(produto, cardhu.brand_key, "2026-09")
+    ja_tem, pais, _ = await repo.champion_for(produto, cardhu.brand_key, "2026-09", demand_ceiling=15800.0)
     assert (ja_tem, pais) == (True, "GBR")
 
-    da_outra, _, _ = await repo.champion_for(produto, glen.brand_key, "2026-09")
+    da_outra, _, _ = await repo.champion_for(produto, glen.brand_key, "2026-09", demand_ceiling=15800.0)
     assert da_outra is False, "a outra marca ainda não tem campeão"
 
-    do_produto, _, _ = await repo.champion_for(produto, None, "2026-09")
+    do_produto, _, _ = await repo.champion_for(produto, None, "2026-09", demand_ceiling=15800.0)
     assert do_produto is False, "nem o produto herda o campeão de uma marca"
+
+    # A régua subiu (um país pedido passou de todos os candidatos): o campeão
+    # foi medido contra a régua de antes e não vale mais.
+    outra_regua, _, _ = await repo.champion_for(produto, cardhu.brand_key, "2026-09", demand_ceiling=17020.0)
+    assert outra_regua is False
 
 
 async def test_tudo_que_depende_da_marca_esta_separado(db_session: AsyncSession) -> None:

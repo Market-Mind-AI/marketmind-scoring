@@ -16,6 +16,8 @@ settings.country_indicator_ttl_days).
 
 import json
 import uuid
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -115,6 +117,20 @@ def _champion_candidates(candidatos: list[dict[str, Any]], requested: list[str])
         if len(out) == _MAX_REFERENCE_CANDIDATES:
             break
     return out
+
+
+@dataclass(frozen=True)
+class CrownedChampion:
+    """O mercado de maior MOS do produto entre os pedidos e os candidatos."""
+
+    country: str | None
+    mos: float | None
+    requested: bool
+    # A linha do campeão quando ele NÃO foi pedido: é ela que o relatório e o
+    # pacote de evidências mostram ao lado dos pedidos, como benchmark.
+    row: MosResult | None
+    from_cache: bool
+    demand_ceiling: float | None
 
 
 class AnalysisService:
@@ -578,12 +594,12 @@ class AnalysisService:
         # dizia que os EUA eram o maior mercado avaliado. Esse país ENTRA nos
         # candidatos do produto, no topo, e fica: a régua sobe agora e é a
         # mesma nas próximas análises, peçam ou não esse país, o que mantém a
-        # nota de cada país independente do pedido.
+        # nota de cada país independente do pedido. O campeão guardado com a
+        # régua antiga deixa de valer sozinho: ele carrega a régua com que foi
+        # calculado (ver ProductRepository.champion_for).
         if novo is not None:
             candidatos = await self.candidatos_de_referencia(entity, marca)
             await self._gravar_candidatos(entity, marca, [novo, *candidatos])
-            # O campeão guardado neste período foi calculado com a régua antiga.
-            await self._product_repo.forget_champion(entity, marca.brand_key if marca is not None else None, period_key)
             await self._session.commit()
             logger.info(f"Régua de demanda subiu para {ruler['country']} ({ruler['volume']:.0f} buscas/mês)")
         return ceiling, ruler
@@ -700,4 +716,90 @@ class AnalysisService:
             return []
         return await self._mos_engine.compute_mos(
             entity_key=entity_key, countries=attempted, period_key=period_key, brand_key=brand_key
+        )
+
+    async def crown_champion(
+        self,
+        *,
+        entity: Any,
+        requested: list[str],
+        requested_results: list[dict[str, Any]],
+        period_key: str,
+        marca: Any | None = None,
+    ) -> CrownedChampion:
+        """Coroa o mercado de maior MOS do produto — pedido ou candidato — e o
+        guarda para o período, com a régua de demanda de agora.
+
+        A decisão era do orquestrador, em três chamadas: lia o campeão guardado
+        na coleta dos candidatos, a régua subia na chamada seguinte e apagava o
+        campeão, e o orquestrador coroava o que já tinha lido, medido contra a
+        régua de antes. Agora quem decide é quem tem a régua, numa chamada só,
+        e o guardado só vale quando foi calculado contra a régua de agora.
+
+        Empate fica com o mercado pedido: a coroa diz "o melhor mercado deste
+        produto", e entre dois iguais o que o comprador escolheu é a resposta
+        que ele entende.
+        """
+        brand_key = marca.brand_key if marca is not None else None
+        # Lida, não gravada: subir a régua é do passo da régua, que roda antes
+        # de os países pedidos serem medidos. Aqui ela só precisa ser a mesma.
+        ceiling, _ruler, _novo = await self.measure_demand_ceiling(entity, requested, period_key, marca=marca)
+        pedidos = set(requested)
+        disputa: list[tuple[str, float]] = [
+            (str(r["country"]), float(r["mos"]))
+            for r in requested_results
+            if r.get("mos") is not None and r.get("country") in pedidos
+        ]
+
+        cached, pais, mos = await self._product_repo.champion_for(
+            entity, brand_key, period_key, demand_ceiling=ceiling
+        )
+        linhas: dict[str, MosResult] = {}
+        if cached:
+            # Pedido, o número que vale é o desta análise; fora do pedido, o
+            # guardado, que é o mesmo MOS de âncoras fixas medido contra esta
+            # mesma régua.
+            if pais is not None and mos is not None and pais not in pedidos:
+                disputa.append((pais, float(mos)))
+        else:
+            for row in await self.score_reference_candidates(
+                entity=entity, requested=requested, period_key=period_key, demand_ceiling=ceiling, marca=marca
+            ):
+                if row.mos is not None:
+                    disputa.append((row.country, float(row.mos)))
+                    linhas[row.country] = row
+
+        # `max` devolve o primeiro dos empatados, e os pedidos vêm primeiro.
+        campeao = max(disputa, key=lambda par: par[1], default=None)
+        novo = (campeao[0], campeao[1]) if campeao else (None, None)
+        guardado = (pais, None if mos is None else float(mos))
+        # Gravado sempre que muda, inclusive "nada pontuável" (país nulo): o
+        # período é o que marca o trabalho como feito, e sem gravar a mesma
+        # coleta infrutífera rodaria em toda análise seguinte. Um pedido que
+        # passa do guardado o substitui, ou o guardado volta a ser coroado na
+        # próxima análise que não pedir esse país.
+        if not cached or novo != guardado:
+            await self._product_repo.set_champion(
+                entity,
+                country=novo[0],
+                mos=None if novo[1] is None else Decimal(str(novo[1])),
+                period_key=period_key,
+                demand_ceiling=ceiling,
+                brand_key=brand_key,
+            )
+            await self._session.commit()
+
+        fora_do_pedido = novo[0] is not None and novo[0] not in pedidos
+        row = None
+        if fora_do_pedido:
+            row = linhas.get(novo[0]) or await self._mos_repo.get_mos_result(
+                entity.entity_key, novo[0], "month", period_key, brand_key
+            )
+        return CrownedChampion(
+            country=novo[0],
+            mos=novo[1],
+            requested=novo[0] is not None and not fora_do_pedido,
+            row=row,
+            from_cache=cached,
+            demand_ceiling=ceiling,
         )

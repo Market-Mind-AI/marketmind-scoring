@@ -2,6 +2,9 @@
 
 import uuid
 from collections.abc import Generator
+from datetime import UTC, datetime
+from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -403,6 +406,33 @@ def test_a_champion_can_be_stored_as_nothing_scorable(client: TestClient) -> Non
         headers=_HEADERS,
     )
     assert cached.json()["champion_cached"] is True
+
+
+def test_crowning_answers_the_champion_and_its_row_when_it_was_not_requested(client: TestClient) -> None:
+    from app.services.analysis_service import CrownedChampion
+
+    entity_key = _resolve(client, f"coroa {uuid.uuid4().hex[:6]}")
+    linha = SimpleNamespace(
+        id=uuid.uuid4(), entity_key=uuid.UUID(entity_key), country="USA", period_type="month", period_key="2026-10",
+        mos=Decimal("71.2"), mos_before_cap=None, capped_by=None, topsis_score=None, library_topsis_score=None,
+        library_mos=None, mos_interpretation="Good Opportunity", explanation=None, availability_status="available",
+        excluded_reason=None, computed_at=datetime(2026, 10, 26, tzinfo=UTC),
+    )  # fmt: skip
+    coroado = CrownedChampion("USA", 71.2, False, linha, False, 15800.0)
+    with patch("app.services.analysis_service.AnalysisService.crown_champion", AsyncMock(return_value=coroado)):
+        body = client.post(
+            "/internal/champion/crown",
+            json={
+                "entity_key": entity_key,
+                "period_key": "2026-10",
+                "requested_countries": ["BRA"],
+                "requested_results": [{"country": "BRA", "mos": 64.0}],
+            },
+            headers=_HEADERS,
+        ).json()
+
+    assert (body["champion_country"], body["requested"], body["demand_ceiling"]) == ("USA", False, 15800.0)
+    assert body["champion_row"]["country"] == "USA"
 
 
 def test_the_demand_ceiling_reports_which_ruler_was_used(client: TestClient) -> None:

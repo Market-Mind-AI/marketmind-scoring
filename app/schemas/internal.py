@@ -306,3 +306,29 @@ class SetChampionRequest(BaseModel):
     # A marca desta análise, quando há. É ela que decide QUAL vocabulário
     # medir — sem ela uma análise de marca mediria a categoria.
     brand_key: uuid.UUID | None = None
+
+
+class CrownChampionRequest(BaseModel):
+    entity_key: uuid.UUID
+    period_key: str = Field(..., min_length=1)
+    requested_countries: list[str] = Field(..., min_length=1)
+    # As linhas de MOS dos países pedidos, como POST /mos/compute as devolveu.
+    # Só `country` e `mos` são lidos.
+    requested_results: list[dict[str, Any]] = []
+    brand_key: uuid.UUID | None = None
+
+
+class CrownChampionResponse(BaseModel):
+    # Nulo quando nada foi pontuável — nem pedido, nem candidato.
+    champion_country: str | None = None
+    champion_mos: float | None = None
+    # O campeão é um dos países pedidos.
+    requested: bool = False
+    # A linha de MOS do campeão quando ele NÃO foi pedido, no formato de POST
+    # /mos/compute, para entrar no resultado ao lado das pedidas.
+    champion_row: dict[str, Any] | None = None
+    # O campeão guardado para este período e esta régua foi reaproveitado, e os
+    # candidatos não foram pontuados de novo.
+    from_cache: bool = False
+    # A régua contra a qual o campeão foi medido (nula = régua fixa).
+    demand_ceiling: float | None = None

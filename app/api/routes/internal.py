@@ -40,6 +40,8 @@ from app.schemas.internal import (
     CandidatesCoverageRequest,
     CandidatesCoverageResponse,
     CompleteAnalysisRequest,
+    CrownChampionRequest,
+    CrownChampionResponse,
     DemandCeilingRequest,
     DemandCeilingResponse,
     EnrichTermsRequest,
@@ -60,6 +62,7 @@ from app.schemas.internal import (
     ScoredCandidate,
     SetChampionRequest,
 )
+from app.schemas.mos import MosResultResponse
 from app.services.analysis_service import AnalysisService
 from app.services.explanation_client import ExplanationClient
 from app.services.weight_calibration_service import WeightCalibrationService
@@ -477,7 +480,9 @@ async def enrich_terms(
     return EnrichTermsResponse(
         entity_key=request.entity_key,
         countries_with_terms=sorted(markets.keys()),
-        reference_candidates=len(entity.reference_candidates or []),
+        # Os DESTA análise: numa de marca, os candidatos do produto contavam
+        # zero ou os de outra pergunta.
+        reference_candidates=len(await servico.candidatos_de_referencia(entity, marca)),
     )
 
 
@@ -534,11 +539,12 @@ async def ensure_coverage(
         "reference-market candidates, so those have to be collected regardless "
         "of which countries were asked about — that is what keeps the ruler "
         "stable instead of moving with each query.\n\n"
-        "When champion_cached comes back true the collection is skipped, and "
-        "the stored champion comes with it — the caller needs the figure, not "
-        "just the fact, because a stored champion that a requested market now "
-        "beats has to be replaced rather than crowned again.\n\n"
-        "Skip the collection when champion_cached is already true. Candidate demand is "
+        "When champion_cached comes back true the collection was skipped: the "
+        "period already has a champion computed against the CURRENT demand "
+        "ruler. A champion computed against an older ruler does not count. "
+        "champion_country/champion_mos are deprecated — crowning is POST "
+        "/internal/champion/crown's.\n\n"
+        "Candidate demand is "
         "the slowest collection in the system and re-running it produces the "
         "same answer: three consecutive analyses of one product took 594s, 203s "
         "and 396s, and nearly all of the repeat cost was this work redone."
@@ -548,18 +554,25 @@ async def candidates_coverage(
     request: CandidatesCoverageRequest, session: AsyncSession = Depends(get_session)
 ) -> CandidatesCoverageResponse:
     entity = await _entity(session, request.entity_key)
-    marca_cache = await _marca(session, request.brand_key)
-    cached, _pais, _mos = await ProductRepository(session).champion_for(
-        entity, marca_cache.brand_key if marca_cache is not None else None, request.period_key
+    marca = await _marca(session, request.brand_key)
+    servico = AnalysisService(session)
+    # O campeão guardado só poupa a coleta quando foi calculado contra a régua
+    # de agora, medida do que já está guardado. Se a régua mudou, os candidatos
+    # são coletados e o campeão é recalculado.
+    teto, _regua, _novo = await servico.measure_demand_ceiling(
+        entity, request.requested_countries, request.period_key, marca=marca
+    )
+    cached, pais, mos = await ProductRepository(session).champion_for(
+        entity, marca.brand_key if marca is not None else None, request.period_key, demand_ceiling=teto
     )
     tarefas: list = []
     reuso: dict[str, Any] = {}
     if not cached:
-        tarefas = await AnalysisService(session).ensure_candidates_coverage(
+        tarefas = await servico.ensure_candidates_coverage(
             entity,
             request.requested_countries,
             period_key=request.period_key,
-            marca=await _marca(session, request.brand_key),
+            marca=marca,
             reuse_report=reuso,
         )
         await session.commit()
@@ -569,8 +582,10 @@ async def candidates_coverage(
         reused=reuso.get("reused", {}),
         related_fresh=int(reuso.get("related_fresh") or 0),
         champion_cached=cached,
-        champion_country=entity.champion_country if cached else None,
-        champion_mos=float(entity.champion_mos) if cached and entity.champion_mos is not None else None,
+        # O da marca quando há marca: devolver `entity.champion_*` coroava o
+        # campeão do PRODUTO numa análise de marca.
+        champion_country=pais if cached else None,
+        champion_mos=float(mos) if cached and mos is not None else None,
     )
 
 
@@ -603,7 +618,10 @@ async def demand_ceiling(
     "/candidates/score",
     response_model=ScoreCandidatesResponse,
     summary="Score the product's reference markets",
+    deprecated=True,
     description=(
+        "DEPRECATED — POST /internal/champion/crown scores the candidates and "
+        "crowns the champion in one call.\n\n"
         "Scores the reference-market candidates the caller did not ask about. "
         "The MOS uses fixed anchors, so this never changes what a requested "
         "country scores — which is what makes it safe to surface the best of "
@@ -641,7 +659,10 @@ async def score_candidates(
     "/champion",
     response_model=AnalysisStateResponse,
     summary="Record the product's best known market for a period",
+    deprecated=True,
     description=(
+        "DEPRECATED — POST /internal/champion/crown decides and stores the "
+        "champion itself.\n\n"
         "Stores which market this product scores highest in, so a later "
         "analysis reuses it instead of recollecting the candidates.\n\n"
         "A null country is a real outcome and must be recorded: it means "
@@ -657,12 +678,60 @@ async def set_champion(
 ) -> AnalysisStateResponse:
     entity = await _entity(session, request.entity_key)
     marca = await _marca(session, request.brand_key)
+    # A régua de agora vai junto: é o que diz para qual régua este campeão vale.
+    teto, _regua, _novo = await AnalysisService(session).measure_demand_ceiling(
+        entity, [request.country] if request.country else [], request.period_key, marca=marca
+    )
     await ProductRepository(session).set_champion(
         entity,
         country=request.country,
         mos=None if request.mos is None else Decimal(str(request.mos)),
         period_key=request.period_key,
+        demand_ceiling=teto,
         brand_key=marca.brand_key if marca is not None else None,
     )
     await session.commit()
     return AnalysisStateResponse(request_id=request.entity_key, status="stored")
+
+
+@router.post(
+    "/champion/crown",
+    response_model=CrownChampionResponse,
+    summary="Crown the product's best market, requested or not",
+    description=(
+        "Given the requested countries' MOS rows, answers which market is the "
+        "product's best for the period — one of the requested ones or a "
+        "reference candidate nobody asked about — and stores it.\n\n"
+        "Decided here because the ruler is here: the stored champion is reused "
+        "only when it was computed against the current demand ruler, otherwise "
+        "the candidates are scored again. Ties go to the requested market. "
+        "When the champion was not requested, its MOS row comes back in "
+        "`champion_row`, ready to be delivered next to the requested rows.\n\n"
+        "Call it after POST /mos/compute and before building the evidence: the "
+        "evidence packet reads the champion stored here."
+    ),
+)
+async def crown_champion(
+    request: CrownChampionRequest, session: AsyncSession = Depends(get_session)
+) -> CrownChampionResponse:
+    entity = await _entity(session, request.entity_key)
+    coroado = await AnalysisService(session).crown_champion(
+        entity=entity,
+        requested=request.requested_countries,
+        requested_results=request.requested_results,
+        period_key=request.period_key,
+        marca=await _marca(session, request.brand_key),
+    )
+    return CrownChampionResponse(
+        champion_country=coroado.country,
+        champion_mos=coroado.mos,
+        requested=coroado.requested,
+        champion_row=_linha_de_mos(coroado.row) if coroado.row is not None else None,
+        from_cache=coroado.from_cache,
+        demand_ceiling=coroado.demand_ceiling,
+    )
+
+
+def _linha_de_mos(row: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Uma linha de MOS no formato de POST /mos/compute."""
+    return MosResultResponse.model_validate(row, from_attributes=True).model_dump(mode="json")
