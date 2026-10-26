@@ -10,7 +10,7 @@ from app.domain.enums import DataSource, IngestionRunStatus, JobTaskStatus
 from app.repositories.country_repository import CountryRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.coverage import CoverageGap, GapStatus, JobTaskResult
-from app.services.collection_client import CollectionClient, CollectionRequest
+from app.services.collection_client import CollectionClient, CollectionRequest, resolve_source_country_code
 
 
 class CoverageService:
@@ -90,17 +90,10 @@ class CoverageService:
         return stale
 
     async def _codigo_para(self, source: DataSource, iso3: str) -> str | None:
-        """O código com que ESTE serviço indexa o país.
-
-        World Bank e OECD respondem por ISO3; o UN Data guarda ISO2. Não há
-        convenção comum a seguir — o que existe é a tabela `countries`, que tem
-        as duas grafias, então a tradução acontece aqui e não vira suposição
-        espalhada pelo código.
-        """
-        if source != DataSource.UNDATA:
-            return iso3
+        """O código com que ESTE serviço indexa o país — o mesmo com que ele
+        foi coletado, dito por `resolve_source_country_code`."""
         pais = await self._country_repo.get_by_iso3(iso3)
-        return pais.iso2 if pais is not None else None
+        return resolve_source_country_code(source, pais) if pais is not None else None
 
     async def check_coverage(self, gaps: list[CoverageGap]) -> list[GapStatus]:
         """Pure read — never dispatches collection. Used by callers that want to

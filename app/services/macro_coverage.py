@@ -34,6 +34,7 @@ from app.core.logging import logger
 from app.domain.enums import DataSource, JobTaskStatus
 from app.repositories.country_repository import CountryRepository
 from app.schemas.coverage import CoverageGap
+from app.services.collection_client import resolve_source_country_code
 from app.services.coverage_service import CoverageService
 from app.services.indicators.oecd import RAW_INDICATOR_CODES as OECD_RAW_CODES
 from app.services.indicators.undata import RAW_INDICATOR_CODES as UNDATA_RAW_CODES
@@ -61,17 +62,21 @@ def fontes_sem_cobertura_de(country) -> frozenset[DataSource]:  # noqa: ANN001
     fonte. Sem código, a fonte não o conhece — e é isso que faz disto um dado
     verificável em vez de uma lista de exceções mantida à mão: o mapeamento já
     precisa existir para a coleta funcionar, e a ausência dele é a resposta.
+    Quem diz qual coluna vale para qual fonte é `resolve_source_country_code`,
+    o mesmo que a coleta usa: as duas perguntas não podem ter respostas
+    diferentes.
 
     Medido no armazém do OECD em 2026-09-22: o índice de preços imobiliários
     (RHP) tem série para 22 dos 24 países suportados. Argentina e Peru não
     estão, e eram duas tarefas falhando todas as noites desde sempre.
     """
-    sem: set[DataSource] = set()
-    if getattr(country, "oecd_ref_area", None) is None:
-        sem.add(DataSource.OECD)
-    if getattr(country, "undata_location_id", None) is None:
-        sem.add(DataSource.UNDATA)
-    return frozenset(sem)
+    if country is None:
+        return frozenset({DataSource.OECD, DataSource.UNDATA})
+    return frozenset(
+        fonte
+        for fonte in (DataSource.WORLDBANK, DataSource.OECD, DataSource.UNDATA)
+        if resolve_source_country_code(fonte, country) is None
+    )
 
 
 def macro_gaps(country_iso3: str, *, fontes_sem_cobertura: frozenset[DataSource] = frozenset()) -> list[CoverageGap]:

@@ -85,24 +85,39 @@ def _require(params: dict[str, Any], key: str) -> Any:
     return value
 
 
-def resolve_source_country_code(source: DataSource, country: Country) -> str:
+def resolve_source_country_code(source: DataSource, country: Country, *, reading: bool = False) -> str | None:
+    """O código do país NAQUELA fonte, ou None quando a fonte não o cobre.
+
+    O único lugar que responde isso. Eram cinco, cada um com a sua ordem de
+    preferência: a coleta da OCDE caía para o ISO3 quando o país não tinha
+    `oecd_ref_area`, enquanto a cobertura dizia que esse mesmo país não era da
+    OCDE; o frescor perguntava ao World Bank pelo ISO3 e a coleta pelo id do
+    próprio Banco. Cada coluna de `countries` é o código do país naquela fonte,
+    e a ausência dela é a resposta "esta fonte não o conhece".
+
+    `reading`: a leitura do World Bank é por ISO2, porque o serviço grava cada
+    observação com o `country_iso2` que o próprio Banco devolve; a coleta e o
+    frescor são pelo id dele. As outras fontes leem pelo mesmo código com que
+    coletam.
+    """
     if source == DataSource.PYTRENDS:
         code = country.pytrends_geo or country.iso2
     elif source == DataSource.WORLDBANK:
-        code = country.worldbank_country_id or country.iso3
+        code = country.iso2 if reading else (country.worldbank_country_id or country.iso3)
     elif source == DataSource.OECD:
-        code = country.oecd_ref_area or country.iso3
-    else:  # UNDATA
-        code = country.iso2
-    if not code:
-        raise CollectionDispatchError(f"No {source.value} country code mapping for {country.iso3}")
-    return code
+        code = country.oecd_ref_area
+    else:  # UNDATA guarda por ISO2, e só conhece o país que tem location_id (o M49 que a coleta exige)
+        code = country.iso2 if country.undata_location_id else None
+    return code or None
 
 
 def _require_country_code(source: DataSource, country: Country | None) -> str:
     if country is None:
         raise CollectionDispatchError(f"{source.value} requires a country, none was given")
-    return resolve_source_country_code(source, country)
+    code = resolve_source_country_code(source, country)
+    if code is None:
+        raise CollectionDispatchError(f"No {source.value} country code mapping for {country.iso3}")
+    return code
 
 
 def _build_pytrends_request(indicator_code: str, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -151,15 +166,12 @@ def _build_request(req: CollectionRequest) -> tuple[str, dict[str, Any]]:
             payload["end_period"] = params["end_period"]
         return "/indicators/collect", payload
 
-    # UNDATA — needs the UN M49 numeric location_id, no ISO-code fallback exists.
+    # UNDATA — needs the UN M49 numeric location_id, no ISO-code fallback
+    # exists; a country without one has no UN Data code at all.
     undata_country_code = _require_country_code(DataSource.UNDATA, req.country)
-    location_id = req.country.undata_location_id if req.country is not None else None
-    if not location_id:
-        country_label = req.country.iso3 if req.country is not None else "<none>"
-        raise CollectionDispatchError(f"No UN Data location_id mapping for {country_label}")
     return "/indicators/collect", {
         "country": undata_country_code,
-        "location_id": int(location_id),
+        "location_id": int(req.country.undata_location_id),  # type: ignore[union-attr, arg-type]
         "start_year": _require(params, "start_year"),
         "end_year": _require(params, "end_year"),
         "indicator_codes": [req.indicator_code],

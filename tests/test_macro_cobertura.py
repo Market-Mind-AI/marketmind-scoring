@@ -7,7 +7,14 @@ from app.services.macro_coverage import fontes_sem_cobertura_de, macro_gaps
 
 
 def _pais(**campos) -> SimpleNamespace:
-    base = {"iso3": "BRA", "oecd_ref_area": "BRA", "undata_location_id": "076"}
+    base = {
+        "iso3": "BRA",
+        "iso2": "BR",
+        "worldbank_country_id": None,
+        "pytrends_geo": None,
+        "oecd_ref_area": "BRA",
+        "undata_location_id": "076",
+    }
     return SimpleNamespace(**{**base, **campos})
 
 

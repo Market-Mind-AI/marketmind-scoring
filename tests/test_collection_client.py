@@ -42,16 +42,22 @@ class TestResolveSourceCountryCode:
     def test_worldbank_falls_back_to_iso3(self) -> None:
         assert resolve_source_country_code(DataSource.WORLDBANK, _country()) == "ESP"
 
-    def test_oecd_falls_back_to_iso3(self) -> None:
-        assert resolve_source_country_code(DataSource.OECD, _country()) == "ESP"
+    def test_oecd_without_ref_area_is_not_covered(self) -> None:
+        # Sem `oecd_ref_area` a OCDE não conhece o país. Cair para o ISO3 era
+        # coletar um código que a própria cobertura dizia não existir.
+        assert resolve_source_country_code(DataSource.OECD, _country()) is None
+        assert resolve_source_country_code(DataSource.OECD, _country(oecd_ref_area="ESP")) == "ESP"
+
+    def test_worldbank_is_read_by_iso2(self) -> None:
+        assert resolve_source_country_code(DataSource.WORLDBANK, _country(), reading=True) == "ES"
 
     def test_undata_uses_iso2(self) -> None:
         assert resolve_source_country_code(DataSource.UNDATA, _country()) == "ES"
+        assert resolve_source_country_code(DataSource.UNDATA, _country(undata_location_id=None)) is None
 
-    def test_raises_when_no_code_available(self) -> None:
+    def test_none_when_no_code_available(self) -> None:
         country = _country(iso2=None, pytrends_geo=None)
-        with pytest.raises(CollectionDispatchError):
-            resolve_source_country_code(DataSource.PYTRENDS, country)
+        assert resolve_source_country_code(DataSource.PYTRENDS, country) is None
 
 
 class TestBuildRequest:
