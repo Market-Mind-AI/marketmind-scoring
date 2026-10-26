@@ -145,23 +145,6 @@ class NarrateRequest(BaseModel):
     language: NarrativeLanguage | None = None
 
 
-class ReviseNarrativeRequest(BaseModel):
-    """Segunda passada sobre um texto JÁ ENTREGUE.
-
-    Existe porque a checagem de números fica em zero e a de afirmações não:
-    medido em 23/09/2026, `hallucination_rate=0.0` (0 de 134 números) com 11 e
-    13 afirmações sem respaldo na mesma execução. O invariante do projeto — o
-    modelo nunca calcula um número — é o que torna a primeira medição exata, e
-    não protege contra inventar a conclusão.
-    """
-
-    narrative: str = Field(..., min_length=1)
-    claims: list[str] = Field(..., min_length=1)
-    # O mesmo idioma da narrativa: o pedido de revisão sai nele, senão um
-    # pedido em inglês sobre um texto em espanhol convida a traduzi-lo.
-    language: NarrativeLanguage | None = None
-
-
 class NarrateResponse(BaseModel):
     # None when the model failed. Best-effort by design: the numbers are the
     # answer, the prose is a reading of them, and a missing reading never

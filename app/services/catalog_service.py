@@ -59,6 +59,7 @@ com limiar.
 
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,7 +71,7 @@ from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.repositories.product_repository import ProductRepository, TrigramOutcome
 from app.schemas.catalog import CatalogResolveResponse
-from app.services.catalog_matcher import CatalogMatcher
+from app.services.catalog_matcher import CatalogMatcher, _describe
 from app.services.embedding_client import EmbeddingClient, EmbeddingError, vector_literal
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.vocabulary_window import vocabulary_is_fixed
@@ -271,6 +272,8 @@ class CatalogService:
         defining_attributes: list[str] | None = None,
         antagonist_products: list[str] | None = None,
         model: str | None = None,
+        estimated_price: float | None = None,
+        price_currency: str | None = None,
     ) -> CatalogResolveResponse:
         """`text` é o NOME GENÉRICO do produto, sem marca. A marca vem separada,
         e desde 24/09/2026 ela NÃO cria entidade: o catálogo tem um produto por
@@ -330,6 +333,9 @@ class CatalogService:
             entity.defining_attributes = list(dict.fromkeys(defining_attributes))
         if antagonist_products and not entity.antagonist_products:
             entity.antagonist_products = list(dict.fromkeys(antagonist_products))
+        if estimated_price is not None and entity.estimated_price is None:
+            entity.estimated_price = Decimal(str(estimated_price))
+            entity.price_currency = price_currency
         if marca is not None:
             resolvido.marca = marca
             if localized_markets:
@@ -782,6 +788,39 @@ class CatalogService:
                     f"({p.distancia_antagonico:.3f}); the embedding cannot tell which side it is on"
                 )
         return evidencias
+
+    async def candidatos_para_identificacao(self, texto: str) -> list[tuple[ProductCatalog, str]]:
+        """Os produtos do catálogo que o texto do usuário pode ser, descritos
+        para a chamada de identificação decidir.
+
+        Os mesmos passos de recuperação da resolução — trigram, com o que ele
+        vetou, e os vizinhos por vetor —, só que ANTES do modelo: quem escolhe
+        é a identificação, que já vai ser chamada de qualquer jeito e sabe
+        dizer a marca. Nenhum deles aceita sozinho; a regra medida em
+        13/10/2026 continua (o vetor recupera, quem decide é o modelo).
+        """
+        generico = normalize_alias(texto)
+        if not generico:
+            return []
+        trigram = await self._repo.trigram_search(generico)
+        semanticos = await self._busca_semantica(generico, brand_key=None)
+        candidatos: list[ProductCatalog] = []
+        for entidade in [*([trigram.match.product] if trigram.match else []), *trigram.vetoed, *semanticos]:
+            if entidade.merged_into is None and all(c.entity_key != entidade.entity_key for c in candidatos):
+                candidatos.append(entidade)
+        candidatos = candidatos[: settings.catalog_identify_candidates]
+        evidencias = await self._evidencias_de_polaridade(generico, candidatos)
+        descritos: list[tuple[ProductCatalog, str]] = []
+        for entidade in candidatos:
+            linhas = [_describe(entidade, evidencia=evidencias.get(entidade.entity_key))]
+            for marca, termos in (await self._repo.brand_terms(entidade.entity_key)).items():
+                linhas.append(f"  sold as {marca}: {', '.join(termos[:8])}")
+            if entidade.defining_attributes:
+                linhas.append(f"  what makes it this product: {'; '.join(entidade.defining_attributes)}")
+            if entidade.antagonist_products:
+                linhas.append(f"  NOT these products: {'; '.join(entidade.antagonist_products)}")
+            descritos.append((entidade, "\n".join(linhas)))
+        return descritos
 
     async def _vetorizar_pendentes(self, entity_key: uuid.UUID) -> None:
         """Gera o vetor dos aliases que esta resolução acabou de gravar.

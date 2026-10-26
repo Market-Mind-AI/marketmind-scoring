@@ -214,6 +214,53 @@ class ProductRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def owners_of_search_term(self, termo: str) -> set[tuple[uuid.UUID, uuid.UUID | None]]:
+        """Quem declara `termo` entre os seus termos de busca: (produto, marca).
+
+        Os dois lugares onde o vocabulário mora — `brand_markets` para o de uma
+        marca, `localized_markets` para o do produto sem marca. Um termo de
+        busca é o que o comprador digita para ESTE produto, então o texto igual
+        a um deles identifica o produto sem modelo nenhum. Comparado sem
+        caixa e com espaços normalizados; quem chama confere a forma exata.
+        """
+        consulta = text(
+            """
+            SELECT bm.entity_key, bm.brand_key
+              FROM brand_markets bm
+              JOIN product_catalog pc ON pc.entity_key = bm.entity_key AND pc.merged_into IS NULL
+             CROSS JOIN LATERAL jsonb_array_elements_text(
+                   CASE WHEN jsonb_typeof(bm.market->'search_terms') = 'array'
+                        THEN bm.market->'search_terms' ELSE '[]'::jsonb END) t
+             WHERE lower(regexp_replace(btrim(t), '\\s+', ' ', 'g')) = :termo
+            UNION
+            SELECT pc.entity_key, NULL::uuid
+              FROM product_catalog pc
+             CROSS JOIN LATERAL jsonb_each(
+                   CASE WHEN jsonb_typeof(pc.localized_markets) = 'object'
+                        THEN pc.localized_markets ELSE '{}'::jsonb END) m
+             CROSS JOIN LATERAL jsonb_array_elements_text(
+                   CASE WHEN jsonb_typeof(m.value->'search_terms') = 'array'
+                        THEN m.value->'search_terms' ELSE '[]'::jsonb END) t
+             WHERE pc.merged_into IS NULL
+               AND lower(regexp_replace(btrim(t), '\\s+', ' ', 'g')) = :termo
+            """
+        )
+        linhas = await self._session.execute(consulta, {"termo": " ".join(termo.lower().split())})
+        return {(linha[0], linha[1]) for linha in linhas.all()}
+
+    async def brand_terms(self, entity_key: uuid.UUID) -> dict[str, list[str]]:
+        """Cada marca já analisada neste produto, com os termos de busca dela."""
+        linhas = await self._session.execute(
+            select(Brand.name, BrandMarket.market)
+            .join(Brand, Brand.brand_key == BrandMarket.brand_key)
+            .where(BrandMarket.entity_key == entity_key)
+        )
+        marcas: dict[str, list[str]] = {}
+        for nome, market in linhas.all():
+            termos = marcas.setdefault(nome, [])
+            termos.extend(t for t in (market or {}).get("search_terms") or [] if t and t not in termos)
+        return marcas
+
     async def bump_alias_hit(self, alias: ProductAlias) -> None:
         alias.hit_count += 1
         await self._session.flush()

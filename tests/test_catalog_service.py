@@ -362,3 +362,26 @@ async def test_recording_a_decided_alias_twice_repoints_instead_of_failing(db_se
 
     found = await repo.get_entity_by_alias_exact(alias, "Toys")
     assert found is not None and found[1].entity_key == other.entity_key
+
+
+async def test_a_search_term_names_its_owner_with_or_without_a_brand(db_session: AsyncSession) -> None:
+    """A identificação léxica: o texto igual a um termo de busca gravado
+    identifica o produto — e a marca, quando o termo é dela."""
+    from app.repositories.product_repository import ProductRepository
+
+    sufixo = uuid.uuid4().hex[:8]
+    repo = ProductRepository(db_session)
+    generico = await repo.create_entity(
+        canonical_title=f"air fryer {sufixo}",
+        localized_markets={"ESP": {"primary_name": f"freidora {sufixo}", "search_terms": [f"Freidora  {sufixo}"]}},
+    )
+    impressora = await repo.create_entity(canonical_title=f"U1 3D Printer {sufixo}")
+    marca = await repo.get_or_create_brand(name=f"Marca {sufixo}")
+    await repo.save_brand_markets(
+        impressora.entity_key, marca.brand_key, {"ESP": {"search_terms": [f"marca {sufixo} u1"]}}
+    )
+    await db_session.commit()
+
+    assert await repo.owners_of_search_term(f"freidora {sufixo}") == {(generico.entity_key, None)}
+    assert await repo.owners_of_search_term(f"MARCA {sufixo} U1") == {(impressora.entity_key, marca.brand_key)}
+    assert await repo.owners_of_search_term(f"marca {sufixo}") == set(), "parte de um termo não é o termo"

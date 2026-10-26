@@ -543,16 +543,3 @@ def test_narrate_writes_in_the_language_the_analysis_asked_for(client: TestClien
 
     assert response.status_code == 200
     assert narrate.await_args.kwargs["language"] == "es"
-
-
-def test_the_revision_is_asked_for_in_the_same_language(client: TestClient) -> None:
-    revise = AsyncMock(return_value="Texto revisado")
-    with patch("app.services.explanation_client.ExplanationClient.revise", revise):
-        response = client.post(
-            "/internal/narrate/revise",
-            json={"narrative": "España es la mejor apuesta.", "claims": ["no cubre costes"], "language": "es"},
-            headers=_HEADERS,
-        )
-
-    assert response.status_code == 200
-    assert revise.await_args.kwargs["language"] == "es"

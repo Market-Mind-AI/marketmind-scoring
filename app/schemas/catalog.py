@@ -126,7 +126,7 @@ class IdentifyImageRequest(BaseModel):
 class IdentifyImageResponse(BaseModel):
     entity_key: uuid.UUID
     canonical_title: str
-    method: str  # "alias" | "trigram" | "llm" | "created"
+    method: str  # "lexical" | "catalog" (já no catálogo, nada adivinhado) | "alias" | "trigram" | "llm" | "created"
     # Same field names as AnalyzeRequest (app/schemas/analyze.py) on purpose —
     # the frontend passes these straight through, with whatever the user
     # corrected, into POST /analyze.

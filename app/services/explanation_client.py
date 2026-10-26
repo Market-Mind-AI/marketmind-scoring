@@ -491,73 +491,6 @@ _COUNTRY_RULE_ES = {
 _RULER_SCOPE_ES = {True: "de la puntuación del mercado analizado", False: "del ranking"}
 
 
-
-# A segunda passada. Só entra quando o juiz achou afirmações que a evidência não
-# sustenta — medido em execuções reais de 23/09/2026: os números estavam certos
-# (`hallucination_rate=0.0`, 0 de 134) e mesmo assim o texto afirmava "os EUA
-# não fazem parte do ranking" e "a Espanha é uma aposta de exportação mais
-# coerente", coisas que o pacote não diz.
-#
-# É a exposição que sobra depois do invariante do projeto. Nenhum número vem do
-# modelo, e é isso que torna a checagem de número exata e gratuita; mas nada
-# impedia o modelo de inventar a CONCLUSÃO. Numa defesa, "o modelo recomendou
-# exportar com dados que não cobrem custo nem tarifa" é pior de responder que um
-# número errado.
-#
-# Reescrever, e não apagar: a frase ofensiva costuma ter uma versão honesta
-# ("a Espanha lidera o MOS" no lugar de "a Espanha é a melhor aposta").
-_REVISION_RULE_PT = """REVISÃO. Você escreveu o texto abaixo e um revisor apontou afirmações que a
-evidência NÃO sustenta. Reescreva o texto inteiro corrigindo cada uma delas.
-
-Para cada apontamento, escolha uma saída:
-  - reformule até a frase dizer apenas o que a evidência mostra (em geral existe
-    uma versão honesta: "lidera o MOS" no lugar de "é a melhor aposta");
-  - ou remova a frase.
-
-Não acrescente informação nova, não mude nenhum número e mantenha a estrutura, o
-tamanho e o idioma do texto original. Devolva SOMENTE o texto revisado.
-
-AFIRMAÇÕES APONTADAS:
-{claims}
-
-TEXTO ORIGINAL:
-{narrative}"""
-
-_REVISION_RULE_EN = """REVISION. You wrote the text below and a reviewer flagged claims the evidence
-does NOT support. Rewrite the whole text, fixing each one.
-
-For each flagged claim, pick one:
-  - rephrase it until the sentence says only what the evidence shows (there is
-    usually an honest version: "leads on MOS" instead of "is the better bet");
-  - or drop the sentence.
-
-Add no new information, change no number, and keep the structure, length and
-language of the original. Return ONLY the revised text.
-
-FLAGGED CLAIMS:
-{claims}
-
-ORIGINAL TEXT:
-{narrative}"""
-
-_REVISION_RULE_ES = """REVISIÓN. Escribiste el texto de abajo y un revisor señaló afirmaciones que la
-evidencia NO sustenta. Reescribe el texto entero corrigiendo cada una de ellas.
-
-Para cada señalamiento, elige una salida:
-  - reformula hasta que la frase diga solo lo que la evidencia muestra (en general existe
-    una versión honesta: "lidera el MOS" en lugar de "es la mejor apuesta");
-  - o elimina la frase.
-
-No añadas información nueva, no cambies ningún número y mantén la estructura, la
-extensión y el idioma del texto original. Devuelve SOLAMENTE el texto revisado.
-
-AFIRMACIONES SEÑALADAS:
-{claims}
-
-TEXTO ORIGINAL:
-{narrative}"""
-
-
 # Quando a análise tem marca. Os números vieram do vocabulário DELA — "juan
 # valdez café", não "café" —, então chamar o resultado de "o mercado de café"
 # atribui à categoria o que se mediu de uma marca só. O contrário também
@@ -615,7 +548,6 @@ _DEMAND_TERMS_RULE = {"pt": _DEMAND_TERMS_RULE_PT, "en": _DEMAND_TERMS_RULE_EN, 
 _CHAMPION_RULE = {"pt": _CHAMPION_RULE_PT, "en": _CHAMPION_RULE_EN, "es": _CHAMPION_RULE_ES}
 _BRAND_RULE = {"pt": _BRAND_RULE_PT, "en": _BRAND_RULE_EN, "es": _BRAND_RULE_ES}
 _USER_PROMPT_BLOCK = {"pt": _USER_PROMPT_BLOCK_PT, "en": _USER_PROMPT_BLOCK_EN, "es": _USER_PROMPT_BLOCK_ES}
-_REVISION_RULE = {"pt": _REVISION_RULE_PT, "en": _REVISION_RULE_EN, "es": _REVISION_RULE_ES}
 
 
 def _language_key(language: str | None) -> str | None:
@@ -899,32 +831,3 @@ class ExplanationClient:
         except Exception as exc:  # noqa: BLE001 — best-effort enrichment, never fails the analysis
             logger.warning(f"Final LLM explanation skipped (provider unavailable or errored): {exc}")
             return None
-
-    async def revise(self, *, narrative: str, claims: list[str], language: str | None = None) -> str | None:
-        """Reescreve o texto tirando as afirmações que a evidência não sustenta.
-
-        Melhor esforço, como a narrativa: se falhar, o texto original continua
-        valendo — ele já foi entregue, e uma revisão que não sai é pior só do
-        que não ter tentado, nunca pior que apagar a explicação.
-
-        Ver `_REVISION_RULE_PT` para o porquê de reescrever em vez de apagar.
-        """
-        if not narrative or not claims:
-            return None
-        # O pedido de revisão sai no idioma do texto: o modelo é instruído a
-        # manter o idioma do original, e um pedido em inglês sobre um texto em
-        # espanhol é um convite a traduzi-lo.
-        modelo = _REVISION_RULE[_language_key(_narrative_language(language)) or "en"]
-        pedido = modelo.replace("{claims}", "\n".join(f"- {c}" for c in claims)).replace("{narrative}", narrative)
-        try:
-            revisto = await resolve_explanation_llm().complete(
-                system="You revise business narratives for factual support. Return only the revised text.",
-                user=pedido,
-            )
-        except Exception as exc:  # noqa: BLE001 — a revisão nunca pode custar o texto que já existe
-            logger.warning(f"Narrative revision skipped (provider unavailable or errored): {exc}")
-            return None
-        if not revisto or not str(revisto).strip():
-            logger.warning("Narrative revision returned nothing; keeping the original")
-            return None
-        return str(revisto)

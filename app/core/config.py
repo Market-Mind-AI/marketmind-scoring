@@ -224,6 +224,10 @@ class Settings(BaseSettings):
     voyage_timeout_seconds: float = 20.0
     # Quantas entidades o vizinho mais próximo põe na frente da lista do LLM.
     catalog_semantic_top_k: int = 10
+    # Quantos produtos do catálogo a identificação vê como candidatos, antes de
+    # decidir se o texto do usuário é um deles (catalog_service.
+    # candidatos_para_identificacao). Cada um é um bloco no prompt.
+    catalog_identify_candidates: int = 5
     # Tamanho da fila de candidatos do HNSW na consulta: maior = recall maior e
     # consulta mais lenta. 40 é o default do pgvector; ver
     # scripts/benchmark_semantic_recall.py para a curva medida.

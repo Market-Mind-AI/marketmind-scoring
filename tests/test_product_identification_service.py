@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,7 +45,11 @@ def _patch_collaborators(entity_key: uuid.UUID | None = None):
             entity_key=entity_key, canonical_title="Philips air fryer", method="created"
         )
     )
-    return catalog_cls, [catalog]
+    # Catálogo vazio: nem termo de busca igual nem candidato — o fluxo completo.
+    catalog_cls.return_value.candidatos_para_identificacao = AsyncMock(return_value=[])
+    repo = patch("app.services.product_identification_service.ProductRepository")
+    repo.start().return_value.owners_of_search_term = AsyncMock(return_value=set())
+    return catalog_cls, [catalog, repo]
 
 
 async def test_identify_resolves_by_generic_name_and_passes_brand_apart(mock_session: AsyncMock) -> None:
@@ -95,6 +100,7 @@ async def test_identify_hands_attributes_and_antagonists_to_the_catalog(mock_ses
             p.stop()
 
     kwargs = catalog_cls.return_value.resolve.call_args.kwargs
+    assert (kwargs["estimated_price"], kwargs["price_currency"]) == (89.9, "USD"), "gravado para a próxima vez"
     assert kwargs["defining_attributes"] == ["cooks with hot air"]
     assert kwargs["antagonist_products"] == ["oil deep fryer"]
 
@@ -172,3 +178,105 @@ async def test_identify_returns_no_markets_when_vision_finds_none(mock_session: 
 
     assert result.localized_markets is None
     assert result.reference_candidates is None
+
+
+# --- o catálogo antes do modelo (2026-10-26) ----------------------------------
+#
+# Cada identificação adivinhava o produto do zero, e a mesma impressora voltava
+# com 20–55, 18–65 e 20–60 anos de público: a nota oscilava sem dado novo.
+
+
+def _gravado():  # noqa: ANN202
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        entity_key=uuid.uuid4(),
+        canonical_title="U1 Multicolor 3D Printer",
+        category="3D Printers",
+        target_age_min=20,
+        target_age_max=55,
+        estimated_price=Decimal("999"),
+        price_currency="EUR",
+    )
+
+
+def _com_catalogo(*, donos: set, candidatos: list):  # noqa: ANN202
+    from types import SimpleNamespace
+
+    entidade = _gravado()
+    catalogo = patch("app.services.product_identification_service.CatalogService")
+    catalogo.start().return_value.candidatos_para_identificacao = AsyncMock(
+        return_value=[(entidade if c is None else c, "Candidate text") for c in candidatos]
+    )
+    repo = patch("app.services.product_identification_service.ProductRepository")
+    repo_mock = repo.start().return_value
+    repo_mock.owners_of_search_term = AsyncMock(return_value=donos)
+    repo_mock.get_by_entity_key = AsyncMock(return_value=entidade)
+    repo_mock.get_brand = AsyncMock(return_value=SimpleNamespace(name="Snapmaker", brand_key=uuid.uuid4()))
+    repo_mock.get_or_create_brand = AsyncMock(return_value=SimpleNamespace(name="Snapmaker", brand_key=uuid.uuid4()))
+    repo_mock.markets_for = AsyncMock(
+        return_value={"ESP": {"primary_name": "snapmaker u1", "search_terms": ["snapmaker u1"], "confidence": 0.9}}
+    )
+    return entidade, repo_mock, [catalogo, repo]
+
+
+async def test_a_search_term_of_one_product_is_answered_without_any_model(mock_session: AsyncMock) -> None:
+    entidade, _, patchers = _com_catalogo(donos={(uuid.uuid4(), uuid.uuid4())}, candidatos=[])
+    vision = AsyncMock()
+    try:
+        result = await ProductIdentificationService(mock_session, vision_client=vision).identify(
+            image_base64=None, image_media_type=None, hint_text="snapmaker u1", countries=["ESP"]
+        )
+    finally:
+        for p in patchers:
+            p.stop()
+
+    vision.identify_product.assert_not_awaited()
+    assert result.method == "lexical"
+    assert (result.product_name, result.brand) == (entidade.canonical_title, "Snapmaker")
+    assert (result.target_age_min, result.target_age_max) == (20, 55), "a faixa gravada, não um chute novo"
+    assert (result.estimated_price, result.price_currency) == (999.0, "EUR")
+    assert result.localized_markets["ESP"].search_terms == ["snapmaker u1"]
+
+
+async def test_a_term_two_products_declare_is_not_a_lexical_answer(mock_session: AsyncMock) -> None:
+    _, _, patchers = _com_catalogo(donos={(uuid.uuid4(), None), (uuid.uuid4(), None)}, candidatos=[])
+    catalog = patch("app.services.product_identification_service.CatalogService")
+    catalog_cls = catalog.start()
+    catalog_cls.return_value.candidatos_para_identificacao = AsyncMock(return_value=[])
+    catalog_cls.return_value.resolve = AsyncMock(
+        return_value=CatalogResolveResponse(entity_key=uuid.uuid4(), canonical_title="air fryer", method="created")
+    )
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification()
+    try:
+        result = await ProductIdentificationService(mock_session, vision_client=vision).identify(
+            image_base64=None, image_media_type=None, hint_text="air fryer", countries=["USA"]
+        )
+    finally:
+        for p in [catalog, *patchers]:
+            p.stop()
+
+    vision.identify_product.assert_awaited_once()
+    assert result.method == "created"
+
+
+async def test_a_candidate_the_model_recognises_comes_back_as_stored(mock_session: AsyncMock) -> None:
+    entidade, repo_mock, patchers = _com_catalogo(donos=set(), candidatos=[None])
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification(
+        product_name="", catalog_match=1, brand="Snapmaker", target_age_min=18, target_age_max=65
+    )
+    try:
+        result = await ProductIdentificationService(mock_session, vision_client=vision).identify(
+            image_base64=None, image_media_type=None, hint_text="impresora snapmaker u1", countries=["ESP"]
+        )
+    finally:
+        for p in patchers:
+            p.stop()
+
+    assert vision.identify_product.await_args.kwargs["candidates"] == ["Candidate text"]
+    assert result.method == "catalog"
+    assert result.entity_key == entidade.entity_key
+    assert (result.target_age_min, result.target_age_max) == (20, 55), "o modelo só diz a marca"
+    repo_mock.get_or_create_brand.assert_awaited_once()

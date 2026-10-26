@@ -118,6 +118,13 @@ class ProductIdentification(BaseModel):
             "be reported as product_found=false, not fabricated."
         ),
     )
+    catalog_match: int | None = Field(
+        default=None,
+        description=(
+            "The number of the catalog candidate that IS this product, when the request lists candidates and "
+            "one of them is the same product. Null when none is, or when no candidates were listed."
+        ),
+    )
     brand: str | None
     model: str | None = Field(
         default=None,
@@ -127,7 +134,8 @@ class ProductIdentification(BaseModel):
         default=None,
         description=(
             "The kind of product this is, specific enough to tell it apart from the other kinds sold under the "
-            "same generic name (the technology, format or variety that makes it a different product). English."
+            "same generic name (the technology, format or variety that makes it a different product). English. "
+            "For a named model, the type that model really has, even when the input says otherwise."
         ),
     )
     defining_attributes: list[str] = Field(
@@ -191,12 +199,25 @@ _INSTRUCTIONS = (
     "the text does not name or describe a concrete product (e.g. it is empty or just 'quero', 'hello', "
     "'test', or a question with no product), set `product_found`=false, leave `product_name` empty, and "
     "return no markets — do NOT invent, guess, or default to any product. "
+    "CATALOG CANDIDATES: when the request lists catalog candidates, first decide whether the input IS one "
+    "of them — the same product, same model and same type; not a broader or narrower product, not another "
+    "model of the same brand, and never one of the products a candidate lists as NOT itself. The brand does "
+    "not decide: a candidate is the same product whichever brands it is sold under, or none. A specific "
+    "model the input names decides it too: when a candidate is that model, it is the match even if the "
+    "input gives it a type or attribute the candidate does not have — the input is wrong about the "
+    "attribute, not about the product — unless another candidate is that same model with that attribute. "
+    "If it is, set "
+    "`catalog_match` to that candidate's number, `product_found`=true, `brand` to the brand the input names "
+    "(or null), and leave every other field empty: the catalog already holds them. If none is, set "
+    "`catalog_match`=null and identify the product as follows. "
     "Describe the product exactly as the input gives it: `brand`; `model` (the specific model, edition "
     "or reference named, or null); `product_type` (the kind of product, specific enough to tell it apart "
     "from the other kinds sold under the same generic name); `defining_attributes` (each attribute that, "
     "if changed, makes it a different product a buyer would not accept instead); and "
     "`antagonist_products` (the products most easily confused with it that are NOT it — the brand's other "
-    "models and types, and other products sharing its name). "
+    "models and types, and other products sharing its name). A named model is described as it really is: "
+    "when the input gives it a type or attribute that model does not have, keep the model and correct the "
+    "attribute, never invent a version of the model that does not exist. "
     "`product_name`: model + type + generic name (only the parts that exist), commonly-searched, plain "
     "ASCII, no brand/size/certification ('Jamon Iberico', not 'Jamón Ibérico'). "
     "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'); an "
@@ -251,6 +272,7 @@ class VisionClient:
         image_media_type: ImageMediaType | None,
         hint_text: str | None,
         countries: list[str],
+        candidates: list[str] | None = None,
     ) -> ProductIdentification:
         # The image is optional: identify from the photo when present, otherwise
         # purely from the user's text description (hint_text). At least one must
@@ -264,6 +286,9 @@ class VisionClient:
         if hint_text and hint_text.strip():
             label = "Additional context from the user" if image_base64 else "Product description from the user"
             prompt = f"{prompt}\n\n{label}: {hint_text}"
+        if candidates:
+            listagem = "\n".join(f"Candidate {n}:\n{c}" for n, c in enumerate(candidates, start=1))
+            prompt = f"{prompt}\n\nCatalog candidates:\n{listagem}"
         image = (
             ImageInput(base64_data=image_base64, media_type=image_media_type)
             if image_base64 and image_media_type
@@ -282,6 +307,9 @@ class VisionClient:
             raise VisionError("Vision LLM returned an unexpected result type")
         # Refuse hallucinated products: the model must report product_found=false
         # (not fabricate) when the input names no concrete product.
+        if result.catalog_match is not None and candidates and 1 <= result.catalog_match <= len(candidates):
+            return result
+        result.catalog_match = None
         if not result.product_found or not (result.product_name and result.product_name.strip()):
             raise ProductNotIdentifiedError(
                 "Could not identify a product — add a photo or describe the product in the prompt."

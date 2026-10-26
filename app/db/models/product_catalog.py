@@ -99,6 +99,10 @@ class ProductCatalog(Base):
     # contar o antagônico como demanda. NULL: identificado antes disso.
     defining_attributes: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     antagonist_products: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    # Só contexto, nunca pontuado (migration 059): guardado para que a
+    # identificação que encontra o produto no catálogo devolva o mesmo valor.
+    estimated_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    price_currency: Mapped[str | None] = mapped_column(nullable=True)
 
     # The product's standout reference market, cached here because it is a
     # property of the product and not of any one request: MOS uses fixed 100/0

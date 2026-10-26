@@ -12,12 +12,28 @@ result with what vision is unreliable at:
 Synchronous and lightweight, deliberately separate from POST /analyze (user
 request, 2026-07-08): the frontend shows this result and lets the user correct
 any field before submitting the full analysis.
+
+O CATÁLOGO VEM ANTES DO MODELO (2026-10-26). Cada identificação adivinhava o
+produto do zero (~21 s), e o que ela adivinhava mudava de uma vez para outra:
+a mesma impressora voltava com 20–55, 18–65 e 20–60 anos de público, e a nota
+oscilava sem nenhum dado novo. Agora, nesta ordem:
+
+  1. Léxico: o texto é exatamente um termo de busca que um único produto (e
+     marca) do catálogo declara. Devolve o que está gravado, sem modelo.
+  2. Candidatos: trigram e vetor trazem os produtos que o texto pode ser, e a
+     MESMA chamada de identificação decide se é um deles. Se for, devolve o
+     gravado; o modelo só diz a marca.
+  3. Nada resolveu: a identificação completa de antes, e o catálogo resolve.
 """
 
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import logger
+from app.db.models.brand import Brand
+from app.db.models.product_catalog import ProductCatalog
+from app.repositories.product_repository import ProductRepository
 from app.schemas.catalog import IdentifyImageResponse, ImageMediaType
 from app.services.catalog_service import CatalogService
 from app.services.vision_client import MarketTerms, VisionClient
@@ -73,6 +89,7 @@ class ProductIdentificationService:
         self._session = session
         self._vision_client = vision_client or VisionClient()
         self._catalog_service = CatalogService(session)
+        self._repo = ProductRepository(session)
 
     async def identify(
         self,
@@ -82,12 +99,34 @@ class ProductIdentificationService:
         hint_text: str | None,
         countries: list[str],
     ) -> IdentifyImageResponse:
+        texto = (hint_text or "").strip()
+        if texto and not image_base64:
+            donos = await self._repo.owners_of_search_term(texto)
+            if len(donos) == 1:
+                [(entity_key, brand_key)] = donos
+                entity = await self._repo.get_by_entity_key(entity_key)
+                if entity is not None:
+                    logger.info(f"Identificação léxica: {texto!r} é termo de busca de {entity.canonical_title!r}")
+                    marca = await self._repo.get_brand(brand_key)
+                    return await self._do_catalogo(entity, marca, countries, method="lexical")
+
+        candidatos = await self._catalog_service.candidatos_para_identificacao(texto) if texto else []
         identification = await self._vision_client.identify_product(
             image_base64=image_base64,
             image_media_type=image_media_type,
             hint_text=hint_text,
             countries=countries,
+            candidates=[descricao for _, descricao in candidatos] or None,
         )
+        if identification.catalog_match is not None:
+            entity = candidatos[identification.catalog_match - 1][0]
+            logger.info(f"Identificação pelo catálogo: {texto!r} é {entity.canonical_title!r}")
+            marca = (
+                await self._repo.get_or_create_brand(name=identification.brand, source="catalog_identification")
+                if identification.brand and identification.brand.strip()
+                else None
+            )
+            return await self._do_catalogo(entity, marca, countries, method="catalog")
 
         # Vision-only identify (fast): keep ONLY the terms the vision model
         # already returned. The heavy per-country enrichment (localized_markets)
@@ -117,6 +156,8 @@ class ProductIdentificationService:
             defining_attributes=identification.defining_attributes,
             antagonist_products=identification.antagonist_products,
             model=identification.model,
+            estimated_price=identification.estimated_price,
+            price_currency=identification.price_currency,
         )
 
         return IdentifyImageResponse(
@@ -133,4 +174,29 @@ class ProductIdentificationService:
             estimated_price=identification.estimated_price,
             price_currency=identification.price_currency,
             confidence=identification.confidence,
+        )
+
+    async def _do_catalogo(
+        self, entity: ProductCatalog, marca: Brand | None, countries: list[str], *, method: str
+    ) -> IdentifyImageResponse:
+        """O produto como o catálogo o guarda: nada é adivinhado de novo. O
+        vocabulário é o desta marca (ou do produto, sem marca), só dos países
+        pedidos; o que faltar o /analyze completa, como sempre."""
+        await self._session.commit()
+        mercados = await self._repo.markets_for(entity, marca.brand_key if marca is not None else None)
+        localized_markets = {c: mercados[c] for c in countries if _has_terms(mercados.get(c))}
+        return IdentifyImageResponse(
+            entity_key=entity.entity_key,
+            canonical_title=entity.canonical_title,
+            method=method,
+            product_name=entity.canonical_title,
+            brand=marca.name if marca is not None else None,
+            category=entity.category,
+            localized_markets=localized_markets or None,
+            reference_candidates=None,
+            target_age_min=entity.target_age_min,
+            target_age_max=entity.target_age_max,
+            estimated_price=float(entity.estimated_price) if entity.estimated_price is not None else None,
+            price_currency=entity.price_currency,
+            confidence=1.0,
         )

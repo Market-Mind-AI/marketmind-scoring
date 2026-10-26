@@ -55,7 +55,6 @@ from app.schemas.internal import (
     ProgressResponse,
     RegisterAnalysisRequest,
     RegisteredAnalysisResponse,
-    ReviseNarrativeRequest,
     ScoreCandidatesRequest,
     ScoreCandidatesResponse,
     ScoredCandidate,
@@ -409,32 +408,6 @@ async def narrate(request: NarrateRequest, session: AsyncSession = Depends(get_s
         language=request.language,
     )
     return NarrateResponse(narrative=narrative)
-
-
-@router.post(
-    "/narrate/revise",
-    response_model=NarrateResponse,
-    summary="Rewrite a narrative without the claims the evidence does not support",
-    description=(
-        "Second pass over a narrative that was ALREADY delivered. The numbers "
-        "are never touched — they do not come from a model in the first place, "
-        "which is what makes the numeric check exact.\n\n"
-        "What this fixes is the other half: sentences that assert something the "
-        "packet does not carry. Measured on 23/09/2026, a run with "
-        "`hallucination_rate=0.0` (0 of 134 figures) still claimed 'the USA is "
-        "not part of the ranking' and 'Spain is the more coherent export bet' — "
-        "the second of which the data cannot support at all, since it covers no "
-        "cost, tariff or sanitary requirement.\n\n"
-        "Best-effort: a revision that fails leaves the delivered text standing."
-    ),
-)
-async def revise_narrative(
-    request: ReviseNarrativeRequest, session: AsyncSession = Depends(get_session)
-) -> NarrateResponse:
-    revista = await ExplanationClient(session).revise(
-        narrative=request.narrative, claims=request.claims, language=request.language
-    )
-    return NarrateResponse(narrative=revista)
 
 
 # --- The steps that carry the analysis's own judgement ---
