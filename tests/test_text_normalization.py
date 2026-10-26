@@ -57,3 +57,14 @@ def test_as_term_list_tolerates_legacy_string_and_list() -> None:
     assert as_term_list(["a", "b"]) == ["a", "b"]
     assert as_term_list(None) == []
     assert as_term_list(["", "  ", "x"]) == ["x"]  # blanks dropped
+
+
+def test_categories_match_by_the_alias_normalization() -> None:
+    """Eram quatro regras: `casefold` em três lugares, `normalize_alias` no
+    trigram e igualdade exata no SQL."""
+    from app.utils.text import categorias_batem
+
+    assert categorias_batem("Eletrodomésticos", "eletrodomesticos")
+    assert categorias_batem("Home-Appliances", "home appliances")
+    assert not categorias_batem("Automotive", "Wildlife")
+    assert categorias_batem(None, "Wildlife"), "desconhecida de um lado não contradiz"

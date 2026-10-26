@@ -22,7 +22,7 @@ from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.db.models.product_excluded_term import ProductExcludedTerm
 from app.services.vocabulary_window import apply_candidates, apply_markets, vocabulary_is_fixed
-from app.utils.text import as_term_list, normalize_alias
+from app.utils.text import as_term_list, categorias_batem, normalize_alias
 from app.utils.time import utc_now
 
 
@@ -103,8 +103,7 @@ class ProductRepository:
         if not linhas:
             return None
         if category:
-            pedida = category.strip().casefold()
-            exatas = [linha for linha in linhas if (linha[0].category or "").strip().casefold() == pedida]
+            exatas = [linha for linha in linhas if linha[0].category and categorias_batem(linha[0].category, category)]
             if exatas:
                 return exatas[0][0], exatas[0][1]
             # Só as sem categoria declarada podem servir a um pedido com
@@ -412,8 +411,6 @@ class ProductRepository:
         )
         result = await self._session.execute(stmt)
 
-        categoria_consulta = normalize_alias(category) if category else ""
-
         melhor: TrigramMatch | None = None
         vetadas: list[ProductCatalog] = []
         for product, sim, melhor_negativa in result.all():
@@ -422,8 +419,7 @@ class ProductRepository:
             if float(melhor_negativa) >= float(sim):
                 vetadas.append(product)
                 continue
-            categoria_entidade = normalize_alias(product.category) if product.category else ""
-            if categoria_consulta and categoria_entidade and categoria_consulta != categoria_entidade:
+            if not categorias_batem(product.category, category):
                 logger.info(
                     f"Categoria divergente para {alias_normalized!r}: consulta {category!r} x "
                     f"{product.canonical_title!r} {product.category!r}; escalando para o LLM"
@@ -805,8 +801,18 @@ class ProductRepository:
                 vistos.add(produto.entity_key)
 
         if category:
+            # As grafias guardadas que são a MESMA categoria pela regra única
+            # (categorias_batem). Igualdade exata no SQL perdia 'Eletrodomésticos'
+            # contra 'eletrodomesticos'; e as categorias distintas do catálogo
+            # são poucas, então a comparação é feita aqui e o SQL só filtra.
+            distintas = (
+                await self._session.execute(
+                    select(ProductCatalog.category).distinct().where(ProductCatalog.category.is_not(None))
+                )
+            ).scalars()
+            mesmas = [c for c in distintas if categorias_batem(c, category)]
             result = await self._session.execute(
-                base.where(ProductCatalog.category == category).order_by(ProductCatalog.created_at.desc()).limit(limite)
+                base.where(ProductCatalog.category.in_(mesmas)).order_by(ProductCatalog.created_at.desc()).limit(limite)
             )
             for produto in result.scalars():
                 if produto.entity_key in vistos:

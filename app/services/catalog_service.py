@@ -78,7 +78,7 @@ from app.services.embedding_client import EmbeddingClient, EmbeddingError, vecto
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.vision_client import VisionClient
 from app.services.vocabulary_window import apply_candidates, apply_markets, vocabulary_is_fixed
-from app.utils.text import as_term_list, normalize_alias
+from app.utils.text import as_term_list, categorias_batem, normalize_alias
 from app.utils.time import utc_now
 
 
@@ -97,18 +97,6 @@ class _Resolvido:
     match_reasoning: str | None = None
     marca: Brand | None = None
     familia: ProductCatalog | None = None
-
-
-def _categorias_batem(guardada: str | None, pedida: str | None) -> bool:
-    """Se as duas categorias podem ser do mesmo produto.
-
-    Desconhecida de um dos lados não contradiz nada — a categoria é opcional e
-    vem de um modelo, então ausência nunca pode virar recusa. O que impede é
-    afirmação CONTRA afirmação.
-    """
-    if not guardada or not pedida:
-        return True
-    return guardada.strip().casefold() == pedida.strip().casefold()
 
 
 def _difere_em_qualificacao(consulta: str, titulo_casado: str) -> bool:
@@ -388,11 +376,11 @@ class CatalogService:
             # mesmo pedido ao LLM toda vez para reconfirmar o que já decidiu.
             # Igualdade estrita: um alias SEM categoria não decidiu nada sobre
             # esta — é o caso `jaguar`, que continua indo ao passo 3.
-            alias_desta_categoria = bool(category and alias_existente.category) and (
-                alias_existente.category.strip().casefold() == category.strip().casefold()
+            alias_desta_categoria = bool(category and alias_existente.category) and categorias_batem(
+                alias_existente.category, category
             )
             if (
-                alias_desta_categoria or _categorias_batem(entity.category, category)
+                alias_desta_categoria or categorias_batem(entity.category, category)
             ) and entity.brand_key == brand_key:
                 await self._repo.bump_alias_hit(alias_existente)
                 await self._atualizar(
@@ -401,7 +389,7 @@ class CatalogService:
                     reference_candidates=reference_candidates,
                 )
                 return _Resolvido(entity=entity, method="alias", marca=marca, familia=familia)
-            if not _categorias_batem(entity.category, category):
+            if not categorias_batem(entity.category, category):
                 logger.info(
                     f"Alias {chave!r} aponta para {entity.canonical_title!r} ({entity.category!r}), e este pedido "
                     f"diz {category!r}; escalando para o LLM em vez de decidir por texto igual"
@@ -780,7 +768,7 @@ class CatalogService:
         if entity is None:
             return {}
         mudancas: dict[str, tuple[str | None, str]] = {}
-        if category and entity.category and category.strip().casefold() != entity.category.strip().casefold():
+        if not categorias_batem(entity.category, category):
             mudancas["category"] = (entity.category, category)
         if (
             target_age_min is not None

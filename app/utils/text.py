@@ -78,6 +78,21 @@ def query_words(text: str) -> frozenset[str]:
     return frozenset(normalize_alias(text).split())
 
 
+def categorias_batem(guardada: str | None, pedida: str | None) -> bool:
+    """Se as duas categorias podem ser do mesmo produto.
+
+    Desconhecida de um dos lados não contradiz nada — a categoria é opcional e
+    vem de um modelo, então ausência nunca pode virar recusa. O que impede é
+    afirmação CONTRA afirmação, comparada pela normalização dos aliases: eram
+    quatro regras — `casefold` em três lugares, `normalize_alias` no trigram e
+    igualdade exata no SQL —, e 'Eletrodomésticos' batia num passo e divergia
+    no outro.
+    """
+    if not guardada or not pedida:
+        return True
+    return normalize_alias(guardada) == normalize_alias(pedida)
+
+
 def as_term_list(value: object) -> list[str]:
     """Coerce a localized_terms value to a clean list of terms, tolerating the
     legacy `{lang: "term"}` (single string) shape alongside `{lang: [terms]}`."""
