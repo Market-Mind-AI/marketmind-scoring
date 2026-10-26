@@ -576,3 +576,23 @@ def test_narrate_writes_in_the_language_the_analysis_asked_for(client: TestClien
 
     assert response.status_code == 200
     assert narrate.await_args.kwargs["language"] == "es"
+
+
+def test_running_accepts_the_deadline(client: TestClient) -> None:
+    request_id = client.post(
+        "/internal/analyses", json={"countries": ["ESP"], "canonical_title": "prazo"}, headers=_HEADERS
+    ).json()["request_id"]
+    resposta = client.post(
+        f"/internal/analyses/{request_id}/running", json={"deadline_at": "2026-10-27T12:00:00+00:00"}, headers=_HEADERS
+    )
+
+    assert resposta.status_code == 200
+    assert resposta.json()["status"] == "running"
+
+
+def test_running_without_a_body_still_works(client: TestClient) -> None:
+    request_id = client.post(
+        "/internal/analyses", json={"countries": ["ESP"], "canonical_title": "sem prazo"}, headers=_HEADERS
+    ).json()["request_id"]
+
+    assert client.post(f"/internal/analyses/{request_id}/running", headers=_HEADERS).json()["status"] == "running"

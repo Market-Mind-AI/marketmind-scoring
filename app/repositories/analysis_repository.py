@@ -1,5 +1,5 @@
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -102,6 +102,17 @@ class AnalysisRepository:
         analysis_request.status = "running"
         await self._session.flush()
         return True
+
+    async def set_deadline(self, analysis_request: AnalysisRequest, deadline_at: datetime) -> None:
+        """Até quando a análise pode insistir numa fonte fora do ar. Só a
+        primeira vez conta: cada retomada manda o prazo de novo, e aceitá-lo
+        adiaria o fim indefinidamente."""
+        if analysis_request.deadline_at is not None:
+            return
+        analysis_request.deadline_at = (
+            deadline_at.replace(tzinfo=UTC) if deadline_at.tzinfo is None else deadline_at.astimezone(UTC)
+        )
+        await self._session.flush()
 
     async def set_explanation(self, analysis_request: AnalysisRequest, explanation: str | None) -> None:
         """Attach the narrative to an already-completed analysis.

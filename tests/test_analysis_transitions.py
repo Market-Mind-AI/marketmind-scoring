@@ -34,3 +34,17 @@ async def test_a_finished_analysis_is_not_put_back_to_running() -> None:
 
     assert await repo.mark_running(analise) is False
     assert analise.status == "done"
+
+
+async def test_the_deadline_is_stored_once_and_never_pushed_forward() -> None:
+    """Lido pela varredura de retomada e pelo sentinela, e nunca escrito. Uma
+    retomada manda o prazo de novo e não pode adiá-lo."""
+    from datetime import UTC, datetime
+
+    repo = AnalysisRepository(AsyncMock())
+    analise = SimpleNamespace(deadline_at=None)
+
+    await repo.set_deadline(analise, datetime(2026, 10, 27, 12))
+    await repo.set_deadline(analise, datetime(2026, 10, 28, 12, tzinfo=UTC))
+
+    assert analise.deadline_at == datetime(2026, 10, 27, 12, tzinfo=UTC)

@@ -50,6 +50,7 @@ from app.schemas.internal import (
     EvidenceRequest,
     EvidenceResponse,
     FailAnalysisRequest,
+    MarkRunningRequest,
     NarrateRequest,
     NarrateResponse,
     ProgressRequest,
@@ -200,12 +201,22 @@ async def read_analysis(request_id: uuid.UUID, session: AsyncSession = Depends(g
 @router.post(
     "/analyses/{request_id}/running",
     response_model=AnalysisStateResponse,
-    summary="Mark an analysis as running",
+    summary="Mark an analysis as running, with its deadline",
+    description=(
+        "`deadline_at` (optional body) is how long the run may insist on a "
+        "source that is down. Stored the first time only — a resumed run sends "
+        "it again and must not push the end forward. The resume sweep and the "
+        "sentinel fail an analysis that is still stuck past it. An analysis that "
+        "already ended stays as it is and its status comes back."
+    ),
 )
-async def mark_running(request_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> AnalysisStateResponse:
+async def mark_running(
+    request_id: uuid.UUID, request: MarkRunningRequest | None = None, session: AsyncSession = Depends(get_session)
+) -> AnalysisStateResponse:
     analysis_request = await _load(session, request_id)
     repo = AnalysisRepository(session)
-    await repo.mark_running(analysis_request)
+    if await repo.mark_running(analysis_request) and request is not None and request.deadline_at is not None:
+        await repo.set_deadline(analysis_request, request.deadline_at)
     analysis_request.heartbeat_at = utc_now()
     await session.commit()
     return AnalysisStateResponse(request_id=analysis_request.id, status=analysis_request.status)

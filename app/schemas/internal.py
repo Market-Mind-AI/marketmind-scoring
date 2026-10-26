@@ -8,6 +8,7 @@ decides its own period cannot be replayed to the same answer.
 """
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -44,6 +45,15 @@ class RegisterAnalysisRequest(BaseModel):
 class RegisteredAnalysisResponse(BaseModel):
     request_id: uuid.UUID
     status: str
+
+
+class MarkRunningRequest(BaseModel):
+    # Até quando insistir numa fonte fora do ar, decidido por quem executa (o
+    # orquestrador dá 24h). Gravado na primeira vez e nunca adiado: uma
+    # retomada manda o prazo de novo, e cada uma empurraria o fim para frente.
+    # É o que a varredura de retomada e o sentinela leem para encerrar uma
+    # análise parada além do prazo — e nunca era escrito.
+    deadline_at: datetime | None = None
 
 
 class ProgressRequest(BaseModel):
