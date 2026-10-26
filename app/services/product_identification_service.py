@@ -37,6 +37,7 @@ from app.repositories.product_repository import ProductRepository
 from app.schemas.catalog import IdentifyImageResponse, ImageMediaType, LocalizedMarket
 from app.services.catalog_service import CatalogService
 from app.services.vision_client import MarketTerms, VisionClient
+from app.utils.text import as_term_list
 
 
 def _market_to_dict(market: MarketTerms) -> dict[str, Any]:
@@ -59,7 +60,10 @@ def _fallback_market(iso3: str, product_name: str, brand: str | None) -> dict[st
 
 
 def _has_terms(entry: dict[str, Any] | None) -> bool:
-    return bool(entry and entry.get("search_terms"))
+    """Se o mercado tem termos de busca. Pela mesma leitura de todo o resto
+    (as_term_list): uma lista de strings vazias, ou o formato antigo de string
+    solta, contava como termo para uns e não para outros."""
+    return bool(as_term_list((entry or {}).get("search_terms")))
 
 
 class ProductIdentificationService:

@@ -39,6 +39,7 @@ from app.core.logging import logger
 from app.prompts import prompt_text
 from app.services.llm.base import LLMError
 from app.services.llm.resolver import resolve_catalog_match_llm
+from app.utils.text import as_term_list
 
 if TYPE_CHECKING:
     from app.db.models.product_catalog import ProductCatalog
@@ -188,8 +189,8 @@ def _describe(product: "ProductCatalog", max_terms: int = 12, evidencia: str | N
     for market in (product.localized_markets or {}).values():
         if not isinstance(market, dict):
             continue
-        for term in market.get("search_terms") or []:
-            if term and term not in termos:
+        for term in as_term_list(market.get("search_terms")):
+            if term not in termos:
                 termos.append(term)
     excluidos: list[str] = []
     for market in (product.localized_markets or {}).values():
@@ -197,8 +198,8 @@ def _describe(product: "ProductCatalog", max_terms: int = 12, evidencia: str | N
             continue
         # Antagônicos primeiro: são os que mais dizem sobre a fronteira do
         # produto, e a amostra é cortada em `max_terms`.
-        for term in [*(market.get("antagonist_terms") or []), *(market.get("excluded_terms") or [])]:
-            if term and term not in excluidos:
+        for term in [*as_term_list(market.get("antagonist_terms")), *as_term_list(market.get("excluded_terms"))]:
+            if term not in excluidos:
                 excluidos.append(term)
     amostra = ", ".join(termos[:max_terms]) if termos else "(sem termos curados)"
     linhas = [
@@ -213,7 +214,7 @@ def _describe(product: "ProductCatalog", max_terms: int = 12, evidencia: str | N
     atributos: list[str] = []
     for m in (product.localized_markets or {}).values():
         if isinstance(m, dict):
-            atributos.extend(a for a in (m.get("contrast_attributes") or []) if a and a not in atributos)
+            atributos.extend(a for a in as_term_list(m.get("contrast_attributes")) if a not in atributos)
     if atributos:
         linhas.append(f"  defining attributes vs. its confusables: {'; '.join(atributos[:6])}")
     # O que a identificação disse do produto (migration 058): o que o faz ser

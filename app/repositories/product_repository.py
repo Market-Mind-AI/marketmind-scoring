@@ -296,7 +296,7 @@ class ProductRepository:
         marcas: dict[str, list[str]] = {}
         for nome, market in linhas.all():
             termos = marcas.setdefault(nome, [])
-            termos.extend(t for t in (market or {}).get("search_terms") or [] if t and t not in termos)
+            termos.extend(t for t in as_term_list((market or {}).get("search_terms")) if t not in termos)
         return marcas
 
     async def bump_alias_hit(self, alias: ProductAlias) -> None:

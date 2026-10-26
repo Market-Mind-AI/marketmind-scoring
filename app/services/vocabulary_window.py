@@ -34,16 +34,14 @@ def vocabulary_is_fixed(fixed_at: datetime | None) -> bool:
     return utc_now() - fixed_at < timedelta(days=settings.search_terms_ttl_days)
 
 
-def union_terms(*lists: list[str] | None) -> list[str]:
+def union_terms(*lists: list[str] | str | None) -> list[str]:
     """Case-insensitive union preserving first-seen order (existing terms first).
     Curated keywords are ACCUMULATED, never replaced — a re-identify only appends
     genuinely new terms, keeping the seed order (and thus the demand cache) stable."""
     seen: set[str] = set()
     out: list[str] = []
     for lst in lists:
-        for term in lst or []:
-            if not term:
-                continue
+        for term in as_term_list(lst):
             key = str(term).strip().lower()
             if key and key not in seen:
                 seen.add(key)
