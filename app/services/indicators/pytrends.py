@@ -25,8 +25,6 @@ Growth/Stability/Intent form the Demand Quality dimension (size-independent).
 
 import asyncio
 import json
-import re
-import unicodedata
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
@@ -36,6 +34,7 @@ from app.core.config import settings
 from app.domain.enums import AvailabilityStatus, IndicatorDirection
 from app.services.indicators.results import RawIndicatorResult
 from app.services.indicators.sources import pytrends_stored_related, pytrends_stored_volume
+from app.utils.text import normalize_compact, query_words
 
 # Absolute-volume noise guards (Google Ads monthly counts, not the old 0-100
 # Trends scale): below these a growth ratio / CV is noise, not signal.
@@ -104,16 +103,6 @@ def build_seed_terms(brand_terms: list[str], category_terms: list[str] | None = 
     return saida
 
 
-def _norm_term(term: str) -> str:
-    """Comparison key for a query: lowercase, strip accents, keep only
-    alphanumerics. 'Air Fryer'/'air-fryer'/'airfryer' -> 'airfryer';
-    'elétrica' -> 'eletrica'. Used to detect Google's LITERAL duplicates (same
-    key AND same reported volume+series) — never to merge distinct-volume
-    queries, which are real separate searches and are summed."""
-    folded = unicodedata.normalize("NFKD", term).encode("ascii", "ignore").decode("ascii").lower()
-    return "".join(ch for ch in folded if ch.isalnum())
-
-
 def _de_outra_marca(keyword: str, outras_marcas: list[str] | None) -> bool:
     """A keyword relacionada carrega o nome de OUTRA marca cadastrada.
 
@@ -131,14 +120,19 @@ def _de_outra_marca(keyword: str, outras_marcas: list[str] | None) -> bool:
     consultas de marca são demanda legítima da categoria: quem procura "cardhu"
     está no mercado de whisky, e descartar isso subestimaria a categoria.
 
-    Limite conhecido: compara formas normalizadas latinas, então a marca
-    transliterada (`カーデュ` para Cardhu) não é reconhecida. Vale como guarda
-    contra o caso comum, não como filtro completo.
+    Os dois lados passam pela MESMA normalização (`normalize_compact`). Até
+    26/10/2026 a marca vinha gravada com espaço ('juan valdez') e a keyword
+    era comparada sem ('juanvaldezcafe'), então nenhuma marca de duas palavras
+    era vetada, e nenhuma marca em escrita não latina.
+
+    Limite conhecido: a marca transliterada (`カーデュ` para Cardhu) continua não
+    reconhecida — é outra palavra, não outra grafia. Vale como guarda contra o
+    caso comum, não como filtro completo.
     """
     if not outras_marcas:
         return False
-    alvo = _norm_term(keyword)
-    return any(marca and marca in alvo for marca in outras_marcas)
+    alvo = normalize_compact(keyword)
+    return any(chave and chave in alvo for chave in (normalize_compact(marca) for marca in outras_marcas))
 
 
 # The tiered word list that used to live here is gone, and so is
@@ -294,19 +288,19 @@ def _select_expansion(
     query are collapsed later by _dedup_volume_rows on the merged set. Everything
     that qualifies is returned: there is no cap, and the comment on
     _NEAR_VARIANT_RATIO says what the one there used to cost."""
-    approved_norms = [n for n in (_norm_term(t) for t in approved_terms) if n]
+    approved_norms = [n for n in (normalize_compact(t) for t in approved_terms) if n]
     # The curation's own veto list, which the expansion never consulted. These
     # are terms that LOOK like the product and mean something else in this
     # market, so a keyword carrying one is not this product's demand however
     # many approved words it also carries: "picanha suína" is pork.
-    excluded_norms = [n for n in (_norm_term(t) for t in (excluded_terms or [])) if n]
+    excluded_norms = [n for n in (normalize_compact(t) for t in (excluded_terms or [])) if n]
     qualifying: list[tuple[str, float, list[tuple[int, int, float]]]] = []
     for r in related:
         if r["volume"] < _VOLUME_FLOOR:
             continue
         if _de_outra_marca(r["keyword"], outras_marcas):
             continue
-        kw_norm = _norm_term(r["keyword"])
+        kw_norm = normalize_compact(r["keyword"])
         if any(x in kw_norm for x in excluded_norms):  # ruled out for this market
             continue
         if not any(a in kw_norm for a in approved_norms):  # relevance: contains a product term
@@ -314,14 +308,6 @@ def _select_expansion(
         qualifying.append((r["keyword"], r["volume"], r["monthly"]))
     qualifying.sort(key=lambda x: x[1], reverse=True)
     return qualifying
-
-
-def _tokens(term: str) -> frozenset[str]:
-    """The words a query is made of, accent-folded. Order is not meaning: for
-    Google Ads, "beef picanha steak" and "picanha beef steak" are the same
-    search written twice."""
-    folded = unicodedata.normalize("NFKD", term).encode("ascii", "ignore").decode("ascii").lower()
-    return frozenset(w for w in re.split(r"[^a-z0-9]+", folded) if w)
 
 
 def _same_query(
@@ -443,7 +429,7 @@ def _dedup_volume_rows(
     for keyword, volume, monthly in raw:
         if volume < _VOLUME_FLOOR:
             continue
-        norm, tokens = _norm_term(keyword), _tokens(keyword)
+        norm, tokens = normalize_compact(keyword), query_words(keyword)
 
         for group in buckets.setdefault(volume, []):
             # A group is a SET of spellings, and the keyword is compared against
@@ -522,7 +508,7 @@ async def _demand_rows(
     # The words the curation asked for. Every related keyword carries one by
     # construction, so they are exactly the words that prove nothing about two
     # keywords being the same search — see _dedup_volume_rows.
-    product_tokens = frozenset().union(*(_tokens(t) for t in search_terms)) if search_terms else frozenset()
+    product_tokens = frozenset().union(*(query_words(t) for t in search_terms)) if search_terms else frozenset()
     if not search_terms or not expandir:
         return await asyncio.to_thread(_dedup_volume_rows, approved, product_tokens), 0
     seed_label = ", ".join(seed_terms or search_terms[:20])
@@ -757,7 +743,7 @@ async def compute_search_intent_score(
     # Mesmo veto da expansão: a intenção de compra desta marca não pode ser
     # composta pelas keywords de outra. Sem isto, um comparativo de alto volume
     # da concorrente pesaria na intenção deste produto.
-    excluded_norms = [n for n in (_norm_term(t) for t in (excluded_terms or [])) if n]
+    excluded_norms = [n for n in (normalize_compact(t) for t in (excluded_terms or [])) if n]
     rows = [
         r
         for r in related
@@ -767,7 +753,7 @@ async def compute_search_intent_score(
         # disse que não é este produto não pode compor a intenção dele. Sem
         # isto, o lance que os anunciantes dão em "picanha suína" (porco)
         # entraria na média ponderada da picanha.
-        and not any(x in _norm_term(r["keyword"]) for x in excluded_norms)
+        and not any(x in normalize_compact(r["keyword"]) for x in excluded_norms)
     ]
     # `relevant_terms` só vem preenchido quando o conjunto de seeds é
     # COMPARTILHADO entre dois assuntos (marca + categoria, na mesma request do
@@ -777,8 +763,8 @@ async def compute_search_intent_score(
     # related são todas dele, e exigir que contenham o nome do produto
     # descartaria keyword local legítima que não o repete.
     if relevant_terms:
-        relevantes = [n for n in (_norm_term(t) for t in relevant_terms) if n]
-        rows = [r for r in rows if any(n in _norm_term(r["keyword"]) for n in relevantes)]
+        relevantes = [n for n in (normalize_compact(t) for t in relevant_terms) if n]
+        rows = [r for r in rows if any(n in normalize_compact(r["keyword"]) for n in relevantes)]
 
     if not rows:
         return RawIndicatorResult(

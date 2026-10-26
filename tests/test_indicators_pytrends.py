@@ -412,12 +412,29 @@ async def test_intencao_de_compra_ignora_keyword_de_outra_marca() -> None:
 def test_veto_compara_forma_normalizada() -> None:
     """A comparação é sobre a forma normalizada, então grafia e pontuação não
     escapam do veto. Limite conhecido e aceito: marca transliterada (`カーデュ`)
-    não é reconhecida — o normalizador remove tudo fora de [a-z0-9]."""
+    não é reconhecida — é outra palavra, não outra grafia."""
     assert pytrends_indicators._de_outra_marca("Glenfiddich-12 Review", ["glenfiddich"])
     assert pytrends_indicators._de_outra_marca("GLEN FIDDICH 12", ["glenfiddich"])
     assert not pytrends_indicators._de_outra_marca("cardhu 12", ["glenfiddich"])
     assert not pytrends_indicators._de_outra_marca("cardhu 12", [])
     assert not pytrends_indicators._de_outra_marca("cardhu 12", None)
+
+
+def test_veto_reconhece_marca_de_duas_palavras_e_escrita_nao_latina() -> None:
+    """As marcas são gravadas com `normalize_alias`, com espaço. Até 26/10/2026
+    a keyword era comparada sem espaço e só em ASCII, então 'juan valdez' nunca
+    estava em 'juanvaldezcafe' e nenhuma marca em japonês era vetada."""
+    assert pytrends_indicators._de_outra_marca("Juan Valdez café 500g", ["juan valdez"])
+    assert pytrends_indicators._de_outra_marca("ネスカフェ ゴールドブレンド", ["ネスカフェ"])
+
+
+def test_termo_nao_latino_tem_chave_e_expande() -> None:
+    """Um termo em japonês normalizava para string vazia, e o portão de
+    relevância da expansão não tinha contra o que comparar: o país perdia
+    todas as palavras relacionadas."""
+    related = [{"keyword": "ノンフライヤー おすすめ", "volume": 900.0, "monthly": []}]
+    escolhidas = pytrends_indicators._select_expansion(related, ["ノンフライヤー"])
+    assert [k for k, _v, _m in escolhidas] == ["ノンフライヤー おすすめ"]
 
 
 # --- SEEDS COMPARTILHADOS ENTRE MARCA E CATEGORIA ---------------------------
@@ -515,9 +532,9 @@ def _vocabulary(*search_terms: str) -> frozenset[str]:
     construction, so they are the words that prove nothing — see
     _dedup_volume_rows. Passed here because production passes it; with an empty
     set these tests would all pass while the real path was broken."""
-    from app.services.indicators.pytrends import _tokens
+    from app.utils.text import query_words
 
-    return frozenset().union(*(_tokens(t) for t in search_terms))
+    return frozenset().union(*(query_words(t) for t in search_terms))
 
 
 def test_the_same_search_written_many_ways_counts_once() -> None:

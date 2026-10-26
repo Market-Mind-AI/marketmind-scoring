@@ -51,6 +51,33 @@ def normalize_alias(text: str) -> str:
     return unicodedata.normalize("NFC", re.sub(r"\s+", " ", sem_pontuacao).strip())
 
 
+def normalize_compact(text: str) -> str:
+    """`normalize_alias` sem os espaços: a chave de comparação de uma consulta
+    de busca. 'Air Fryer', 'air-fryer' e 'airfryer' viram 'airfryer';
+    'elétrica' vira 'eletrica'.
+
+    Serve para achar as duplicatas LITERAIS que o Google devolve (mesma chave E
+    mesmo volume e série) e para saber se uma keyword contém um termo, uma
+    marca ou um veto — nunca para juntar consultas de volumes diferentes, que
+    são buscas distintas e se somam.
+
+    Derivada de `normalize_alias`, e não uma regra própria, porque os dois
+    lados da comparação vinham de regras diferentes: as marcas eram gravadas
+    com `normalize_alias` ('juan valdez', com espaço) e as keywords comparadas
+    com uma normalização ASCII sem espaços ('juanvaldezcafe'). Uma marca de
+    duas palavras nunca era vetada, e um termo em japonês, coreano, russo ou
+    árabe virava string vazia e perdia a expansão inteira.
+    """
+    return normalize_alias(text).replace(" ", "")
+
+
+def query_words(text: str) -> frozenset[str]:
+    """As palavras de uma consulta, pela mesma normalização. A ordem não é
+    significado: para o Google Ads, "beef picanha steak" e "picanha beef
+    steak" são a mesma busca escrita duas vezes."""
+    return frozenset(normalize_alias(text).split())
+
+
 def as_term_list(value: object) -> list[str]:
     """Coerce a localized_terms value to a clean list of terms, tolerating the
     legacy `{lang: "term"}` (single string) shape alongside `{lang: [terms]}`."""
