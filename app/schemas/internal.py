@@ -374,3 +374,15 @@ class DemandAbsenceResponse(BaseModel):
     markets: list[DemandAbsence]
     # A janela em que "recente" vale: a mesma do frescor da demanda.
     window_days: int
+
+
+class LanguageCheckRequest(BaseModel):
+    narrative: str
+    language: NarrativeLanguage | None = None
+
+
+class LanguageCheckResponse(BaseModel):
+    # Uma entrada por frase proibida encontrada: a frase entre aspas e o motivo.
+    violations: list[str]
+    # O idioma cujas regras foram aplicadas (o da análise, ou o padrão).
+    language: str

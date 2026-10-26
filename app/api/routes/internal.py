@@ -53,6 +53,8 @@ from app.schemas.internal import (
     EvidenceRequest,
     EvidenceResponse,
     FailAnalysisRequest,
+    LanguageCheckRequest,
+    LanguageCheckResponse,
     MarkRunningRequest,
     NarrateRequest,
     NarrateResponse,
@@ -68,6 +70,7 @@ from app.schemas.internal import (
 from app.schemas.mos import MosResultResponse
 from app.services.analysis_service import AnalysisService
 from app.services.explanation_client import ExplanationClient
+from app.services.narrative_rules import language_violations
 from app.services.presentation import present_rows
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.language import analysis_language
@@ -820,4 +823,23 @@ async def demand_absence(
             for pais in request.countries
         ],
         window_days=settings.demand_stale_after_days,
+    )
+
+
+@router.post(
+    "/narrative/language-check",
+    response_model=LanguageCheckResponse,
+    summary="The phrases the method forbids, found in a narrative",
+    description=(
+        "Checks a narrative against the language rules of the method in the "
+        "analysis language (pt, en or es): search interest is never 'proven "
+        "demand', and the score is never a 'guarantee'. Deterministic and free. "
+        "The rules live next to the narrative's own texts, so a narrative in "
+        "Portuguese or Spanish is checked by rules written in that language."
+    ),
+)
+async def narrative_language_check(request: LanguageCheckRequest) -> LanguageCheckResponse:
+    return LanguageCheckResponse(
+        violations=language_violations(request.narrative, request.language),
+        language=analysis_language(request.language),
     )
