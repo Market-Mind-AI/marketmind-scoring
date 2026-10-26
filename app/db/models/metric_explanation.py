@@ -1,7 +1,7 @@
 import uuid
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -30,6 +30,9 @@ class MetricExplanation(Base):
     meaning: Mapped[str] = mapped_column(Text, nullable=False)
     # None = direção-neutra (context only, sem valência maior/menor).
     higher_is_better: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # {idioma: {"label": ..., "meaning": ...}} para pt e es (migration 062). O
+    # inglês das colunas acima é o canônico e o último recurso.
+    translations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (Index("ix_metric_explanations_code", "metric_code", unique=True),)
 
@@ -51,5 +54,7 @@ class MetricBandPhrase(Base):
     band: Mapped[str] = mapped_column(String, nullable=False)
     phrase: Mapped[str] = mapped_column(Text, nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)  # ordem da faixa (0 = pior/menor)
+    # {idioma: frase} para pt e es (migration 062).
+    translations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (Index("ix_metric_band_phrases_code_band", "metric_code", "band", unique=True),)

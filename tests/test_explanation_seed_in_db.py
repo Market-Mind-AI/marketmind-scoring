@@ -29,3 +29,19 @@ async def test_every_seeded_metric_has_its_band_phrases_in_the_database(db_sessi
     missing = {row["metric_code"] for row in band_phrase_rows()} - in_db
 
     assert not missing, f"metrics with band phrases in the seed but none in metric_band_phrases: {sorted(missing)}"
+
+
+async def test_the_catalog_answers_in_the_analysis_language(db_session: AsyncSession) -> None:
+    """Um relatório em espanhol trazia "Demand Volume - High (72/100)" ao lado
+    da narrativa em espanhol. O inglês continua sendo o último recurso."""
+    from app.repositories.metric_explanation_repository import MetricExplanationRepository
+    from app.services.mos.explanation_seed_i18n import BAND_PHRASES, LABELS
+
+    repo = MetricExplanationRepository(db_session)
+    espanhol = await repo.catalog("es")
+    ingles = await repo.catalog("en")
+
+    assert espanhol.label("trend_score") == LABELS["es"]["trend_score"]
+    assert espanhol.entry("trend_score").band_phrases["High"] == BAND_PHRASES["es"]["trend_score"]["High"]
+    assert ingles.label("trend_score") == "Demand Volume"
+    assert (await repo.catalog("fr")).label("trend_score") == "Demand Volume"

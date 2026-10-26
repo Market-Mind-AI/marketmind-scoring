@@ -232,9 +232,10 @@ def test_calibrating_weights_is_safe_to_repeat(client: TestClient) -> None:
 def test_evidence_is_null_when_no_country_has_a_score(client: TestClient) -> None:
     """Absent is reported as absent. An empty packet would read downstream as
     'nothing to say about this market', which is a different claim."""
+    entity_key = _resolve(client, f"sem score {uuid.uuid4().hex[:6]}")
     response = client.post(
         "/internal/evidence",
-        json={"entity_key": str(uuid.uuid4()), "countries": ["ESP"], "period_key": "2026-09"},
+        json={"entity_key": entity_key, "countries": ["ESP"], "period_key": "2026-09"},
         headers=_HEADERS,
     )
 

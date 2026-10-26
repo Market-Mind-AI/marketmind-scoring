@@ -9,14 +9,15 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.analysis_request import AnalysisRequest
+from app.db.models.brand import Brand
 from app.db.session import async_session_factory, get_session
 from app.repositories.analysis_repository import AnalysisRepository
-from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.analyze import AnalysisStatusResponse, AnalyzeAcceptedResponse, AnalyzeRequest
 from app.services.analysis_service import AnalysisService
 from app.services.catalog_service import CatalogService
-from app.services.explanation_client import ExplanationClient
+from app.services.presentation import display_order, headline_country, present_rows
+from app.utils.language import analysis_language
 
 router = APIRouter()
 
@@ -33,9 +34,11 @@ _SSE_NARRATIVE_SECONDS = 180.0
 
 
 async def _load_breakdown(session: AsyncSession, analysis_request: AnalysisRequest) -> dict[str, Any] | None:
-    """Return the stored evidence packet, or rebuild it lazily (free — DB reads
-    only, no collection) for analyses done before the `breakdown` column existed.
-    The lazy rebuild omits the demand ruler (not persisted historically)."""
+    """Return the stored evidence packet, or rebuild it lazily (free of
+    collection — DB reads and the stored demand) for analyses done before the
+    `breakdown` column existed. Rebuilt by the same builder the analysis uses
+    (AnalysisService.build_evidence), so it carries the flags, the champion and
+    the demand ruler, measured from what is stored."""
     if analysis_request.breakdown is not None:
         return analysis_request.breakdown
     if (
@@ -47,20 +50,18 @@ async def _load_breakdown(session: AsyncSession, analysis_request: AnalysisReque
     period_key = analysis_request.result[0].get("period_key")
     if not period_key:
         return None
-    mos_repo = MosRepository(session)
-    mos_results = []
-    for country in analysis_request.countries:
-        # A marca DESTA análise: sem ela, um relatório de marca seria
-        # remontado com o MOS do produto.
-        row = await mos_repo.get_mos_result(
-            analysis_request.entity_key, country, "month", period_key, analysis_request.brand_key
-        )
-        if row is not None:
-            mos_results.append(row)
-    if not mos_results:
+    entity = await ProductRepository(session).get_by_entity_key(analysis_request.entity_key)
+    if entity is None:
         return None
-    return await ExplanationClient(session).build_evidence(
-        entity_key=analysis_request.entity_key, mos_results=mos_results, period_key=period_key
+    # A marca DESTA análise: sem ela, um relatório de marca seria remontado com
+    # o MOS do produto.
+    marca = await session.get(Brand, analysis_request.brand_key) if analysis_request.brand_key else None
+    return await AnalysisService(session).build_evidence(
+        entity=entity,
+        requested=list(analysis_request.countries or []),
+        period_key=period_key,
+        language=analysis_request.language,
+        marca=marca,
     )
 
 
@@ -93,14 +94,24 @@ def _status_payload(
     brand: str | None = None,
     category_title: str | None = None,
 ) -> AnalysisStatusResponse:
+    pedidos = list(analysis_request.countries or [])
+    idioma = analysis_language(analysis_request.language)
+    # Apresentadas também na leitura: linhas gravadas antes de a apresentação
+    # ser do scoring não têm os campos, e reaplicar a uma que tem dá a mesma.
+    result = (
+        present_rows(analysis_request.result, requested=pedidos, language=idioma) if analysis_request.result else None
+    )
     return AnalysisStatusResponse(
         request_id=analysis_request.id,
         status=analysis_request.status,
+        language=idioma,
         canonical_title=analysis_request.canonical_title,
         brand=brand,
         category_title=category_title,
         user_prompt=analysis_request.user_prompt,
-        result=analysis_request.result,
+        result=result,
+        display_order=display_order(result, pedidos) if result else [],
+        headline_country=headline_country(result, pedidos) if result else None,
         explanation=analysis_request.explanation,
         breakdown=breakdown,
         error_message=analysis_request.error_message,

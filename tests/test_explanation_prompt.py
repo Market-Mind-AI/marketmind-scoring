@@ -93,7 +93,7 @@ async def test_sinais_de_contexto_saem_em_lista_propria(db_session) -> None:
     )
     client = ExplanationClient(db_session)
     catalog = await MetricExplanationRepository(db_session).catalog()
-    pacote = await client._country_evidence(entity.entity_key, mos_result, "2026-08", catalog, {})
+    pacote = await client._country_evidence(entity.entity_key, mos_result, "2026-08", catalog, {}, "en")
 
     contextos = {c["code"]: c for c in pacote["context_signals"]}
     assert "category_volume_score" in contextos

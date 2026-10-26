@@ -123,6 +123,9 @@ class EvidenceRequest(BaseModel):
     # A marca desta análise: o pacote explica os números que produziram
     # AQUELE MOS, não os da categoria.
     brand_key: uuid.UUID | None = None
+    # O idioma da análise: rótulos, faixas, glossário e frases saem nele. Nulo
+    # é o padrão do serviço (app/utils/language.py).
+    language: NarrativeLanguage | None = None
 
 
 class EvidenceResponse(BaseModel):

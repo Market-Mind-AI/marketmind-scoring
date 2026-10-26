@@ -14,13 +14,13 @@ class TestScoreBand:
         ("score", "expected"),
         [
             (0.0, "Very Low"),
-            (19.99, "Very Low"),
+            (19.94, "Very Low"),
             (20.0, "Low"),
-            (39.99, "Low"),
+            (39.94, "Low"),
             (40.0, "Moderate"),
-            (59.99, "Moderate"),
+            (59.94, "Moderate"),
             (60.0, "High"),
-            (79.99, "High"),
+            (79.94, "High"),
             (80.0, "Very High"),
             (100.0, "Very High"),
         ],
@@ -34,15 +34,15 @@ class TestMosBand:
         ("mos", "expected"),
         [
             (0.0, "Very Low Opportunity"),
-            (19.99, "Very Low Opportunity"),
+            (19.94, "Very Low Opportunity"),
             (20.0, "Low Opportunity"),
-            (39.99, "Low Opportunity"),
+            (39.94, "Low Opportunity"),
             (40.0, "Moderate Opportunity"),
-            (59.99, "Moderate Opportunity"),
+            (59.94, "Moderate Opportunity"),
             (60.0, "Good Opportunity"),
-            (74.99, "Good Opportunity"),
+            (74.94, "Good Opportunity"),
             (75.0, "High Opportunity"),
-            (89.99, "High Opportunity"),
+            (89.94, "High Opportunity"),
             (90.0, "Excellent Opportunity"),
             (100.0, "Excellent Opportunity"),
         ],
@@ -59,3 +59,17 @@ class TestMeaningCompleteness:
     def test_every_dimension_has_a_meaning(self) -> None:
         missing = [dim.value for dim in IndicatorDimension if dim not in DIMENSION_MEANING]
         assert missing == []
+
+
+def test_the_band_is_read_off_the_value_that_is_shown() -> None:
+    """79,96 aparecia como 80,0 com a faixa "Good"... e não "High" — o número e
+    a faixa vinham de valores diferentes."""
+    from app.services.mos.interpretation import mos_presentation
+
+    assert mos_band(74.96) == "High Opportunity"
+    assert score_band(79.96) == "Very High"
+    assert mos_presentation(74.96, "es") == {
+        "mos_display": 75.0,
+        "mos_band_key": "high_opportunity",
+        "mos_band_label": "Alta oportunidad",
+    }

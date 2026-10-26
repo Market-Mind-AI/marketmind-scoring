@@ -803,3 +803,50 @@ class AnalysisService:
             from_cache=cached,
             demand_ceiling=ceiling,
         )
+
+    async def build_evidence(
+        self,
+        *,
+        entity: Any,
+        requested: list[str],
+        period_key: str,
+        language: str | None,
+        demand_ruler: dict[str, Any] | None = None,
+        marca: Any | None = None,
+    ) -> dict[str, Any] | None:
+        """O pacote de evidências da análise: os países pedidos e, quando o
+        campeão coroado não foi pedido, ele também, com o detalhamento inteiro.
+
+        O campeão é o guardado por `crown_champion` para este período e esta
+        régua. O orquestrador montava as marcas `requested`/`is_champion` por
+        cima do pacote, que só trazia os pedidos, e a reconstrução na leitura
+        saía sem marca nenhuma e sem a régua.
+
+        `demand_ruler` nulo (análises gravadas antes de a régua ser guardada)
+        mede a régua do que já está coletado, sem gravar nada.
+        """
+        brand_key = marca.brand_key if marca is not None else None
+        if demand_ruler is None:
+            teto, demand_ruler, _novo = await self.measure_demand_ceiling(entity, requested, period_key, marca=marca)
+        else:
+            teto = demand_ruler.get("volume") if demand_ruler.get("mode") == "reference" else None
+        linhas = []
+        for country in requested:
+            row = await self._mos_repo.get_mos_result(entity.entity_key, country, "month", period_key, brand_key)
+            if row is not None:
+                linhas.append(row)
+        cached, pais, _mos = await self._product_repo.champion_for(entity, brand_key, period_key, demand_ceiling=teto)
+        if cached and pais is not None and pais not in requested:
+            row = await self._mos_repo.get_mos_result(entity.entity_key, pais, "month", period_key, brand_key)
+            if row is not None:
+                linhas.append(row)
+        if not linhas:
+            return None
+        return await self._explanation_client.build_evidence(
+            entity_key=entity.entity_key,
+            mos_results=linhas,
+            period_key=period_key,
+            demand_ruler=demand_ruler,
+            requested=requested,
+            language=language,
+        )

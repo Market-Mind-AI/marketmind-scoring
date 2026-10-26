@@ -59,6 +59,9 @@ class AnalyzeAcceptedResponse(BaseModel):
 class AnalysisStatusResponse(BaseModel):
     request_id: uuid.UUID
     status: str  # "pending" | "running" | "done" | "failed"
+    # O idioma em que tudo o que se lê sai (pt, en ou es): o pedido, ou o
+    # padrão do serviço quando ninguém pediu. Ver app/utils/language.py.
+    language: str | None = None
     # Com marca, canonical_title carrega a marca ("Cardhu single malt Scotch
     # whisky"). `brand` e `category_title` vêm separados, lidos da entidade, para
     # o relatório poder dizer "Cardhu · single malt Scotch whisky" e para a
@@ -68,7 +71,13 @@ class AnalysisStatusResponse(BaseModel):
     brand: str | None = None
     category_title: str | None = None
     user_prompt: str | None = None  # the buyer's free-text prompt/question, echoed back for the UI
+    # Cada linha traz `requested`, `is_champion`, `mos_display`,
+    # `mos_band_key` e `mos_band_label` (app/services/presentation.py).
     result: list[dict[str, Any]] | None
+    # A ordem em que os países são mostrados (campeão fora do pedido primeiro,
+    # depois os pedidos pelo MOS) e o país do destaque (o melhor pedido).
+    display_order: list[str] = []
+    headline_country: str | None = None
     explanation: str | None = None  # LLM narrative of the ranking (best-effort; null if unavailable)
     # Full per-country evidence packet (glossary + weights + demand ruler + each
     # country's MOS, dimension subscores and scored signals with explanations) —

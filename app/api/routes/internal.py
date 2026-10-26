@@ -29,7 +29,6 @@ from app.core.logging import logger
 from app.db.models.brand import Brand
 from app.db.session import get_session
 from app.repositories.analysis_repository import AnalysisRepository
-from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.analyze import AnalysisStatusResponse
 from app.schemas.internal import (
@@ -65,7 +64,9 @@ from app.schemas.internal import (
 from app.schemas.mos import MosResultResponse
 from app.services.analysis_service import AnalysisService
 from app.services.explanation_client import ExplanationClient
+from app.services.presentation import present_rows
 from app.services.weight_calibration_service import WeightCalibrationService
+from app.utils.language import analysis_language
 from app.utils.time import utc_now
 
 router = APIRouter(prefix="/internal", tags=["Internal"], dependencies=[Depends(require_internal_token)])
@@ -288,7 +289,13 @@ async def complete_analysis(
     analysis_request = await _load(session, request_id)
     await AnalysisRepository(session).mark_done(
         analysis_request,
-        result=request.result,
+        # As marcas e o que se mostra de cada linha são decididos aqui, não por
+        # quem entrega (ver app/services/presentation.py).
+        result=present_rows(
+            request.result,
+            requested=list(analysis_request.countries or []),
+            language=analysis_language(analysis_request.language),
+        ),
         explanation=request.explanation,
         breakdown=request.breakdown,
     )
@@ -362,6 +369,10 @@ async def calibrate_weights(
         "Assembles what the narrative is written from and what the frontend "
         "renders: the glossary, the dimension weights, the demand ruler, and "
         "per country the MOS with every dimension subscore and scored signal.\n\n"
+        "The countries are the requested ones plus the crowned champion when it "
+        "was not requested (the one POST /internal/champion/crown stored), each "
+        "flagged `requested` / `is_champion`, in `display_order`, with "
+        "`headline_country`. Everything a reader sees is in `language`.\n\n"
         "Deterministic and free — it reads stored results and collects nothing. "
         "No model is involved, which is what makes the narrative checkable "
         "afterwards: a claim that is not in this packet is not supported.\n\n"
@@ -370,22 +381,13 @@ async def calibrate_weights(
     ),
 )
 async def build_evidence(request: EvidenceRequest, session: AsyncSession = Depends(get_session)) -> EvidenceResponse:
-    mos_repo = MosRepository(session)
-    mos_results = []
-    for country in request.countries:
-        row = await mos_repo.get_mos_result(
-            request.entity_key, country, "month", request.period_key, request.brand_key
-        )
-        if row is not None:
-            mos_results.append(row)
-    if not mos_results:
-        return EvidenceResponse(packet=None)
-
-    packet = await ExplanationClient(session).build_evidence(
-        entity_key=request.entity_key,
-        mos_results=mos_results,
+    packet = await AnalysisService(session).build_evidence(
+        entity=await _entity(session, request.entity_key),
+        requested=request.countries,
         period_key=request.period_key,
+        language=request.language,
         demand_ruler=request.demand_ruler,
+        marca=await _marca(session, request.brand_key),
     )
     return EvidenceResponse(packet=packet)
 

@@ -19,7 +19,6 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.logging import logger
 from app.db.models.mos_result import MosResult
 from app.domain.enums import IndicatorCode, IndicatorDimension
@@ -31,7 +30,16 @@ from app.services.llm import resolve_explanation_llm
 from app.services.llm.base import joined_system
 from app.services.mos.dimension_mapping import DIMENSION_BY_INDICATOR, compute_dimension_subscores
 from app.services.mos.explanation_builder import ExplanationCatalog
-from app.services.mos.interpretation import score_band
+from app.services.mos.interpretation import (
+    band_key,
+    band_label,
+    display_score,
+    mos_band,
+    mos_presentation,
+    score_band,
+)
+from app.services.presentation import champion_of, display_order, headline_country
+from app.utils.language import analysis_language, language_key, requested_language
 
 # Every indicator the packet may carry, in a stable narrative order: the four
 # scored demand signals and the macro/readiness block (DIMENSION_BY_INDICATOR),
@@ -86,7 +94,35 @@ def _penetration_of(country: dict[str, Any]) -> float | None:
         return None
 
 
-def _flag_demand_outliers(countries: list[dict[str, Any]]) -> None:
+# A nota sai no idioma da análise; era sempre em português, inclusive no
+# relatório em inglês e em espanhol.
+_DEMAND_CONFIDENCE_NOTE = {
+    "pt": (
+        "Penetração de {pen:.0f} buscas/100k é um outlier baixo frente à mediana dos mercados "
+        "({median:.0f}/100k) num mercado desenvolvido — possível subcontagem por termo de busca "
+        "nativo faltante aqui."
+    ),
+    "en": (
+        "A penetration of {pen:.0f} searches/100k is a low outlier against the markets' median "
+        "({median:.0f}/100k) in a developed market — possibly undercounted because a native search "
+        "term is missing here."
+    ),
+    "es": (
+        "Una penetración de {pen:.0f} búsquedas/100k es un valor atípico bajo frente a la mediana de los "
+        "mercados ({median:.0f}/100k) en un mercado desarrollado — posible subconteo por un término de "
+        "búsqueda nativo que falta aquí."
+    ),
+}
+
+# O detalhe concreto da frase do Demand Volume, no idioma da análise.
+_VOLUME_DETAIL = {
+    "pt": "cerca de {volume:,.0f} buscas mensais absolutas",
+    "en": "about {volume:,.0f} absolute monthly searches",
+    "es": "unas {volume:,.0f} búsquedas mensuales absolutas",
+}
+
+
+def _flag_demand_outliers(countries: list[dict[str, Any]], language: str = "en") -> None:
     """Set `demand_confidence` ('ok'|'low') on each country. 'low' means the
     demand volume is likely UNDERCOUNTED (a missing native search term) — flagged
     when a DEVELOPED market's penetration is a gross low outlier vs the peer
@@ -109,10 +145,8 @@ def _flag_demand_outliers(countries: list[dict[str, Any]]) -> None:
         if gdp is not None and gdp < _DEVELOPED_GDP_MIN:
             continue  # low-income market → low demand is expected, not an artifact
         country["demand_confidence"] = "low"
-        country["demand_confidence_note"] = (
-            f"Penetração de {pen:.0f} buscas/100k é um outlier baixo frente à mediana dos mercados "
-            f"({median:.0f}/100k) num mercado desenvolvido — possível subcontagem por termo de busca "
-            "nativo faltante aqui."
+        country["demand_confidence_note"] = _DEMAND_CONFIDENCE_NOTE.get(language, _DEMAND_CONFIDENCE_NOTE["en"]).format(
+            pen=pen, median=median
         )
 
 _SYSTEM_PROMPT_PT = """Você é um analista de entrada em mercados (market-entry) que ajuda um negócio \
@@ -518,16 +552,8 @@ La demanda se midió con los términos de búsqueda de la marca, no los de la ca
 
 # --- the three languages the narrative has its own texts in ---
 #
-# A narrativa sai no idioma da INTERFACE de quem pediu (o frontend é EN/ES e o
-# padrão configurado era PT, então o texto chegava num idioma que o leitor não
-# tinha escolhido). O idioma viaja com a análise; sem ele vale o configurado.
-# Um idioma fora destes três recebe o prompt em inglês mais uma linha pedindo o
-# idioma, como antes — os textos só existem para o que a interface oferece.
-_ALIASES: dict[str, tuple[str, ...]] = {
-    "pt": ("pt", "pt-br", "pt_br", "portuguese", "portugues", "português"),
-    "en": ("en", "en-us", "en_us", "english"),
-    "es": ("es", "es-es", "es_es", "es-419", "spanish", "espanol", "español", "castellano"),
-}
+# A narrativa sai no idioma da INTERFACE de quem pediu. Qual é, e qual vale
+# quando ninguém disse, é de app/utils/language.py; aqui ficam só os textos.
 _PROMPT_NAME = {"pt": "explanation-system-pt", "en": "explanation-system-en", "es": "explanation-system-es"}
 _SYSTEM_PROMPT = {"pt": _SYSTEM_PROMPT_PT, "en": _SYSTEM_PROMPT_EN, "es": _SYSTEM_PROMPT_ES}
 _STRUCTURE = {
@@ -547,20 +573,6 @@ _DEMAND_TERMS_RULE = {"pt": _DEMAND_TERMS_RULE_PT, "en": _DEMAND_TERMS_RULE_EN, 
 _CHAMPION_RULE = {"pt": _CHAMPION_RULE_PT, "en": _CHAMPION_RULE_EN, "es": _CHAMPION_RULE_ES}
 _BRAND_RULE = {"pt": _BRAND_RULE_PT, "en": _BRAND_RULE_EN, "es": _BRAND_RULE_ES}
 _USER_PROMPT_BLOCK = {"pt": _USER_PROMPT_BLOCK_PT, "en": _USER_PROMPT_BLOCK_EN, "es": _USER_PROMPT_BLOCK_ES}
-
-
-def _language_key(language: str | None) -> str | None:
-    """'pt', 'en' or 'es' when the language has its own texts; None otherwise."""
-    lang = (language or "").strip().lower()
-    for key, aliases in _ALIASES.items():
-        if lang in aliases:
-            return key
-    return None
-
-
-def _narrative_language(language: str | None) -> str:
-    """The language this analysis asked for, or the configured default."""
-    return (language or "").strip() or settings.ollama_llm_narrative_language
 
 
 def _system_prompt(
@@ -600,7 +612,7 @@ def _system_parts(
     brand, the user's own words — changes per analysis and goes after the
     cache breakpoint; kept in the cached part, every analysis would write a
     fresh cache entry nobody reads."""
-    known = _language_key(language)
+    known = language_key(language)
     key = known or "en"
     base = prompt_text(
         _PROMPT_NAME[key],
@@ -641,6 +653,7 @@ class ExplanationClient:
         period_key: str,
         catalog: ExplanationCatalog,
         weights: dict[str, float],
+        language: str,
     ) -> dict[str, Any]:
         country = mos_result.country
         country_values = await self._indicator_repo.get_values_for(
@@ -697,12 +710,24 @@ class ExplanationClient:
             # the frontend (the two context-only signals — regional_demand and
             # government_expenditure — are not scored into any dimension).
             dim = DIMENSION_BY_INDICATOR.get(code)
+            score = display_score(iv.normalized_score)
+            band = score_band(score)
+            # A frase é remontada aqui, no idioma de quem lê, a partir do mesmo
+            # número e da mesma faixa que aparecem ao lado dela. A gravada no
+            # score é a do cálculo, em inglês.
+            detail = None
+            if code == IndicatorCode.TREND_SCORE and iv.raw_value is not None:
+                detail = _VOLUME_DETAIL.get(language, _VOLUME_DETAIL["en"]).format(volume=float(iv.raw_value))
             signal: dict[str, Any] = {
                 "code": code.value,
                 "label": catalog.label(code.value),
-                "score": round(float(iv.normalized_score), 1),
-                "band": iv.interpretation_band,
-                "explanation": iv.explanation,
+                "score": score,
+                "band": band,
+                "band_key": band_key(band),
+                "band_label": band_label(band, language),
+                "explanation": catalog.render(
+                    code=code.value, score=score, band=band, detail=detail, band_label=band_label(band, language)
+                ),
                 "dimension": dim.value if dim is not None else "context",
             }
             if code == IndicatorCode.TREND_SCORE:
@@ -716,19 +741,33 @@ class ExplanationClient:
                 {
                     "dimension": dim.value,
                     "label": catalog.label(dim.value),
-                    "score": round(score, 1),
+                    "score": display_score(score),
                     "band": band,
+                    "band_key": band_key(band),
+                    "band_label": band_label(band, language),
                     "weight": weights.get(dim.value),  # Rank-Reciprocal weight in the MOS aggregation
-                    "explanation": catalog.render(code=dim.value, score=score, band=band),
+                    "explanation": catalog.render(
+                        code=dim.value, score=score, band=band, band_label=band_label(band, language)
+                    ),
                 }
             )
         # Highest weight first, so the narrative walks dimensions by importance.
         dimensions.sort(key=lambda d: (d["weight"] is not None, d["weight"] or 0), reverse=True)
+        apresentacao = mos_presentation(mos_result.mos, language)
+        mos_band_en = mos_band(float(mos_result.mos)) if mos_result.mos is not None else None
         return {
             "country": country,
-            "mos": round(float(mos_result.mos), 1) if mos_result.mos is not None else None,
-            "mos_band": mos_result.mos_interpretation,
-            "mos_explanation": mos_result.explanation,
+            "mos": apresentacao["mos_display"],
+            # A faixa do número MOSTRADO (ver interpretation.display_score). A
+            # gravada na linha vinha do número cru: 79,96 saía 80,0 e "High".
+            "mos_band": mos_band_en,
+            **apresentacao,
+            "mos_explanation": catalog.render(
+                code="mos",
+                score=mos_result.mos if mos_result.mos is None else float(mos_result.mos),
+                band=mos_band_en,
+                band_label=apresentacao["mos_band_label"],
+            ),
             "dimensions": dimensions,
             "signals": signals,
             "context_signals": context_signals,
@@ -741,18 +780,29 @@ class ExplanationClient:
         mos_results: list[MosResult],
         period_key: str,
         demand_ruler: dict[str, Any] | None = None,
+        requested: list[str] | None = None,
+        language: str | None = None,
     ) -> dict[str, Any] | None:
         """Assemble the deterministic evidence packet: a glossary, the
         Rank-Reciprocal dimension weights, the demand ruler, and per country the
         MOS + the 7 dimension subscores + every scored signal (each with its
-        stored explanation sentence). This is pure DB read + in-memory
-        aggregation — no LLM, no collection, no cost — so it is safe to call at
-        analyze time (to persist) or lazily on read (to rebuild past analyses).
-        Returns None if no country was scored."""
+        explanation sentence). This is pure DB read + in-memory aggregation — no
+        LLM, no collection, no cost — so it is safe to call at analyze time (to
+        persist) or lazily on read (to rebuild past analyses). Returns None if no
+        country was scored.
+
+        `mos_results` are the requested countries plus, when the crowned
+        champion was not requested, its row. Every country comes out flagged
+        `requested` / `is_champion`, and the packet carries the display order
+        and the headline country — the same functions the result rows use (see
+        app/services/presentation.py). Labels, bands, the glossary and every
+        sentence are in the analysis `language` (app/utils/language.py)."""
         scored = [r for r in mos_results if r.mos is not None]
         if not scored:
             return None
-        catalog = await self._explanation_repo.catalog()
+        idioma = analysis_language(language)
+        pedidos = list(requested) if requested is not None else [r.country for r in scored]
+        catalog = await self._explanation_repo.catalog(idioma)
         # Metric definitions once at the top (not repeated per country).
         glossary = {code: {"label": entry.label, "meaning": entry.meaning} for code, entry in catalog.metrics.items()}
         # Rank-Reciprocal dimension weights — so the WEIGHTED aggregation can be
@@ -762,13 +812,27 @@ class ExplanationClient:
             row = await self._mos_repo.get_weight(dim.value, period_key)
             if row is not None:
                 weights[dim.value] = round(float(row.weight), 3)
-        countries = [await self._country_evidence(entity_key, r, period_key, catalog, weights) for r in scored]
-        _flag_demand_outliers(countries)  # mark likely-undercounted markets (missing-native-term guard)
+        countries = [
+            await self._country_evidence(entity_key, r, period_key, catalog, weights, idioma) for r in scored
+        ]
+        _flag_demand_outliers(countries, idioma)  # mark likely-undercounted markets (missing-native-term guard)
+        linhas = [{"country": c["country"], "mos": c["mos"]} for c in countries]
+        campeao = champion_of(linhas, pedidos)
+        for country in countries:
+            country["requested"] = country["country"] in set(pedidos)
+            country["is_champion"] = country["country"] == campeao
+        ordem = display_order(linhas, pedidos)
+        countries.sort(key=lambda c: ordem.index(c["country"]))
         return {
             "period_key": period_key,
+            "language": idioma,
             "demand_ruler": demand_ruler,
             "glossary": glossary,
             "weights": weights,
+            "requested_countries": pedidos,
+            "champion_country": campeao,
+            "display_order": ordem,
+            "headline_country": headline_country(linhas, pedidos),
             "countries": countries,
         }
 
@@ -801,7 +865,7 @@ class ExplanationClient:
         champion = any(c.get("is_champion") for c in countries)
         try:
             system, system_tail = _system_parts(
-                _narrative_language(language),
+                requested_language(language),
                 single_country=single,
                 user_prompt=user_prompt,
                 champion=champion,

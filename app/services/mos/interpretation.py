@@ -133,10 +133,23 @@ _SCORE_BANDS: list[tuple[float, str]] = [
 ]
 
 
+def display_score(score: float) -> float:
+    """O número como ele é MOSTRADO: uma casa decimal. A faixa sai dele.
+
+    Até 26/10/2026 a faixa saía do número cru e o número era arredondado
+    depois: um MOS de 79,96 aparecia como 80,0 com a faixa "High", e não "Good"
+    — a tela mostrava um número e uma faixa que não batiam com o corte da
+    própria tabela. Quem lê confere a faixa pelo número que vê.
+    """
+    return round(float(score), 1)
+
+
 def score_band(score: float) -> str:
-    """0-100 normalized score -> Very Low/Low/Moderate/High/Very High."""
+    """0-100 normalized score -> Very Low/Low/Moderate/High/Very High, read
+    off the displayed value."""
+    shown = display_score(score)
     for upper_bound, label in _SCORE_BANDS:
-        if score < upper_bound:
+        if shown < upper_bound:
             return label
     return "Very High"
 
@@ -153,8 +166,82 @@ _MOS_BANDS: list[tuple[float, str]] = [
 
 
 def mos_band(mos: float) -> str:
-    """0-100 MOS -> Cap. 5 §5.8 interpretation label."""
+    """0-100 MOS -> Cap. 5 §5.8 interpretation label, read off the displayed
+    value (see display_score). The only MOS band in the system."""
+    shown = display_score(mos)
     for upper_bound, label in _MOS_BANDS:
-        if mos < upper_bound:
+        if shown < upper_bound:
             return label
     return "Excellent Opportunity"
+
+
+def band_key(band: str) -> str:
+    """A chave estável de uma faixa ('Good Opportunity' -> 'good_opportunity').
+    É o que o frontend compara; o rótulo é só o que ele mostra."""
+    return band.strip().lower().replace(" ", "_")
+
+
+# Os rótulos das faixas em cada idioma da análise, pela chave. São do método,
+# não conteúdo editável: o corte é a tabela do Cap. 5 §5.8, e o nome de cada
+# faixa vai junto com ele.
+BAND_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "very_low": "Very Low",
+        "low": "Low",
+        "moderate": "Moderate",
+        "high": "High",
+        "very_high": "Very High",
+        "very_low_opportunity": "Very Low Opportunity",
+        "low_opportunity": "Low Opportunity",
+        "moderate_opportunity": "Moderate Opportunity",
+        "good_opportunity": "Good Opportunity",
+        "high_opportunity": "High Opportunity",
+        "excellent_opportunity": "Excellent Opportunity",
+    },
+    "pt": {
+        "very_low": "Muito baixo",
+        "low": "Baixo",
+        "moderate": "Moderado",
+        "high": "Alto",
+        "very_high": "Muito alto",
+        "very_low_opportunity": "Oportunidade muito baixa",
+        "low_opportunity": "Oportunidade baixa",
+        "moderate_opportunity": "Oportunidade moderada",
+        "good_opportunity": "Boa oportunidade",
+        "high_opportunity": "Alta oportunidade",
+        "excellent_opportunity": "Oportunidade excelente",
+    },
+    "es": {
+        "very_low": "Muy bajo",
+        "low": "Bajo",
+        "moderate": "Moderado",
+        "high": "Alto",
+        "very_high": "Muy alto",
+        "very_low_opportunity": "Oportunidad muy baja",
+        "low_opportunity": "Oportunidad baja",
+        "moderate_opportunity": "Oportunidad moderada",
+        "good_opportunity": "Buena oportunidad",
+        "high_opportunity": "Alta oportunidad",
+        "excellent_opportunity": "Oportunidad excelente",
+    },
+}
+
+
+def band_label(band: str, language: str) -> str:
+    """O rótulo de uma faixa no idioma da análise (já resolvido por
+    app.utils.language.analysis_language)."""
+    return BAND_LABELS.get(language, BAND_LABELS["en"]).get(band_key(band), band)
+
+
+def mos_presentation(mos: float | None, language: str) -> dict[str, float | str | None]:
+    """O que se mostra de um MOS: o número com uma casa, a chave da faixa e o
+    rótulo dela no idioma da análise — os três do MESMO valor arredondado.
+    Usado em toda linha de resultado e em todo país do pacote de evidências."""
+    if mos is None:
+        return {"mos_display": None, "mos_band_key": None, "mos_band_label": None}
+    band = mos_band(float(mos))
+    return {
+        "mos_display": display_score(mos),
+        "mos_band_key": band_key(band),
+        "mos_band_label": band_label(band, language),
+    }
