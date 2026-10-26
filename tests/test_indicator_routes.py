@@ -22,7 +22,7 @@ def test_compute_indicators_route() -> None:
 
     with patch("app.api.routes.indicators.IndicatorEngine", return_value=mock_engine):
         client = TestClient(app)
-        response = client.post("/indicators/compute", json={"country": "USA"})
+        response = client.post("/indicators/compute", json={"country": "USA", "period_key": "2026-10"})
 
     assert response.status_code == 200
     body = response.json()
@@ -51,7 +51,12 @@ async def test_the_demand_ceiling_reaches_the_engine() -> None:
     with patch("app.api.routes.indicators.IndicatorEngine", return_value=mock_engine):
         response = TestClient(app).post(
             "/indicators/compute",
-            json={"country": "BRA", "entity_key": str(uuid.uuid4()), "demand_ceiling": 535040.0},
+            json={
+                "country": "BRA",
+                "entity_key": str(uuid.uuid4()),
+                "period_key": "2026-10",
+                "demand_ceiling": 535040.0,
+            },
         )
 
     assert response.status_code == 200

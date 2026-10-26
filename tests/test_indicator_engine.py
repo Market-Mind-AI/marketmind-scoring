@@ -95,7 +95,7 @@ def _patched_pytrends(**overrides: RawIndicatorResult | list[RawIndicatorResult]
 async def test_unknown_country_raises(db_session: AsyncSession) -> None:
     engine = IndicatorEngine(db_session)
     with pytest.raises(MarketMindCoreError):
-        await engine.compute_all(country_iso3="ZZZ")
+        await engine.compute_all(country_iso3="ZZZ", period_key=_unique_period_key())
 
 
 async def test_unknown_entity_raises(db_session: AsyncSession) -> None:

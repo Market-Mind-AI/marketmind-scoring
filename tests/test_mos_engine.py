@@ -69,7 +69,7 @@ async def _seed_weights(db_session: AsyncSession, *, period_key: str) -> None:
 async def test_unknown_entity_raises(db_session: AsyncSession) -> None:
     engine = MosEngine(db_session)
     with pytest.raises(EntityNotFoundError):
-        await engine.compute_mos(entity_key=uuid.uuid4(), countries=["USA"])
+        await engine.compute_mos(entity_key=uuid.uuid4(), countries=["USA"], period_key="2026-10")
 
 
 async def test_missing_mandatory_indicator_excludes_country(db_session: AsyncSession) -> None:

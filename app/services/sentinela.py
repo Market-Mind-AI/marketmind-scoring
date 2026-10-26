@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import logger
 from app.db.models.analysis_request import AnalysisRequest
 from app.db.models.indicator_weight import IndicatorWeight
+from app.utils.period import current_month_period_key
 from app.utils.time import utc_now
 
 
@@ -98,7 +99,7 @@ class Sentinela:
                 select(func.count()).select_from(IndicatorWeight).where(IndicatorWeight.period_key == periodo)
             )
         ).scalar() or 0
-        atual = utc_now().strftime("%Y-%m")
+        atual = current_month_period_key()
         ok = quantos > 0 and periodo == atual
         detalhe = f"{quantos} dimensões calibradas para {periodo}"
         if periodo != atual:

@@ -30,7 +30,6 @@ from app.services.mos.dimension_mapping import check_availability, compute_dimen
 from app.services.mos.interpretation import mos_band
 from app.services.mos.library_reference import classical_topsis_scores
 from app.services.mos.topsis import topsis_score
-from app.utils.period import current_month_period_key
 
 _ALL_DIMENSIONS = list(IndicatorDimension)
 
@@ -50,17 +49,15 @@ class MosEngine:
         *,
         entity_key: uuid.UUID,
         countries: list[str],
-        period_key: str | None = None,
+        period_key: str,
         brand_key: uuid.UUID | None = None,
     ) -> list[MosResult]:
         entity = await self._product_repo.get_by_entity_key(entity_key)
         if entity is None:
             raise EntityNotFoundError(f"Entity {entity_key} not found")
 
-        resolved_period_key = period_key or current_month_period_key()
-
         results = [
-            await self._compute_one(entity_key, country_iso3, resolved_period_key, brand_key)
+            await self._compute_one(entity_key, country_iso3, period_key, brand_key)
             for country_iso3 in countries
         ]
         await self._session.commit()

@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 class ComputeMosRequest(BaseModel):
     entity_key: uuid.UUID
     countries: list[str] = Field(..., min_length=1, description="ISO3 country codes")
-    period_key: str | None = Field(None, description="'YYYY-MM'; defaults to the current month")
+    # Obrigatório pelo mesmo motivo de POST /indicators/compute.
+    period_key: str = Field(..., min_length=1, description="'YYYY-MM', the analysis period")
     # A marca desta análise. Nulo é "do produto" — e sem esta separação o MOS
     # da marca sobrescrevia o do produto na mesma linha (migration 048).
     brand_key: uuid.UUID | None = None

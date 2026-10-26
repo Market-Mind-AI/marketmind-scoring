@@ -13,7 +13,9 @@ class ComputeIndicatorsRequest(BaseModel):
     # produto, que foi o que produziu MOS idêntico para "coffee" e para
     # "coffee + Juan Valdez" em 24/09/2026.
     brand_key: uuid.UUID | None = None
-    period_key: str | None = Field(None, description="'YYYY-MM'; defaults to the current month")
+    # Obrigatório: quem pede é quem fixou o período da análise. Lido de um
+    # relógio aqui, uma análise que atravessa a virada do mês mediria dois.
+    period_key: str = Field(..., min_length=1, description="'YYYY-MM', the analysis period")
     demand_ceiling: float | None = Field(
         None,
         gt=0,

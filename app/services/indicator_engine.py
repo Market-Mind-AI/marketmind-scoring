@@ -49,7 +49,6 @@ from app.services.indicators.normalization import (
 )
 from app.services.indicators.results import RawIndicatorResult
 from app.services.mos.interpretation import INDICATOR_MEANING, score_band
-from app.utils.period import current_month_period_key
 
 
 def _com_share_da_marca(categoria: RawIndicatorResult, *, brand_raw: RawIndicatorResult) -> RawIndicatorResult:
@@ -134,13 +133,13 @@ class IndicatorEngine:
         self,
         *,
         country_iso3: str,
+        period_key: str,
         entity_key: uuid.UUID | None = None,
-        period_key: str | None = None,
         demand_ceiling: float | None = None,
         candidate_market: dict[str, Any] | None = None,
         brand_key: uuid.UUID | None = None,
     ) -> list[IndicatorValue]:
-        resolved_period_key = period_key or current_month_period_key()
+        resolved_period_key = period_key
         country = await self._country_repo.get_by_iso3(country_iso3)
         if country is None:
             raise MarketMindCoreError(f"Unknown country {country_iso3} (not in canonical countries table)")

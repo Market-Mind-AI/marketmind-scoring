@@ -26,7 +26,9 @@ def test_compute_mos_route() -> None:
 
     with patch("app.api.routes.mos.MosEngine", return_value=mock_engine):
         client = TestClient(app)
-        response = client.post("/mos/compute", json={"entity_key": str(uuid.uuid4()), "countries": ["USA"]})
+        response = client.post(
+            "/mos/compute", json={"entity_key": str(uuid.uuid4()), "countries": ["USA"], "period_key": "2026-10"}
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -46,6 +48,8 @@ def test_compute_mos_route_returns_404_for_unknown_entity() -> None:
 
     with patch("app.api.routes.mos.MosEngine", return_value=mock_engine):
         client = TestClient(app)
-        response = client.post("/mos/compute", json={"entity_key": str(uuid.uuid4()), "countries": ["USA"]})
+        response = client.post(
+            "/mos/compute", json={"entity_key": str(uuid.uuid4()), "countries": ["USA"], "period_key": "2026-10"}
+        )
 
     assert response.status_code == 404
