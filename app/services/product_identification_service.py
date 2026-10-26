@@ -34,46 +34,28 @@ from app.core.logging import logger
 from app.db.models.brand import Brand
 from app.db.models.product_catalog import ProductCatalog
 from app.repositories.product_repository import ProductRepository
-from app.schemas.catalog import IdentifyImageResponse, ImageMediaType
+from app.schemas.catalog import IdentifyImageResponse, ImageMediaType, LocalizedMarket
 from app.services.catalog_service import CatalogService
 from app.services.vision_client import MarketTerms, VisionClient
 
 
 def _market_to_dict(market: MarketTerms) -> dict[str, Any]:
-    return {
-        "primary_name": market.primary_name,
-        "formal_name": market.formal_name,
-        "search_terms": market.search_terms,
-        "excluded_terms": market.excluded_terms,
-        # Produtos que se confundem com este e são outro (ver
-        # CatalogService._index_excluded_terms): a evidência negativa que o
-        # veto semântico compara com os termos do produto.
-        "antagonist_terms": market.antagonist_terms,
-        "contrast_attributes": market.contrast_attributes,
-        # O idioma em que ESTES termos foram escritos, dito por quem os
-        # escreveu. Era uma coluna preenchida à mão em `countries`, um valor
-        # por país fixado para sempre — Índia e Canadá como "en", e nenhuma
-        # forma de acrescentar um país sem alguém cadastrar a linha primeiro.
-        "search_language": market.search_language,
-        "confidence": market.confidence,
-    }
+    """Um mercado escrito pelo modelo, no formato em que é guardado
+    (LocalizedMarket). Os produtos que se confundem com este (`antagonist_terms`)
+    são a evidência negativa do veto semântico, e o idioma (`search_language`)
+    é o de quem escreveu os termos — era uma coluna preenchida à mão em
+    `countries`, um valor por país fixado para sempre."""
+    return LocalizedMarket.model_validate(market.model_dump(exclude={"country"})).model_dump()
 
 
 def _fallback_market(iso3: str, product_name: str, brand: str | None) -> dict[str, Any]:
     """Last-resort entry so a country is never left without search terms: the
     product's own name/brand as the term (low confidence, flagged for review).
-    Used by AnalysisService's deferred enrichment."""
+    Used by AnalysisService's deferred enrichment. No language: nobody wrote
+    these terms in one, so the country's own is used (see market_language)."""
     base = f"{brand} {product_name}".strip() if brand else product_name
     terms = list(dict.fromkeys(t for t in (base, product_name, brand) if t))
-    return {
-        "primary_name": base or product_name,
-        "formal_name": None,
-        "search_terms": terms,
-        "excluded_terms": [],
-        "antagonist_terms": [],
-        "contrast_attributes": [],
-        "confidence": 0.3,
-    }
+    return LocalizedMarket(primary_name=base or product_name, search_terms=terms, confidence=0.3).model_dump()
 
 
 def _has_terms(entry: dict[str, Any] | None) -> bool:

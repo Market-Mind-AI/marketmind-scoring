@@ -77,10 +77,20 @@ class LocalizedMarket(BaseModel):
     """One country's curated search vocabulary, mirroring a value of
     product_catalog.localized_markets (keyed by ISO3, so `country` lives in
     the key, not here). Produced by the identify-image LLM and user-reviewable
-    before /analyze."""
+    before /analyze.
+
+    THE shape of a stored market entry: the identification, the enrichment,
+    the reference candidates and the deterministic fallback all produce it
+    through this model (see product_identification_service._market_to_dict),
+    so no path drops a field another one writes."""
 
     primary_name: str
     formal_name: str | None = None
+    # O idioma em que ESTES termos foram escritos, dito por quem os escreveu
+    # (vision_client.MarketTerms). Faltava aqui, e a ida e volta pela tela de
+    # revisão o apagava: o mercado chegava ao /analyze sem idioma e a coleta
+    # caía no da tabela `countries`. Nulo é mercado de antes desse campo.
+    search_language: str | None = None
     search_terms: list[str] = Field(default_factory=list)
     excluded_terms: list[str] = Field(default_factory=list)
     # Outros produtos que se confundem com este (mesmo nome quase, um atributo

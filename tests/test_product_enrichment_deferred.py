@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+from app.services.vision_client import MarketTerms
+
 _CTOR_DEPS = [
     "AnalysisRepository", "ProductRepository", "CountryRepository", "IndicatorRepository",
     "CoverageService", "IndicatorEngine", "MosEngine", "WeightCalibrationService",
@@ -25,13 +27,12 @@ def _bare_service() -> tuple[Any, list[Any]]:
     return AnalysisService(AsyncMock()), patchers
 
 
-def _market(country: str, term: str, language: str = "en") -> SimpleNamespace:
+def _market(country: str, term: str, language: str = "en") -> MarketTerms:
     # `search_language` é obrigatório no modelo: quem escreve os termos diz em
-    # que idioma os escreveu, e o dublê tem de refletir isso.
-    return SimpleNamespace(
-        country=country, primary_name=term, formal_name=None, search_language=language,
-        search_terms=[term], excluded_terms=[], antagonist_terms=[], contrast_attributes=[], confidence=0.9,
-    )  # fmt: skip
+    # que idioma os escreveu.
+    return MarketTerms(
+        country=country, primary_name=term, search_language=language, search_terms=[term], confidence=0.9
+    )
 
 
 def _entity(localized: dict[str, Any], candidates: list[dict[str, Any]] | None) -> SimpleNamespace:
@@ -213,3 +214,16 @@ async def test_a_requested_country_below_the_ruler_changes_nothing() -> None:
     assert (teto, regua["country"]) == (15800, "USA")
     assert [c["country"] for c in entity.reference_candidates] == ["USA"]
     esquecer.assert_not_awaited()
+
+
+def test_the_language_survives_every_path_a_market_takes() -> None:
+    """O idioma se perdia na tela de revisão (o modelo da resposta não o tinha)
+    e na mescla com o vocabulário guardado."""
+    from app.schemas.catalog import LocalizedMarket
+    from app.services.product_identification_service import _market_to_dict
+    from app.services.vocabulary_window import merge_markets
+
+    escrito = _market_to_dict(_market("BRA", "picanha", "pt"))
+    assert LocalizedMarket.model_validate(escrito).search_language == "pt"
+    mesclado = merge_markets({"BRA": escrito}, {"BRA": {"search_terms": ["picanha bovina"]}})
+    assert mesclado["BRA"]["search_language"] == "pt"
