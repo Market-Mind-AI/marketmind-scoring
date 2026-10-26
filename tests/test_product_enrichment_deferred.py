@@ -140,7 +140,7 @@ def test_the_language_comes_from_whoever_wrote_the_terms() -> None:
 
     Quem escreveu os termos escolheu o idioma ao escrevê-los. Basta declará-lo.
     """
-    from app.services.analysis_service import _idioma_do_mercado
+    from app.services.demand_inputs import market_language as _idioma_do_mercado
 
     pais = SimpleNamespace(search_language="en")
     mercado = {"search_terms": ["picanha"], "search_language": "pt"}
@@ -152,7 +152,7 @@ def test_a_market_from_before_this_change_still_has_an_answer() -> None:
     """A coluna continua como último recurso, e só por isso: mercados curados
     antes desta mudança não carregam o idioma, e uma análise deles não pode
     parar por causa disso."""
-    from app.services.analysis_service import _idioma_do_mercado
+    from app.services.demand_inputs import market_language as _idioma_do_mercado
 
     antigo = {"search_terms": ["air fryer"]}
 
@@ -176,8 +176,10 @@ async def _regua(volumes: dict[str, float], candidatos: list[str], pedidos: list
         candidates=[{"country": iso3, "search_terms": [f"termo {iso3}"]} for iso3 in candidatos],
     )
     svc._country_repo.get_by_iso3 = AsyncMock(
-        side_effect=lambda iso3: SimpleNamespace(iso3=iso3, iso2=iso3[:2], search_language="en")
+        side_effect=lambda iso3: SimpleNamespace(iso3=iso3, iso2=iso3[:2], pytrends_geo=None, search_language="en")
     )
+    svc._product_repo.markets_for = AsyncMock(side_effect=lambda e, _marca: dict(e.localized_markets or {}))
+    svc._product_repo.list_other_brand_names = AsyncMock(return_value=[])
     svc._product_repo.forget_champion = AsyncMock()
 
     async def _volume(terms, iso2, period_key, **kwargs):  # noqa: ANN001, ANN003, ANN202

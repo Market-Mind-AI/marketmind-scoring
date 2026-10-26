@@ -176,6 +176,10 @@ class EnrichTermsResponse(BaseModel):
 class EnsureCoverageRequest(BaseModel):
     country_iso3: str = Field(..., min_length=3, max_length=3)
     entity_key: uuid.UUID | None = None
+    # O período da análise, que quem a começou fixou. As tarefas de coleta são
+    # carimbadas com ele; lido de um relógio aqui, uma análise que atravessa a
+    # meia-noite do último dia do mês carimbaria dois meses.
+    period_key: str = Field(..., min_length=1)
     # A marca desta análise, quando há. É ela que decide QUAL vocabulário
     # medir — sem ela uma análise de marca mediria a categoria.
     brand_key: uuid.UUID | None = None

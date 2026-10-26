@@ -506,6 +506,7 @@ async def ensure_coverage(
     tasks = await AnalysisService(session).ensure_coverage(
         country_iso3=request.country_iso3,
         entity_key=request.entity_key,
+        period_key=request.period_key,
         marca=await _marca(session, request.brand_key),
         terms_used=terms,
         reuse_report=reuso,

@@ -307,7 +307,9 @@ def test_ensure_coverage_returns_the_tasks_it_dispatched(client: TestClient) -> 
     """The task list is the point: it is how "the source is down, insist" is
     told apart from "the source has no such datum, declare it"."""
     with patch("app.services.analysis_service.AnalysisService.ensure_coverage", AsyncMock(return_value=[])):
-        response = client.post("/internal/coverage/ensure", json={"country_iso3": "ESP"}, headers=_HEADERS)
+        response = client.post(
+            "/internal/coverage/ensure", json={"country_iso3": "ESP", "period_key": "2026-10"}, headers=_HEADERS
+        )
 
     assert response.status_code == 200
     body = response.json()

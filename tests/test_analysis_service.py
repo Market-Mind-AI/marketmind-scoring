@@ -164,8 +164,20 @@ def _patched_service(
     missing_patcher.start()
     mocks["_patcher_missing"] = missing_patcher
     country_repo.get_by_iso3 = AsyncMock(
-        return_value=SimpleNamespace(search_language="en", pytrends_geo=None, iso2="US")
+        return_value=SimpleNamespace(
+            iso3="USA",
+            search_language="en",
+            pytrends_geo=None,
+            iso2="US",
+            worldbank_country_id=None,
+            oecd_ref_area=None,
+            undata_location_id=None,
+        )
     )
+    # O vocabulário vem do repositório, pelo mesmo construtor que a nota usa
+    # (app/services/demand_inputs.py).
+    product_repo.markets_for = AsyncMock(side_effect=lambda entity, brand_key: dict(entity.localized_markets or {}))
+    product_repo.list_other_brand_names = AsyncMock(return_value=[])
 
     # Availability-aware coverage (2026-07-22): a demand gap is force-recollected
     # when its computed indicator is missing/unavailable. Mirror all_covered —
@@ -388,7 +400,7 @@ async def test_an_unset_secret_is_not_sent_as_an_empty_one() -> None:
 async def _ensure_coverage(**kwargs: object) -> dict[str, AsyncMock]:
     session, mocks = _patched_service(**kwargs)
     try:
-        await AnalysisService(session).ensure_coverage(country_iso3="USA", entity_key=_ENTITY_KEY)
+        await AnalysisService(session).ensure_coverage(country_iso3="USA", entity_key=_ENTITY_KEY, period_key="2026-10")
     finally:
         for key, value in list(mocks.items()):
             if key.startswith("_patcher_"):

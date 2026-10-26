@@ -33,6 +33,7 @@ from app.repositories.product_repository import ProductRepository
 from app.schemas.coverage import CoverageGap, JobTaskResult
 from app.services.catalog_service import _merge_localized_markets
 from app.services.coverage_service import CoverageService
+from app.services.demand_inputs import DemandInputs, demand_inputs
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.explanation_client import ExplanationClient
 from app.services.indicator_engine import IndicatorEngine
@@ -42,8 +43,6 @@ from app.services.mos_engine import MosEngine
 from app.services.product_identification_service import _fallback_market, _has_terms, _market_to_dict
 from app.services.reference_market_client import ReferenceMarketClient, ReferenceMarketError
 from app.services.weight_calibration_service import WeightCalibrationService
-from app.utils.period import current_month_period_key
-from app.utils.text import as_term_list
 from app.utils.time import utc_now
 
 # The reference-market shortlist is a ranked list from the LLM (biggest markets
@@ -116,28 +115,6 @@ def _champion_candidates(candidatos: list[dict[str, Any]], requested: list[str])
         if len(out) == _MAX_REFERENCE_CANDIDATES:
             break
     return out
-
-
-def _idioma_do_mercado(market: dict[str, Any] | None, country) -> str:  # noqa: ANN001
-    """O idioma em que a busca deste país foi escrita.
-
-    Dito pelo modelo na MESMA chamada que produziu os termos — ele acabou de
-    escolher o idioma ao escrevê-los, então perguntar de novo, ou manter uma
-    tabela dizendo o mesmo, é trabalho sem informação nova.
-
-    Era uma coluna preenchida à mão em `countries`. Duas coisas estavam erradas
-    nisso: acrescentar um mercado exigia alguém cadastrar a linha antes, e o
-    valor era UM por país para sempre — Índia e Canadá ficaram "en", o que é
-    defensável na média e falso para produtos cujo público busca em hindi ou em
-    francês.
-
-    A coluna continua como último recurso para mercados enriquecidos antes
-    desta mudança, e só por isso; nada novo precisa ser cadastrado nela.
-    """
-    do_mercado = (market or {}).get("search_language")
-    if do_mercado:
-        return str(do_mercado)
-    return getattr(country, "search_language", None) or "en"
 
 
 class AnalysisService:
@@ -316,8 +293,15 @@ class AnalysisService:
                 supported_set = set(supported)
                 candidates: list[dict[str, Any]] = []
                 seen: set[str] = set()
+                # A marca vai junto, como no vocabulário: onde o café é mais
+                # procurado não é onde a Juan Valdez é mais procurada, e os
+                # termos de cada candidato têm de nomear a marca para medirem a
+                # demanda DELA.
                 for cand in await self._reference_market_client.candidates(
-                    product_name=product_name, brand=None, category=entity.category, supported_countries=supported
+                    product_name=product_name,
+                    brand=nome_marca,
+                    category=entity.category,
+                    supported_countries=supported,
                 ):
                     entry = _market_to_dict(cand)
                     if cand.country in supported_set and cand.country not in seen and _has_terms(entry):
@@ -328,18 +312,103 @@ class AnalysisService:
             except ReferenceMarketError as exc:
                 logger.warning(f"Background reference-market candidates unavailable: {exc}")
 
+    async def _insumos(
+        self, entity: Any, iso3: str, marca: Any | None, *, candidate_market: dict[str, Any] | None = None
+    ) -> DemandInputs | None:
+        """Os insumos de demanda deste país, pelo construtor único (ver
+        app/services/demand_inputs.py). None para país fora do cadastro."""
+        country = await self._country_repo.get_by_iso3(iso3)
+        if country is None:
+            return None
+        return await demand_inputs(
+            self._product_repo,
+            entity,
+            country,
+            brand_key=marca.brand_key if marca is not None else None,
+            candidate_market=candidate_market,
+        )
+
+    async def _demand_gaps(
+        self, insumos: DemandInputs, entity_key: uuid.UUID, period_key: str
+    ) -> tuple[list[CoverageGap], int, bool]:
+        """(gaps, termos já guardados, relacionadas frescas?) da demanda de um
+        país — pedido ou candidato, pelas mesmas perguntas.
+
+        A demanda não passa por `check_coverage`: a pergunta de frescor dela é
+        feita aqui, por TERMO, que é a granularidade que a cobertura não sabe
+        expressar. Para os candidatos ela já foi feita de outro jeito — o gap
+        nascia com a lista inteira e a decisão ficava com `check_coverage`, que
+        para pytrends responde "vencido" sempre, então TODA análise rebaixava a
+        demanda inteira dos candidatos, idêntica à da anterior, pagando por
+        chamada. Medido em 23/09/2026.
+        """
+        gaps: list[CoverageGap] = []
+        if not insumos.search_terms or insumos.location is None:
+            return gaps, 0, False
+        # Term-incremental demand ("só baixa se um termo novo aparece"): collect
+        # ONLY the search terms that don't yet have volume data — already-cached
+        # terms are never re-downloaded. Os termos da categoria viajam na mesma
+        # coleta (decisão D4), sem request nova.
+        termos_para_volume = insumos.volume_terms
+        missing_sv = await pytrends_indicators.missing_volume_terms(termos_para_volume, insumos.location)
+        reaproveitados = len(termos_para_volume) - len(missing_sv)
+        if missing_sv:
+            gaps.append(
+                CoverageGap(
+                    source=DataSource.PYTRENDS,
+                    entity_key=entity_key,
+                    country=insumos.country,
+                    indicator_code="search_volume",
+                    period_key=period_key,
+                    collection_params={
+                        "location": insumos.location,
+                        "language": insumos.language,
+                        "keywords": missing_sv,
+                    },
+                    force=True,
+                )
+            )
+        # Related keywords (intent) are a function of the seed SET, not of
+        # individual terms, so re-collect only when the current seed's related
+        # rows are absent or past their age (`related_rows_exist` já considera
+        # idade) — i.e. a genuinely new term entered the top-20 seeds.
+        relacionadas_frescas = bool(insumos.seed_terms) and await pytrends_indicators.related_rows_exist(
+            insumos.seed_terms, insumos.location
+        )
+        if insumos.seed_terms and not relacionadas_frescas:
+            gaps.append(
+                CoverageGap(
+                    source=DataSource.PYTRENDS,
+                    entity_key=entity_key,
+                    country=insumos.country,
+                    indicator_code="keywords_for_keywords",
+                    period_key=period_key,
+                    collection_params={
+                        "location": insumos.location,
+                        "language": insumos.language,
+                        "seed_keywords": insumos.seed_terms,
+                    },
+                    # force: we only reach here when the CURRENT seed has no
+                    # related rows, so it MUST collect regardless of a stale
+                    # "covered" coverage_index row from a prior seed set —
+                    # otherwise search_intent_score is stranded → abort.
+                    force=True,
+                )
+            )
+        return gaps, reaproveitados, relacionadas_frescas
+
     async def ensure_coverage(
         self,
         *,
         country_iso3: str,
         entity_key: uuid.UUID | None,
+        period_key: str,
         marca: Any | None = None,
         terms_used: dict[str, Any] | None = None,
         reuse_report: dict[str, Any] | None = None,
     ) -> list[JobTaskResult]:
-        """Checks (read-only) the last 6 monthly period_keys for every gap
-        this country/product needs, and only dispatches collection
-        (check_or_collect) for the ones actually missing.
+        """Checks (read-only) every gap this country/product needs, and only
+        dispatches collection (check_or_collect) for the ones actually missing.
 
         Devolve o resultado das tasks despachadas — vazio quando nada precisou
         ser coletado. É esse resultado que distingue as duas causas de um país
@@ -358,120 +427,29 @@ class AnalysisService:
 
         if entity_key is not None:
             entity = await self._product_repo.get_by_entity_key(entity_key)
-            country = await self._country_repo.get_by_iso3(country_iso3)
             # Demand is collected from Google Ads keyword data (2026-07-15) with
-            # the country's OWN user-approved terms (localized_markets[ISO3]):
-            #   - search_volume: level + growth + stability (its monthly_searches
-            #     array already carries the trailing 12 months).
-            #   - keywords_for_keywords: related keywords for the intent score.
-            # Both are current-month collections (no per-period series to
-            # re-collect). location is the ISO2 Google Ads expects.
-            # O vocabulário DESTA análise: da marca quando há marca, do produto
-            # quando não. É o que faz "Juan Valdez coffee" e "coffee" medirem
-            # coisas diferentes, que é toda a razão de a marca existir como
-            # vínculo em vez de como entidade.
-            mercados = await self.vocabulario(entity, marca) if entity is not None else {}
-            market = mercados.get(country_iso3)
-            search_terms = as_term_list((market or {}).get("search_terms")) or as_term_list(
-                (market or {}).get("primary_name")
-            )
-            # Os termos GENÉRICOS da família viajam na mesma coleta (decisão D4).
-            # `search_volume` aceita 1000 keywords por task, então medir a
-            # categoria ao lado da marca não custa uma request nova; os seeds de
-            # `keywords_for_keywords`, que só aceitam 20, são divididos 14/6 pelo
-            # MESMO construtor que o indicator_engine usa para ler — rótulos
-            # diferentes deixariam o intent órfão.
-            #
-            # A categoria é o MESMO produto sem marca — desde 24/09/2026 não há
-            # entidade-família para buscar, só o outro vocabulário da mesma
-            # entidade. Numa análise sem marca não há o que acrescentar: os
-            # termos já SÃO os da categoria.
-            category_terms: list[str] = []
-            if entity is not None and marca is not None:
-                do_produto = await self.vocabulario(entity, None)
-                mercado_categoria = do_produto.get(country_iso3) or {}
-                category_terms = as_term_list(mercado_categoria.get("search_terms")) or as_term_list(
-                    mercado_categoria.get("primary_name")
-                )
-            elif entity is not None and getattr(entity, "generic_entity_key", None) is not None:
-                # SUB-PRODUTO: a categoria é o produto PAI. `instant coffee` se
-                # lê contra `coffee` do mesmo jeito que uma marca se lê contra
-                # a categoria dela — é o que separa "não há mercado aqui" de
-                # "há mercado e este sub-produto não é ele".
-                pai = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
-                if pai is not None:
-                    do_pai = (pai.localized_markets or {}).get(country_iso3) or {}
-                    category_terms = as_term_list(do_pai.get("search_terms")) or as_term_list(
-                        do_pai.get("primary_name")
-                    )
-            location = country.iso2 if country is not None else None
-            # O idioma vem de quem escreveu os termos, não de um cadastro. Ver
-            # _idioma_do_mercado.
-            language = _idioma_do_mercado(market, country)
+            # the country's OWN terms, read by the SAME builder the indicator
+            # engine reads with: rótulos de sementes diferentes deixariam o
+            # intent órfão.
+            insumos = await self._insumos(entity, country_iso3, marca) if entity is not None else None
             # What this country is actually searched for, recorded for the
             # caller. It is the one part of the pipeline a model wrote, and
             # nothing downstream reveals it: a wrong native term produces a
             # perfectly formed analysis of the wrong words.
-            if terms_used is not None:
+            if terms_used is not None and insumos is not None:
                 terms_used.update(
                     {
                         "country": country_iso3,
-                        "location": location,
-                        "language": language,
-                        "search_terms": list(search_terms),
-                        "category_terms": list(category_terms),
+                        "location": insumos.location,
+                        "language": insumos.language,
+                        "search_terms": list(insumos.search_terms),
+                        "category_terms": list(insumos.category_terms),
                     }
                 )
-            if search_terms and location is not None:
-                # Term-incremental demand ("só baixa se um termo novo aparece"):
-                # collect ONLY the search terms that don't yet have volume data —
-                # already-cached terms are never re-downloaded. Nothing missing =>
-                # no search_volume collection at all.
-                termos_para_volume = [*search_terms, *category_terms]
-                missing_sv = await pytrends_indicators.missing_volume_terms(termos_para_volume, location)
-                # A demanda não passa por `check_coverage` — a pergunta de
-                # frescor dela é feita aqui, por TERMO, que é a granularidade
-                # que a cobertura não sabe expressar. Então o reaproveitamento
-                # dela precisa ser contado aqui também, ou o pytrends aparece
-                # como "nada foi preciso dele" quando na verdade tudo já estava
-                # guardado e dentro do prazo.
-                demanda_reaproveitada += len(termos_para_volume) - len(missing_sv)
-                if missing_sv:
-                    gaps.append(
-                        CoverageGap(
-                            source=DataSource.PYTRENDS,
-                            entity_key=entity_key,
-                            country=country_iso3,
-                            indicator_code="search_volume",
-                            period_key=current_month_period_key(),
-                            collection_params={"location": location, "language": language, "keywords": missing_sv},
-                            force=True,
-                        )
-                    )
-                # Related keywords (intent) are a function of the seed SET, not of
-                # individual terms, so re-collect only when the current seed's
-                # related rows are absent — i.e. a genuinely new term entered the
-                # top-20 seeds. A stable/merged seed set => cache hit => no download.
-                seed_terms = pytrends_indicators.build_seed_terms(search_terms, category_terms)
-                relacionadas_frescas = bool(seed_terms) and await pytrends_indicators.related_rows_exist(
-                    seed_terms, location
+            if insumos is not None:
+                gaps, demanda_reaproveitada, relacionadas_frescas = await self._demand_gaps(
+                    insumos, entity_key, period_key
                 )
-                if seed_terms and not relacionadas_frescas:
-                    gaps.append(
-                        CoverageGap(
-                            source=DataSource.PYTRENDS,
-                            entity_key=entity_key,
-                            country=country_iso3,
-                            indicator_code="keywords_for_keywords",
-                            period_key=current_month_period_key(),
-                            collection_params={"location": location, "language": language, "seed_keywords": seed_terms},
-                            # force: we only reach here when the CURRENT seed has no
-                            # related rows, so it MUST collect regardless of a stale
-                            # "covered" coverage_index row from a prior seed set —
-                            # otherwise search_intent_score is stranded → abort.
-                            force=True,
-                        )
-                    )
 
         # Os gaps macro vêm do construtor ÚNICO (app/services/macro_coverage.py):
         # quem coleta durante a análise e quem pré-aquece fora dela precisam
@@ -544,67 +522,22 @@ class AnalysisService:
         estava guardado. Antes não devolvia nada, e por isso o passo MAIS CARO
         do sistema não aparecia em relato nenhum: três análises seguidas de um
         produto levaram 594s, 203s e 396s, e quase todo o custo repetido era
-        trabalho de candidato refeito. Era também o passo que rebaixava demanda
-        idêntica em toda análise (corrigido em 23/09/2026) — invisível porque
-        nada do que ele faz chegava a ser contado."""
+        trabalho de candidato refeito."""
         gaps: list[CoverageGap] = []
         demanda_reaproveitada = 0
         relacionadas_frescas = 0
         candidatos = await self.candidatos_de_referencia(entity, marca)
         for cand in _champion_candidates(candidatos, requested):
             iso3 = cand.get("country")
-            terms = as_term_list(cand.get("search_terms"))
-            if not (iso3 and terms) or iso3 in requested:
+            if not iso3 or iso3 in requested:
                 continue
-            country = await self._country_repo.get_by_iso3(iso3)
-            if country is None or country.iso2 is None:
+            insumos = await self._insumos(entity, iso3, marca, candidate_market=cand)
+            if insumos is None:
                 continue
-            language = _idioma_do_mercado(cand, country)
-            # Só os termos que faltam ou venceram — a MESMA pergunta que o
-            # caminho dos países pedidos faz. Aqui ela não era feita: o gap
-            # nascia com a lista inteira e a decisão ficava com
-            # `check_coverage`, que para pytrends responde "vencido" sempre.
-            # Então `covered` era sempre falso e TODA análise rebaixava a
-            # demanda inteira dos candidatos, idêntica à da análise anterior,
-            # pagando por chamada. Medido em 23/09/2026.
-            faltando = await pytrends_indicators.missing_volume_terms(terms, country.iso2)
-            demanda_reaproveitada += len(terms) - len(faltando)
-            if faltando:
-                gaps.append(
-                    CoverageGap(
-                        source=DataSource.PYTRENDS,
-                        entity_key=entity.entity_key,
-                        country=iso3,
-                        indicator_code="search_volume",
-                        period_key=current_month_period_key(),
-                        collection_params={"location": country.iso2, "language": language, "keywords": faltando},
-                        force=True,
-                    )
-                )
-            seed_terms = pytrends_indicators.build_seed_terms(terms)
-            # Relacionadas são função do CONJUNTO de sementes, não de termos
-            # soltos: só se coleta quando este conjunto não tem linhas, ou as
-            # que tem venceram (`related_rows_exist` já considera idade). Sem
-            # isso o candidato fica sem search_intent e não pode ser pontuado
-            # como "campeão" — só medido como régua.
-            tem_relacionadas = await pytrends_indicators.related_rows_exist(seed_terms, country.iso2)
-            relacionadas_frescas += 1 if tem_relacionadas else 0
-            if not tem_relacionadas:
-                gaps.append(
-                    CoverageGap(
-                        source=DataSource.PYTRENDS,
-                        entity_key=entity.entity_key,
-                        country=iso3,
-                        indicator_code="keywords_for_keywords",
-                        period_key=current_month_period_key(),
-                        collection_params={
-                            "location": country.iso2,
-                            "language": language,
-                            "seed_keywords": seed_terms,
-                        },
-                        force=True,
-                    )
-                )
+            gaps_do_pais, reaproveitados, frescas = await self._demand_gaps(insumos, entity.entity_key, period_key)
+            gaps.extend(gaps_do_pais)
+            demanda_reaproveitada += reaproveitados
+            relacionadas_frescas += 1 if frescas else 0
         if reuse_report is not None:
             reuse_report["reused"] = {"pytrends": demanda_reaproveitada} if demanda_reaproveitada else {}
             reuse_report["related_fresh"] = relacionadas_frescas
@@ -612,9 +545,8 @@ class AnalysisService:
             return []
         # Sem `check_coverage` aqui: todo gap que chegou a esta lista já é, por
         # construção, algo que falta ou venceu — as duas perguntas foram feitas
-        # acima, por termo, que é a granularidade que a cobertura não sabe
-        # expressar. Perguntar de novo seria a mesma pergunta duas vezes e uma
-        # chamada HTTP a mais por análise.
+        # em `_demand_gaps`, por termo. Perguntar de novo seria a mesma pergunta
+        # duas vezes e uma chamada HTTP a mais por análise.
         _job_id, resultados = await self._coverage_service.check_or_collect(
             gaps, requested_by="analysis_service:reference_candidates"
         )
@@ -639,30 +571,7 @@ class AnalysisService:
           is always the largest market measured.
         - fixed — None (no candidate had volume), so the engine uses the 2M bound.
         Volumes are read from already-collected data via compute_trend_score."""
-        vocabulario = await self.vocabulario(entity, marca)
-        candidatos = await self.candidatos_de_referencia(entity, marca)
-        # Os mercados medidos: os candidatos de referência e os países pedidos,
-        # cada um pelo vocabulário que foi de fato coletado — o desta análise
-        # (da marca, quando há marca) se o país foi pedido, o do candidato se
-        # não foi. Medir um país pedido com os termos do candidato daria dois
-        # números para a mesma coisa.
-        mercados: dict[str, dict[str, Any]] = {}
-        for cand in _top_reference_candidates(candidatos):
-            iso3 = cand.get("country")
-            if iso3:
-                mercados[iso3] = vocabulario.get(iso3, {}) if iso3 in countries else cand
-        for iso3 in countries:
-            mercados.setdefault(iso3, vocabulario.get(iso3, {}))
-
-        measured: list[dict[str, Any]] = []
-        for iso3, market in mercados.items():
-            volume = await self._volume_de_busca(iso3, market, period_key)
-            if volume:
-                measured.append({"country": iso3, "volume": volume})
-        if not measured:
-            return None, {"mode": "fixed"}
-        winner = max(measured, key=lambda m: m["volume"])
-
+        ceiling, ruler, novo = await self.measure_demand_ceiling(entity, countries, period_key, marca=marca)
         # A régua é o MAIOR mercado medido, e um país pedido pode ser maior que
         # todos os candidatos — medido em 26/10/2026: o Brasil com 17.020
         # buscas contra os EUA com 15.800; o Brasil batia no teto e a narrativa
@@ -670,34 +579,72 @@ class AnalysisService:
         # candidatos do produto, no topo, e fica: a régua sobe agora e é a
         # mesma nas próximas análises, peçam ou não esse país, o que mantém a
         # nota de cada país independente do pedido.
-        if winner["country"] not in {c.get("country") for c in candidatos}:
-            novo = {"country": winner["country"], **mercados[winner["country"]]}
+        if novo is not None:
+            candidatos = await self.candidatos_de_referencia(entity, marca)
             await self._gravar_candidatos(entity, marca, [novo, *candidatos])
             # O campeão guardado neste período foi calculado com a régua antiga.
             await self._product_repo.forget_champion(entity, marca.brand_key if marca is not None else None, period_key)
             await self._session.commit()
-            logger.info(f"Régua de demanda subiu para {winner['country']} ({winner['volume']:.0f} buscas/mês)")
-        return winner["volume"], {
-            "mode": "reference",
-            "country": winner["country"],
-            "volume": winner["volume"],
-            "candidates": measured,
-        }
+            logger.info(f"Régua de demanda subiu para {ruler['country']} ({ruler['volume']:.0f} buscas/mês)")
+        return ceiling, ruler
 
-    async def _volume_de_busca(self, iso3: str, market: dict[str, Any], period_key: str) -> float | None:
+    async def measure_demand_ceiling(
+        self, entity: Any, countries: list[str], period_key: str, *, marca: Any | None = None
+    ) -> tuple[float | None, dict[str, Any], dict[str, Any] | None]:
+        """(teto, régua, candidato novo) — a medição de `resolve_demand_ceiling`
+        sem gravar nada. O candidato novo é o país pedido que passou de todos
+        os candidatos, com o vocabulário que o mediu, ou None.
+
+        Separada porque há quem precise saber a régua ANTES de decidir coletar
+        (o campeão guardado só vale para a régua com que foi calculado), e
+        gravar um país pedido no topo dos candidatos antes de os candidatos
+        serem coletados o colocaria lá só por ser o único com dado."""
+        candidatos = await self.candidatos_de_referencia(entity, marca)
+        # Os mercados medidos: os candidatos de referência e os países pedidos,
+        # cada um pelo vocabulário que foi de fato coletado — o desta análise
+        # (da marca, quando há marca) se o país foi pedido, o do candidato se
+        # não foi. Medir um país pedido com os termos do candidato daria dois
+        # números para a mesma coisa.
+        mercados: dict[str, dict[str, Any] | None] = {}
+        for cand in _top_reference_candidates(candidatos):
+            iso3 = cand.get("country")
+            if iso3:
+                mercados[iso3] = None if iso3 in countries else cand
+        for iso3 in countries:
+            mercados.setdefault(iso3, None)
+
+        measured: list[dict[str, Any]] = []
+        for iso3, candidato in mercados.items():
+            insumos = await self._insumos(entity, iso3, marca, candidate_market=candidato)
+            volume = await self._volume_de_busca(insumos, period_key) if insumos is not None else None
+            if volume:
+                measured.append({"country": iso3, "volume": volume})
+        if not measured:
+            return None, {"mode": "fixed"}, None
+        winner = max(measured, key=lambda m: m["volume"])
+        ruler = {"mode": "reference", "country": winner["country"], "volume": winner["volume"], "candidates": measured}
+
+        novo = None
+        if winner["country"] not in {c.get("country") for c in candidatos}:
+            vocabulario = await self.vocabulario(entity, marca)
+            novo = {"country": winner["country"], **(vocabulario.get(winner["country"]) or {})}
+        return winner["volume"], ruler, novo
+
+    async def _volume_de_busca(self, insumos: DemandInputs, period_key: str) -> float | None:
         """O volume mensal de busca de um país, lido do que já foi coletado,
-        pelo mesmo caminho dos países pedidos — inclusive a expansão por
-        palavras relacionadas —, para que a régua compare igual com igual."""
-        terms = as_term_list(market.get("search_terms"))
-        country = await self._country_repo.get_by_iso3(iso3)
-        if not (terms and country is not None and country.iso2 is not None):
+        com os MESMOS insumos da nota — sementes com a categoria, vetos da
+        curadoria e de outras marcas —, para que a régua compare igual com
+        igual."""
+        if not (insumos.search_terms and insumos.location):
             return None
         r = await pytrends_indicators.compute_trend_score(
-            terms,
-            country.iso2,
+            insumos.search_terms,
+            insumos.location,
             period_key,
-            seed_terms=pytrends_indicators.build_seed_terms(terms),
-            language=_idioma_do_mercado(market, country),
+            seed_terms=insumos.seed_terms,
+            language=insumos.language,
+            outras_marcas=insumos.outras_marcas,
+            excluded_terms=insumos.excluded_terms,
         )
         return float(r.raw_value) if r.raw_value is not None and float(r.raw_value) > 0 else None
 
@@ -716,35 +663,41 @@ class AnalysisService:
         anchors → query-independent, so this never changes the requested scores.
         The candidates' demand is already collected (the ruler); only free World
         Bank/OECD/UN data + compute remain, so ~zero paid cost. A candidate that
-        can't be fully scored is simply skipped (never aborts the analysis)."""
+        can't be fully scored is simply skipped (never aborts the analysis).
+
+        Com a marca da análise em tudo: sem ela os candidatos de uma marca eram
+        gravados nas linhas do PRODUTO e sobrescreviam o MOS dele."""
         entity_key = entity.entity_key
         if entity_key is None:
             return []
+        brand_key = marca.brand_key if marca is not None else None
         requested_set = set(requested)
         attempted: list[str] = []
         seen: set[str] = set()
         candidatos = await self.candidatos_de_referencia(entity, marca)
         for cand in _champion_candidates(candidatos, requested):
             iso3 = cand.get("country")
-            terms = as_term_list(cand.get("search_terms"))
-            if not (iso3 and terms) or iso3 in requested_set or iso3 in seen:
+            if not iso3 or iso3 in requested_set or iso3 in seen:
                 continue
             seen.add(iso3)
             country = await self._country_repo.get_by_iso3(iso3)
             if country is None or country.iso2 is None:
                 continue
             try:
-                await self.ensure_coverage(country_iso3=iso3, entity_key=entity_key)
+                await self.ensure_coverage(country_iso3=iso3, entity_key=None, period_key=period_key)
                 await self._indicator_engine.compute_all(
                     country_iso3=iso3,
                     entity_key=entity_key,
                     period_key=period_key,
                     demand_ceiling=demand_ceiling,
-                    terms_override=terms,
+                    candidate_market=cand,
+                    brand_key=brand_key,
                 )
                 attempted.append(iso3)
             except Exception as exc:  # noqa: BLE001 — benchmark is best-effort, never fails the analysis
                 logger.warning(f"Reference candidate {iso3} could not be scored (skipped): {exc}")
         if not attempted:
             return []
-        return await self._mos_engine.compute_mos(entity_key=entity_key, countries=attempted, period_key=period_key)
+        return await self._mos_engine.compute_mos(
+            entity_key=entity_key, countries=attempted, period_key=period_key, brand_key=brand_key
+        )

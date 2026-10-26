@@ -12,6 +12,8 @@ plus the conditional Median Age Fit) only run when an entity_key is given.
 """
 
 import uuid
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +35,7 @@ from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.metric_explanation_repository import MetricExplanationRepository
 from app.repositories.product_repository import ProductRepository
 from app.services.collection_client import resolve_source_country_code
+from app.services.demand_inputs import demand_inputs
 from app.services.indicators import oecd as oecd_indicators
 from app.services.indicators import pytrends as pytrends_indicators
 from app.services.indicators import undata as undata_indicators
@@ -47,7 +50,6 @@ from app.services.indicators.normalization import (
 from app.services.indicators.results import RawIndicatorResult
 from app.services.mos.interpretation import INDICATOR_MEANING, score_band
 from app.utils.period import current_month_period_key
-from app.utils.text import as_term_list
 
 
 def _com_share_da_marca(categoria: RawIndicatorResult, *, brand_raw: RawIndicatorResult) -> RawIndicatorResult:
@@ -105,6 +107,21 @@ def _com_share_da_marca(categoria: RawIndicatorResult, *, brand_raw: RawIndicato
     )
 
 
+async def _ou_sem_cobertura(
+    source: DataSource, code: str | None, compute: Callable[[str], Awaitable[RawIndicatorResult]]
+) -> RawIndicatorResult:
+    """Lê o indicador pelo código do país na fonte, ou o declara indisponível
+    quando a fonte não cobre o país (ver resolve_source_country_code). Perguntar
+    com um código inventado — o ISO3 no lugar do `oecd_ref_area` ausente — só
+    produzia a mesma ausência por um caminho mais caro."""
+    if code is None:
+        return RawIndicatorResult(
+            None, IndicatorDirection.DIRECT, "n/a", AvailabilityStatus.UNAVAILABLE,
+            f"{source.value} does not cover this country (no country code mapping)",
+        )  # fmt: skip
+    return await compute(code)
+
+
 class IndicatorEngine:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -120,7 +137,7 @@ class IndicatorEngine:
         entity_key: uuid.UUID | None = None,
         period_key: str | None = None,
         demand_ceiling: float | None = None,
-        terms_override: list[str] | None = None,
+        candidate_market: dict[str, Any] | None = None,
         brand_key: uuid.UUID | None = None,
     ) -> list[IndicatorValue]:
         resolved_period_key = period_key or current_month_period_key()
@@ -139,7 +156,7 @@ class IndicatorEngine:
                 country,
                 resolved_period_key,
                 demand_ceiling=demand_ceiling,
-                terms_override=terms_override,
+                candidate_market=candidate_market,
                 brand_key=brand_key,
             )
             results.append(
@@ -172,8 +189,8 @@ class IndicatorEngine:
                 for code in codes
             ]
 
-        wb_iso2 = country.iso2
-        un_iso2 = country.iso2
+        wb_iso2 = resolve_source_country_code(DataSource.WORLDBANK, country, reading=True)
+        un_iso2 = resolve_source_country_code(DataSource.UNDATA, country)
         oecd_code = resolve_source_country_code(DataSource.OECD, country)
 
         gdp_per_capita = await worldbank_indicators.compute_gdp_per_capita(wb_iso2)
@@ -183,8 +200,12 @@ class IndicatorEngine:
         gdp_growth = await worldbank_indicators.compute_gdp_growth(wb_iso2)
         population = await worldbank_indicators.compute_population_scale(wb_iso2)
         urbanization = await worldbank_indicators.compute_urbanization(wb_iso2)
-        population_growth = await undata_indicators.compute_population_growth(un_iso2)
-        net_migration = await undata_indicators.compute_net_migration_rate(un_iso2)
+        population_growth = await _ou_sem_cobertura(
+            DataSource.UNDATA, un_iso2, undata_indicators.compute_population_growth
+        )
+        net_migration = await _ou_sem_cobertura(
+            DataSource.UNDATA, un_iso2, undata_indicators.compute_net_migration_rate
+        )
 
         # Macro Demand Structure (2026-07-08, GDP = C+I+G+NX identity) +
         # Real Estate Growth (Economic Readiness, conditional/OECD-only).
@@ -193,7 +214,9 @@ class IndicatorEngine:
         investment = await worldbank_indicators.compute_investment(wb_iso2)
         net_exports = await worldbank_indicators.compute_net_exports(wb_iso2)
         trade_openness = await worldbank_indicators.compute_trade_openness(wb_iso2)
-        real_estate_growth = await oecd_indicators.compute_real_estate_growth(oecd_code)
+        real_estate_growth = await _ou_sem_cobertura(
+            DataSource.OECD, oecd_code, oecd_indicators.compute_real_estate_growth
+        )
 
         raws: list[tuple[IndicatorCode, DataSource, RawIndicatorResult]] = [
             (IndicatorCode.GDP_PER_CAPITA_SCORE, DataSource.WORLDBANK, gdp_per_capita),
@@ -235,85 +258,31 @@ class IndicatorEngine:
         country: Country,
         period_key: str,
         demand_ceiling: float | None = None,
-        terms_override: list[str] | None = None,
+        candidate_market: dict[str, Any] | None = None,
         brand_key: uuid.UUID | None = None,
     ) -> list[IndicatorValue]:
         # Demand from Google Ads ABSOLUTE search volume (not Trends), 2026-07-15:
-        # each country is measured with its OWN user-approved search terms
-        # (product_catalog.localized_markets[ISO3]). LEVEL = SUM of those terms'
-        # monthly search volume (real total online search demand);
-        # growth/stability from the summed monthly series; intent from the
-        # related keywords. location is the ISO2 code Google Ads expects.
-        # `terms_override` scores a reference-candidate country (not in
-        # localized_markets) with the SAME reference terms its demand was
-        # collected under — used only for the off-request "champion" benchmark.
-        location = country.iso2 or resolve_source_country_code(DataSource.PYTRENDS, country)
-        # Do mercado curado, que é onde quem escreveu os termos disse em que
-        # idioma os escreveu. A coluna do país é o último recurso, para
-        # mercados anteriores a essa mudança.
-        # O vocabulário DESTA análise: da marca quando há marca, do produto
-        # quando não. Medido em 24/09/2026, antes de isto existir: a coleta já
-        # usava os termos da marca e a MEDIÇÃO ainda lia os do produto, então
-        # "coffee" e "coffee + Juan Valdez" saíam com MOS idêntico — 37.82 e
-        # 35.02 nos dois — porque o número vinha da categoria nas duas vezes.
-        mercados = await self._product_repo.markets_for(entity, brand_key) if entity is not None else {}
-        mercado_do_pais = mercados.get(country.iso3)
-        language = (mercado_do_pais or {}).get("search_language") or getattr(country, "search_language", None)
-        if terms_override:
-            search_terms = as_term_list(terms_override)
-            excluded_terms: list[str] = []
-        else:
-            market = mercados.get(country.iso3) or {}
-            search_terms = as_term_list(market.get("search_terms")) or as_term_list(market.get("primary_name"))
-            # The look-alikes the curation ruled out for this market: terms that
-            # mean something ELSE here. They were only ever used to decide
-            # product identity, never to measure demand — so "picanha suína"
-            # (pork, a different cut of a different animal) was vetoed at the
-            # front door and walked in through the expansion at 14,800 searches
-            # a month, because it contains an approved term.
-            excluded_terms = as_term_list(market.get("excluded_terms"))
-        # A CATEGORIA do produto, medida ao lado da marca (decisão D4). Desde
-        # 24/09/2026 não há entidade-família: é o MESMO produto sem marca, o
-        # outro vocabulário da mesma entidade. Numa análise sem marca não há o
-        # que acrescentar — os termos já SÃO os da categoria.
+        # each country is measured with its OWN user-approved search terms.
+        # LEVEL = SUM of those terms' monthly search volume (real total online
+        # search demand); growth/stability from the summed monthly series;
+        # intent from the related keywords. `candidate_market` scores a
+        # reference-candidate country (not in the vocabulary) with the terms its
+        # demand was collected under — used for the off-request "champion".
         #
-        # Custo: zero de coleta nova. Os dois conjuntos viajam na MESMA request
-        # de `search_volume` (que aceita 1000 keywords por task) e dividem os 20
-        # seeds de `keywords_for_keywords` (14/6, ver build_seed_terms).
-        #
-        # `terms_override` fica de fora: são os países candidatos pontuados só
-        # para o benchmark do campeão, e a categoria ali não seria usada.
-        category_terms: list[str] = []
-        if brand_key is not None and not terms_override:
-            do_produto = await self._product_repo.markets_for(entity, None)
-            mercado_categoria = do_produto.get(country.iso3) or {}
-            category_terms = as_term_list(mercado_categoria.get("search_terms")) or as_term_list(
-                mercado_categoria.get("primary_name")
-            )
-        elif entity.generic_entity_key is not None and not terms_override:
-            # SUB-PRODUTO: a categoria é o produto PAI (25/09/2026). Sem isso o
-            # `instant coffee` seria pontuado sem nada contra o que se ler, e a
-            # frase "o mercado existe e este sub-produto não é ele" — que é a
-            # leitura útil — não teria número.
-            pai = await self._product_repo.get_by_entity_key(entity.generic_entity_key)
-            if pai is not None:
-                do_pai = (pai.localized_markets or {}).get(country.iso3) or {}
-                category_terms = as_term_list(do_pai.get("search_terms")) or as_term_list(
-                    do_pai.get("primary_name")
-                )
-
-        seed_terms = pytrends_indicators.build_seed_terms(search_terms, category_terms)
-        # Portão de relevância da intenção, ligado SÓ quando os seeds atendem os
-        # dois assuntos: sem ele, as related genéricas comporiam a intenção de
-        # compra da marca. Ver compute_search_intent_score.
-        intent_relevantes = search_terms if category_terms else None
-        # Veto cruzado de marcas: as keywords relacionadas que o Google devolve
-        # para os termos desta marca incluem as concorrentes, e o filtro de
-        # relevância da expansão não as pega quando a keyword carrega ao mesmo
-        # tempo um termo aprovado e outra marca (`glenfiddich 12 vs cardhu 12`).
-        # Vazio para produto sem marca, onde consulta de marca é demanda
-        # legítima da categoria. Ver ProductRepository.list_other_brand_names.
-        outras_marcas = await self._product_repo.list_other_brand_names(entity.brand_key)
+        # Os insumos vêm de demand_inputs, o mesmo lugar de onde a coleta e a
+        # régua de demanda tiram os seus: a régua só compara igual com igual se
+        # mede exatamente o que a nota mede.
+        insumos = await demand_inputs(
+            self._product_repo, entity, country, brand_key=brand_key, candidate_market=candidate_market
+        )
+        location = insumos.location
+        search_terms = insumos.search_terms
+        category_terms = insumos.category_terms
+        seed_terms = insumos.seed_terms
+        language = insumos.language
+        excluded_terms = insumos.excluded_terms
+        outras_marcas = insumos.outras_marcas
+        intent_relevantes = insumos.intent_relevant_terms
 
         trend = await pytrends_indicators.compute_trend_score(
             search_terms,
@@ -331,7 +300,8 @@ class IndicatorEngine:
         # enthusiastic; high volume + low penetration = big only because
         # populous; low volume + high penetration = small but strong appetite.
         if trend.availability_status == AvailabilityStatus.AVAILABLE and trend.raw_value is not None:
-            pop = await worldbank_indicators.population(country.iso2) if country.iso2 else None
+            wb_code = resolve_source_country_code(DataSource.WORLDBANK, country, reading=True)
+            pop = await worldbank_indicators.population(wb_code) if wb_code else None
             if pop:
                 penetration = float(trend.raw_value) / pop * 100_000
                 trend = RawIndicatorResult(
@@ -450,14 +420,11 @@ class IndicatorEngine:
     async def _compute_median_age_fit(
         self, entity: ProductCatalog, country: Country, period_key: str, brand_key: uuid.UUID | None = None
     ) -> IndicatorValue:
-        un_iso2 = country.iso2
-        if un_iso2 is None:
-            raw = RawIndicatorResult(
-                None, IndicatorDirection.DIRECT, "n/a", AvailabilityStatus.UNAVAILABLE,
-                f"country {country.iso3} has no iso2 mapping",
-            )  # fmt: skip
-        else:
-            raw = await undata_indicators.compute_median_age_fit(un_iso2, entity.target_age_min, entity.target_age_max)
+        raw = await _ou_sem_cobertura(
+            DataSource.UNDATA,
+            resolve_source_country_code(DataSource.UNDATA, country),
+            lambda code: undata_indicators.compute_median_age_fit(code, entity.target_age_min, entity.target_age_max),
+        )
         return await self._normalize_and_save(
             IndicatorCode.MEDIAN_AGE_FIT_SCORE,
             DataSource.UNDATA,

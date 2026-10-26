@@ -109,7 +109,7 @@ def test_coverage_and_scoring_read_the_same_helper() -> None:
     expected = {
         "ensure_candidates_coverage": "_champion_candidates",
         "score_reference_candidates": "_champion_candidates",
-        "resolve_demand_ceiling": "_top_reference_candidates",
+        "measure_demand_ceiling": "_top_reference_candidates",
     }
     # Split the module into method bodies so a loop can be attributed to one.
     bodies = re.split(r"\n    (?:async )?def ", src)
@@ -149,7 +149,13 @@ def _servico(session) -> "AnalysisService":  # noqa: ANN001, F821
     servico = AnalysisService.__new__(AnalysisService)
     servico._session = session
     servico._country_repo = SimpleNamespace(
-        get_by_iso3=AsyncMock(return_value=SimpleNamespace(iso3="IND", iso2="IN", search_language=None))
+        get_by_iso3=AsyncMock(
+            return_value=SimpleNamespace(iso3="IND", iso2="IN", pytrends_geo=None, search_language=None)
+        )
+    )
+    servico._product_repo = SimpleNamespace(
+        markets_for=AsyncMock(return_value={}),
+        list_other_brand_names=AsyncMock(return_value=[]),
     )
     servico._coverage_service = SimpleNamespace(
         check_coverage=AsyncMock(return_value=[]),
