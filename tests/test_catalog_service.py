@@ -206,7 +206,37 @@ async def test_a_brand_keeps_its_terms_for_the_semester(db_session: AsyncSession
     linha.updated_at = utc_now() - timedelta(days=settings.search_terms_ttl_days + 1)
     await db_session.flush()
     await repo.save_brand_markets(entity.entity_key, marca.brand_key, second, keep_fixed=True)
-    assert (await repo.markets_for(entity, marca.brand_key))["GBR"]["search_terms"] == ["marca 12 years"]
+    # Fora da janela os termos se ACUMULAM, como no produto; substituir jogava
+    # fora o que já tinha sido curado.
+    assert (await repo.markets_for(entity, marca.brand_key))["GBR"]["search_terms"] == [
+        "marca 12",
+        "marca whisky",
+        "marca 12 years",
+    ]
+
+
+async def test_a_brand_keeps_its_reference_candidates_for_the_semester(db_session: AsyncSession) -> None:
+    """Os candidatos da marca não tinham janela: cada identificação os trocava."""
+    from app.repositories.product_repository import ProductRepository
+
+    repo = ProductRepository(db_session)
+    entity = await repo.create_entity(canonical_title=f"whisky {uuid.uuid4()}")
+    marca = await repo.get_or_create_brand(name=f"Marca {uuid.uuid4().hex[:8]}")
+
+    await repo.merge_identified_reference_candidates(
+        entity, marca.brand_key, [{"country": "GBR", "search_terms": ["marca whisky"]}]
+    )
+    await repo.merge_identified_reference_candidates(
+        entity,
+        marca.brand_key,
+        [{"country": "GBR", "search_terms": ["marca 12"]}, {"country": "USA", "search_terms": ["marca scotch"]}],
+    )
+
+    candidatos = await repo.reference_candidates_for(entity, marca.brand_key)
+    assert [(c["country"], c["search_terms"]) for c in candidatos] == [
+        ("GBR", ["marca whisky"]),
+        ("USA", ["marca scotch"]),
+    ]
 
 
 async def test_resolve_does_not_wipe_curated_fields_when_none_provided(db_session: AsyncSession) -> None:

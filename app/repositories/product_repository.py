@@ -21,8 +21,8 @@ from app.db.models.brand_reference_candidate import BrandReferenceCandidate
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
 from app.db.models.product_excluded_term import ProductExcludedTerm
-from app.services.vocabulary_window import vocabulary_is_fixed
-from app.utils.text import normalize_alias
+from app.services.vocabulary_window import apply_candidates, apply_markets, vocabulary_is_fixed
+from app.utils.text import as_term_list, normalize_alias
 from app.utils.time import utc_now
 
 
@@ -160,17 +160,20 @@ class ProductRepository:
         pago de novo em todos os países.
         """
         for country, market in (markets or {}).items():
-            if not market or not market.get("search_terms"):
+            if not market or not as_term_list(market.get("search_terms")):
                 continue
             existente = await self._session.get(BrandMarket, (entity_key, brand_key, country))
             if existente is None:
                 self._session.add(
                     BrandMarket(entity_key=entity_key, brand_key=brand_key, country=country, market=market)
                 )
-            elif keep_fixed and vocabulary_is_fixed(existente.updated_at):
                 continue
-            else:
-                existente.market = market
+            # A mesma regra do produto (ver vocabulary_window): dentro da
+            # janela um país com termos fica com eles; fora dela os termos se
+            # acumulam. Substituir jogava fora o que já tinha sido curado.
+            fixo = keep_fixed and vocabulary_is_fixed(existente.updated_at)
+            mesclado, _aplicado = apply_markets({country: existente.market}, {country: market}, fixed=fixo)
+            existente.market = mesclado[country]
         await self._session.flush()
 
     async def reference_candidates_for(
@@ -204,6 +207,20 @@ class ProductRepository:
             )
         else:
             linha.candidates = candidates
+        await self._session.flush()
+
+    async def merge_identified_reference_candidates(
+        self, entity: ProductCatalog, brand_key: uuid.UUID, incoming: list[dict[str, Any]]
+    ) -> None:
+        """Os candidatos de referência que uma identificação trouxe para uma
+        marca, pela regra da janela (ver vocabulary_window). Sem janela, cada
+        identificação nova trocava os candidatos da marca, e com eles as
+        sementes pagas no Google Ads."""
+        linha = await self._session.get(BrandReferenceCandidate, (entity.entity_key, brand_key))
+        if linha is None:
+            await self.save_reference_candidates(entity, brand_key, incoming)
+            return
+        linha.candidates = apply_candidates(linha.candidates, incoming, fixed=vocabulary_is_fixed(linha.updated_at))
         await self._session.flush()
 
     async def get_by_entity_key(self, entity_key: uuid.UUID) -> ProductCatalog | None:

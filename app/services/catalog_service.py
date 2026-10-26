@@ -77,87 +77,9 @@ from app.services.catalog_matcher import CatalogMatcher, _describe
 from app.services.embedding_client import EmbeddingClient, EmbeddingError, vector_literal
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.vision_client import VisionClient
-from app.services.vocabulary_window import vocabulary_is_fixed
+from app.services.vocabulary_window import apply_candidates, apply_markets, vocabulary_is_fixed
 from app.utils.text import as_term_list, normalize_alias
 from app.utils.time import utc_now
-
-
-def _union_terms(*lists: list[str] | None) -> list[str]:
-    """Case-insensitive union preserving first-seen order (existing terms first).
-    Curated keywords are ACCUMULATED, never replaced — a re-identify only appends
-    genuinely new terms, keeping the seed order (and thus the demand cache) stable."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for lst in lists:
-        for term in lst or []:
-            if not term:
-                continue
-            key = str(term).strip().lower()
-            if key and key not in seen:
-                seen.add(key)
-                out.append(term)
-    return out
-
-
-def _merge_localized_markets(
-    existing: dict[str, dict[str, Any]] | None, incoming: dict[str, dict[str, Any]] | None
-) -> dict[str, dict[str, Any]]:
-    """Merge per-country search vocabularies: union search_terms/excluded_terms
-    (existing first + new appended), so nothing curated is ever lost and only new
-    terms are added to the base."""
-    merged: dict[str, dict[str, Any]] = {k: dict(v) for k, v in (existing or {}).items()}
-    for iso3, new in (incoming or {}).items():
-        cur = merged.get(iso3)
-        if not cur:
-            merged[iso3] = new
-            continue
-        primary = [new.get("primary_name")] if new.get("primary_name") else None
-        merged[iso3] = {
-            "primary_name": cur.get("primary_name") or new.get("primary_name"),
-            "formal_name": cur.get("formal_name") or new.get("formal_name"),
-            "search_terms": _union_terms(cur.get("search_terms"), new.get("search_terms"), primary),
-            "excluded_terms": _union_terms(cur.get("excluded_terms"), new.get("excluded_terms")),
-            "antagonist_terms": _union_terms(cur.get("antagonist_terms"), new.get("antagonist_terms")),
-            "contrast_attributes": _union_terms(cur.get("contrast_attributes"), new.get("contrast_attributes")),
-            "confidence": max(float(cur.get("confidence") or 0.0), float(new.get("confidence") or 0.0)),
-        }
-    return merged
-
-
-def only_new_countries(
-    existing: dict[str, dict[str, Any]] | None, incoming: dict[str, dict[str, Any]] | None
-) -> dict[str, dict[str, Any]]:
-    """The part of `incoming` for countries that have no terms yet.
-
-    Inside the window a country that already has terms keeps them: a fresh
-    identification returns a slightly different list every time, and adding
-    those words changed the seed the related keywords are stored under, so
-    every country's Google Ads data was bought again (0,90 USD on 23/10/2026
-    for a repeat analysis minutes after the first). A country nobody asked
-    about before still gets its terms."""
-    return {
-        iso3: market
-        for iso3, market in (incoming or {}).items()
-        if not ((existing or {}).get(iso3) or {}).get("search_terms")
-    }
-
-
-def _merge_reference_candidates(
-    existing: list[dict[str, Any]] | None, incoming: list[dict[str, Any]] | None
-) -> list[dict[str, Any]]:
-    """Merge reference-market candidates by country (union of terms), same
-    accumulate-never-replace rule as localized_markets."""
-    by_country: dict[str | None, dict[str, Any]] = {c.get("country"): dict(c) for c in (existing or [])}
-    for new in incoming or []:
-        cur = by_country.get(new.get("country"))
-        if not cur:
-            by_country[new.get("country")] = new
-            continue
-        primary = [new.get("primary_name")] if new.get("primary_name") else None
-        cur["search_terms"] = _union_terms(cur.get("search_terms"), new.get("search_terms"), primary)
-        cur["excluded_terms"] = _union_terms(cur.get("excluded_terms"), new.get("excluded_terms"))
-        cur["primary_name"] = cur.get("primary_name") or new.get("primary_name")
-    return list(by_country.values())
 
 
 @dataclass
@@ -360,7 +282,7 @@ class CatalogService:
             source=source,
             category=category,
             localized_markets=None if marca is not None else localized_markets,
-            reference_candidates=reference_candidates,
+            reference_candidates=None if marca is not None else reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
             model=model,
@@ -384,6 +306,12 @@ class CatalogService:
             if localized_markets:
                 await self._repo.save_brand_markets(
                     resolvido.entity.entity_key, marca.brand_key, localized_markets, keep_fixed=True
+                )
+            # Os candidatos que a identificação trouxe são os DA MARCA — os
+            # termos deles nomeiam a marca —, e iam para o produto.
+            if reference_candidates:
+                await self._repo.merge_identified_reference_candidates(
+                    resolvido.entity, marca.brand_key, reference_candidates
                 )
         # A família vem dos passos que a DECIDEM; quem apenas reencontra a
         # entidade (alias, trigram) não a traz. Carregada aqui para que a
@@ -1301,30 +1229,17 @@ class CatalogService:
         Returns the vocabulary actually applied, which is what gets indexed:
         indexing words the entity does not keep would point aliases at terms
         it never declares."""
-        aplicado = localized_markets
         fixo = vocabulary_is_fixed(entity.vocabulary_at)
+        aplicado = localized_markets
         if localized_markets is not None:
-            if fixo:
-                # Inside the semester the countries that already have terms keep
-                # them; only countries missing from the base are added.
-                aplicado = only_new_countries(entity.localized_markets, localized_markets)
-                if aplicado:
-                    entity.localized_markets = {**(entity.localized_markets or {}), **aplicado}
-            else:
-                # Merge, never overwrite: curated keywords accumulate, and the
-                # window starts again from here.
-                entity.localized_markets = _merge_localized_markets(entity.localized_markets, localized_markets)
+            entity.localized_markets, aplicado = apply_markets(entity.localized_markets, localized_markets, fixed=fixo)
+            if not fixo:
+                # The window starts again from here.
                 entity.vocabulary_at = utc_now()
         if reference_candidates is not None:
-            if fixo:
-                # Same rule for the ruler's candidates: their terms are bought
-                # on Google Ads exactly like a requested country's.
-                conhecidos = {c.get("country") for c in (entity.reference_candidates or [])}
-                novos = [c for c in reference_candidates if c.get("country") not in conhecidos]
-                if novos:
-                    entity.reference_candidates = [*(entity.reference_candidates or []), *novos]
-            else:
-                entity.reference_candidates = _merge_reference_candidates(
-                    entity.reference_candidates, reference_candidates
-                )
+            # Same rule for the ruler's candidates: their terms are bought on
+            # Google Ads exactly like a requested country's.
+            entity.reference_candidates = apply_candidates(
+                entity.reference_candidates, reference_candidates, fixed=fixo
+            )
         return aplicado

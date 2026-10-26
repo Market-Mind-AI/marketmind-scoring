@@ -35,7 +35,7 @@ from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.analyze import AnalyzeRequest
 from app.schemas.coverage import CoverageGap, JobTaskResult
-from app.services.catalog_service import CatalogService, _merge_localized_markets
+from app.services.catalog_service import CatalogService
 from app.services.coverage_service import CoverageService
 from app.services.demand_inputs import DemandInputs, demand_inputs
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
@@ -47,6 +47,7 @@ from app.services.macro_coverage import fontes_sem_cobertura_de, macro_gaps
 from app.services.mos_engine import MosEngine
 from app.services.product_identification_service import _fallback_market, _has_terms, _market_to_dict
 from app.services.reference_market_client import ReferenceMarketClient, ReferenceMarketError
+from app.services.vocabulary_window import merge_markets
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.time import utc_now
 
@@ -302,7 +303,7 @@ class AnalysisService:
         if marca is not None:
             await self._product_repo.save_brand_markets(entity.entity_key, marca.brand_key, mercados)
             return
-        entity.localized_markets = _merge_localized_markets(entity.localized_markets, mercados)
+        entity.localized_markets = merge_markets(entity.localized_markets, mercados)
         # Only countries that had no terms reach this point, so it never changes
         # a fixed one; it does start the semester for a product whose first
         # vocabulary was written here rather than at identification.
