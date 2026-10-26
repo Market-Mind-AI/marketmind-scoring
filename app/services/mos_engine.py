@@ -134,6 +134,9 @@ class MosEngine:
                         f"No calibrated weight for dimension={dimension.value}, period_key={period_key} "
                         "(run POST /admin/mos/refresh-weights first)"
                     ),
+                    # A linha da marca, como as outras exclusões: sem ela a
+                    # exclusão de uma análise de marca caía na linha do PRODUTO.
+                    brand_key=brand_key,
                 )
             weights[dimension] = float(weight_row.weight)
 

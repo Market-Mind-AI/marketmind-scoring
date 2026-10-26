@@ -42,7 +42,12 @@ class CountryVectorBuilder:
     async def demand_dims(self, country_iso3: str, period_key: str) -> dict[IndicatorDimension, float]:
         """Average of each Demand dimension (VOLUME and QUALITY) across every
         product already computed for this country/period. Empty dict if no
-        product has data there yet. (2026-07-16: Demand is two dimensions now.)"""
+        product has data there yet. (2026-07-16: Demand is two dimensions now.)
+
+        Agrupado por (produto, marca), como IndicatorRepository.get_values_for
+        lê: só por produto, a medição de uma marca e a do produto caíam no
+        mesmo grupo e uma sobrescrevia a outra indicador a indicador, montando
+        um vetor que não era de ninguém."""
         stmt = select(IndicatorValue).where(
             IndicatorValue.entity_key.is_not(None),
             IndicatorValue.country == country_iso3,
@@ -50,10 +55,10 @@ class CountryVectorBuilder:
             IndicatorValue.period_key == period_key,
         )
         result = await self._session.execute(stmt)
-        by_entity: dict[uuid.UUID, dict[str, IndicatorValue]] = defaultdict(dict)
+        by_entity: dict[tuple[uuid.UUID, uuid.UUID | None], dict[str, IndicatorValue]] = defaultdict(dict)
         for iv in result.scalars().all():
             assert iv.entity_key is not None  # guaranteed by the entity_key.is_not(None) filter above
-            by_entity[iv.entity_key][iv.indicator_code] = iv
+            by_entity[(iv.entity_key, iv.brand_key)][iv.indicator_code] = iv
 
         collected: dict[IndicatorDimension, list[float]] = {d: [] for d in self._DEMAND_DIMENSIONS}
         for entity_values in by_entity.values():
