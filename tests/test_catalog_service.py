@@ -281,8 +281,6 @@ async def test_resolve_cria_entidade_quando_llm_nao_reconhece(db_session: AsyncS
     assert result.method == "created"
 
 
-
-
 async def test_consulta_mais_ampla_nao_e_decidida_por_forma(db_session: AsyncSession) -> None:
     """O passo 2 recusa decidir nos DOIS sentidos.
 
@@ -385,3 +383,83 @@ async def test_a_search_term_names_its_owner_with_or_without_a_brand(db_session:
     assert await repo.owners_of_search_term(f"freidora {sufixo}") == {(generico.entity_key, None)}
     assert await repo.owners_of_search_term(f"MARCA {sufixo} U1") == {(impressora.entity_key, marca.brand_key)}
     assert await repo.owners_of_search_term(f"marca {sufixo}") == set(), "parte de um termo não é o termo"
+
+
+# --- a edição do usuário é conferida antes de entrar no catálogo (2026-10-26) --
+
+
+def _revisor(vereditos: dict[str, tuple[bool, str]]) -> AsyncMock:
+    matcher = _sem_match()
+    matcher.review_edits = AsyncMock(return_value=vereditos)
+    return matcher
+
+
+async def test_a_new_identification_does_not_overwrite_the_stored_audience(db_session: AsyncSession) -> None:
+    """Cada identificação chutava uma faixa nova e ela substituía a gravada:
+    a mesma impressora voltava com 20–55, 18–65 e 20–60."""
+    service = CatalogService(db_session, matcher=_sem_match())
+    texto = f"impressora {uuid.uuid4().hex[:8]}"
+    criado = await service.resolve(texto, source="test", target_age_min=20, target_age_max=55)
+
+    await service.resolve(texto, source="test", target_age_min=18, target_age_max=65)
+
+    entidade = await service._repo.get_by_entity_key(criado.entity_key)
+    assert (entidade.target_age_min, entidade.target_age_max) == (20, 55)
+
+
+async def test_an_accepted_edit_changes_the_catalog_and_a_rejected_one_does_not(db_session: AsyncSession) -> None:
+    from sqlalchemy import select
+
+    from app.db.models.product_edit import ProductEdit
+
+    texto = f"impressora {uuid.uuid4().hex[:8]}"
+    criado = await CatalogService(db_session, matcher=_sem_match()).resolve(
+        texto, source="test", category="3D Printers", target_age_min=20, target_age_max=55
+    )
+    service = CatalogService(
+        db_session,
+        matcher=_revisor({"target_age": (True, "hobbyists start younger"), "category": (False, "not a toy")}),
+    )
+
+    await service.revisar_edicoes(
+        criado.entity_key,
+        category="Toys",
+        target_age_min=16,
+        target_age_max=60,
+        estimated_price=None,
+        price_currency=None,
+    )
+    await db_session.commit()
+
+    entidade = await service._repo.get_by_entity_key(criado.entity_key)
+    assert (entidade.target_age_min, entidade.target_age_max) == (16, 60)
+    assert entidade.category == "3D Printers"
+    edicoes = (
+        (await db_session.execute(select(ProductEdit).where(ProductEdit.entity_key == criado.entity_key)))
+        .scalars()
+        .all()
+    )
+    assert {(e.field, e.old_value, e.new_value, e.accepted) for e in edicoes} == {
+        ("target_age", "20-55", "16-60", True),
+        ("category", "3D Printers", "Toys", False),
+    }
+
+
+async def test_nothing_edited_asks_no_model(db_session: AsyncSession) -> None:
+    texto = f"impressora {uuid.uuid4().hex[:8]}"
+    criado = await CatalogService(db_session, matcher=_sem_match()).resolve(
+        texto, source="test", target_age_min=20, target_age_max=55
+    )
+    matcher = _revisor({})
+    service = CatalogService(db_session, matcher=matcher)
+
+    await service.revisar_edicoes(
+        criado.entity_key,
+        category=None,
+        target_age_min=20,
+        target_age_max=55,
+        estimated_price=None,
+        price_currency=None,
+    )
+
+    matcher.review_edits.assert_not_awaited()

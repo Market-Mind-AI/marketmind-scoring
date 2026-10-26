@@ -35,9 +35,10 @@ class FakeLangfuse:
         self.existing[prompt["name"]] = prompt["prompt"]
 
 
-def test_the_registry_holds_the_seven_instructions_from_code() -> None:
+def test_the_registry_holds_the_eight_instructions_from_code() -> None:
     assert PROMPTS == {
         "catalog-match-system": catalog_matcher._SYSTEM,
+        "catalog-edit-review-system": catalog_matcher._EDIT_REVIEW_SYSTEM,
         "enrichment-system": enrichment_client._SYSTEM,
         "reference-market-system": reference_market_client._SYSTEM,
         "vision-system": vision_client._INSTRUCTIONS,

@@ -69,6 +69,7 @@ from app.core.logging import logger
 from app.db.models.brand import Brand
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
+from app.db.models.product_edit import ProductEdit
 from app.repositories.product_repository import ProductRepository, TrigramOutcome
 from app.schemas.catalog import CatalogResolveResponse
 from app.services.catalog_matcher import CatalogMatcher, _describe
@@ -789,6 +790,82 @@ class CatalogService:
                 )
         return evidencias
 
+    async def revisar_edicoes(
+        self,
+        entity_key: uuid.UUID,
+        *,
+        category: str | None,
+        target_age_min: int | None,
+        target_age_max: int | None,
+        estimated_price: float | None,
+        price_currency: str | None,
+    ) -> dict[str, tuple[bool, str]]:
+        """O que o usuário mudou na tela de revisão, conferido antes de entrar
+        no catálogo.
+
+        Só conta como edição o valor que difere de um valor JÁ gravado — o que
+        estava vazio a resolução preencheu. O modelo diz se cada mudança faz
+        sentido para este produto; a aceita é gravada, a recusada não, e as
+        duas ficam em `product_edits` com o valor anterior e o porquê.
+        """
+        entity = await self._repo.get_by_entity_key(entity_key)
+        if entity is None:
+            return {}
+        mudancas: dict[str, tuple[str | None, str]] = {}
+        if category and entity.category and category.strip().casefold() != entity.category.strip().casefold():
+            mudancas["category"] = (entity.category, category)
+        if (
+            target_age_min is not None
+            and target_age_max is not None
+            and entity.target_age_min is not None
+            and entity.target_age_max is not None
+            and (target_age_min, target_age_max) != (entity.target_age_min, entity.target_age_max)
+        ):
+            mudancas["target_age"] = (
+                f"{entity.target_age_min}-{entity.target_age_max}",
+                f"{target_age_min}-{target_age_max}",
+            )
+        if (
+            estimated_price is not None
+            and entity.estimated_price is not None
+            and (Decimal(str(estimated_price)), price_currency) != (entity.estimated_price, entity.price_currency)
+        ):
+            mudancas["estimated_price"] = (
+                f"{entity.estimated_price} {entity.price_currency or ''}".strip(),
+                f"{estimated_price} {price_currency or ''}".strip(),
+            )
+        if not mudancas:
+            return {}
+
+        vereditos = await self._matcher.review_edits(entity, mudancas)
+        for campo, (aceita, motivo) in vereditos.items():
+            antes, depois = mudancas[campo]
+            self._session.add(
+                ProductEdit(
+                    entity_key=entity.entity_key,
+                    field=campo,
+                    old_value=antes,
+                    new_value=depois,
+                    accepted=aceita,
+                    reason=motivo,
+                )
+            )
+            logger.info(
+                f"Edição de {campo} em {entity.canonical_title!r}: {antes!r} -> {depois!r} "
+                f"{'aceita' if aceita else 'recusada'} ({motivo})"
+            )
+            if not aceita:
+                continue
+            if campo == "category":
+                entity.category = category
+            elif campo == "target_age":
+                entity.target_age_min, entity.target_age_max = target_age_min, target_age_max
+            elif campo == "estimated_price":
+                entity.estimated_price = Decimal(str(estimated_price))
+                entity.price_currency = price_currency
+        await self._session.flush()
+        return vereditos
+
     async def candidatos_para_identificacao(self, texto: str) -> list[tuple[ProductCatalog, str]]:
         """Os produtos do catálogo que o texto do usuário pode ser, descritos
         para a chamada de identificação decidir.
@@ -1136,10 +1213,16 @@ class CatalogService:
         applied — a text-only resolve (no markets) never wipes existing data.
         The entity is session-attached, so the surrounding commit persists it.
 
+        Categoria e faixa etária só PREENCHEM o que está vazio (2026-10-26).
+        Sobrescrever deixava cada identificação trocar a faixa gravada pelo
+        chute novo do modelo — 20–55, 18–65, 20–60 para a mesma impressora —,
+        e a nota mudava sem dado novo. Quem muda um valor gravado é a edição
+        do usuário, conferida em CatalogService.revisar_edicoes.
+
         Returns the vocabulary actually applied, which is what gets indexed:
         indexing words the entity does not keep would point aliases at terms
         it never declares."""
-        if category is not None:
+        if category is not None and entity.category is None:
             entity.category = category
         aplicado = localized_markets
         fixo = vocabulary_is_fixed(entity.vocabulary_at)
@@ -1167,8 +1250,8 @@ class CatalogService:
                 entity.reference_candidates = _merge_reference_candidates(
                     entity.reference_candidates, reference_candidates
                 )
-        if target_age_min is not None:
+        if target_age_min is not None and entity.target_age_min is None:
             entity.target_age_min = target_age_min
-        if target_age_max is not None:
+        if target_age_max is not None and entity.target_age_max is None:
             entity.target_age_max = target_age_max
         return aplicado

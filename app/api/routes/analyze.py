@@ -142,6 +142,18 @@ async def analyze(
         reference_candidates=request.reference_candidates,
         target_age_min=request.target_age_min,
         target_age_max=request.target_age_max,
+        estimated_price=request.estimated_price,
+        price_currency=request.price_currency,
+    )
+    # O que o usuário mudou na tela de revisão só entra no catálogo — que é
+    # compartilhado — se fizer sentido para este produto. Ver revisar_edicoes.
+    await catalog_service.revisar_edicoes(
+        resolved.entity_key,
+        category=request.category,
+        target_age_min=request.target_age_min,
+        target_age_max=request.target_age_max,
+        estimated_price=request.estimated_price,
+        price_currency=request.price_currency,
     )
 
     analysis_repo = AnalysisRepository(session)

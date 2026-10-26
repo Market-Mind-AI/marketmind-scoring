@@ -14,6 +14,7 @@ from app.db.models.mos_result import MosResult
 from app.db.models.normalization_reference import NormalizationReference
 from app.db.models.product_alias import ProductAlias
 from app.db.models.product_catalog import ProductCatalog
+from app.db.models.product_edit import ProductEdit
 from app.db.models.product_excluded_term import ProductExcludedTerm
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "NormalizationReference",
     "ProductAlias",
     "ProductCatalog",
+    "ProductEdit",
     "ProductExcludedTerm",
 ]

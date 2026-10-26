@@ -147,6 +147,31 @@ _SYSTEM = (
 )
 
 
+class EditVerdict(BaseModel):
+    field: str = Field(description="The field, exactly as listed.")
+    accept: bool = Field(description="True when the new value fits this product; false when it contradicts it.")
+    reason: str = Field(description="One short sentence saying why.")
+
+
+class EditReview(BaseModel):
+    verdicts: list[EditVerdict] = Field(default_factory=list)
+
+
+# A conferência de uma edição feita na tela de revisão (2026-10-26). O catálogo
+# é compartilhado, então uma edição aceita muda a nota de quem analisar o
+# produto depois; uma recusada não muda nada. Aceitar o plausível e recusar só o
+# que contradiz o produto: o usuário costuma saber coisas sobre o próprio
+# mercado que o modelo não sabe.
+_EDIT_REVIEW_SYSTEM = (
+    "A user reviewing a product's identification changed some of its fields before running a market "
+    "analysis. The product is in a shared catalog, so an accepted change affects every later analysis of it. "
+    "For each change, decide whether the new value is plausible for THIS product as described. Accept "
+    "anything a reasonable seller of this product could hold — the user may know their market better than "
+    "you. Reject only a value that contradicts what the product is (an audience, category or price that "
+    "cannot belong to this product). Return one verdict per listed field."
+)
+
+
 def _describe(product: "ProductCatalog", max_terms: int = 12, evidencia: str | None = None) -> str:
     """Uma entidade como o LLM a vê: nome, categoria e uma amostra dos termos
     curados, nos DOIS sinais. Os termos são a evidência real — o
@@ -281,3 +306,28 @@ class CatalogMatcher:
         # reintroduziria a decisão por semelhança que este passo substituiu.
         logger.warning(f"LLM devolveu entity_key desconhecida {escolhido!r}; tratando como sem match")
         return None
+
+    async def review_edits(
+        self, product: "ProductCatalog", changes: dict[str, tuple[str | None, str]]
+    ) -> dict[str, tuple[bool, str]]:
+        """Para cada campo editado: (aceita?, porquê). Sem modelo, nada é aceito
+        — o catálogo fica como estava, que é o erro que não se espalha."""
+        if not changes:
+            return {}
+        provider = self._provider or resolve_catalog_match_llm()
+        linhas = "\n".join(f"- {campo}: {antes or '(empty)'} -> {depois}" for campo, (antes, depois) in changes.items())
+        descricao = _describe(product)
+        if product.defining_attributes:
+            descricao += f"\n  what makes it this product: {'; '.join(product.defining_attributes)}"
+        prompt = f"Product:\n{descricao}\n\nChanges the user made:\n{linhas}"
+        try:
+            review = await provider.complete(
+                system=prompt_text("catalog-edit-review-system", _EDIT_REVIEW_SYSTEM),
+                user=prompt,
+                response_model=EditReview,
+            )
+        except LLMError as exc:
+            logger.warning(f"LLM de conferência de edição indisponível; nenhuma edição aplicada: {exc}")
+            return {campo: (False, "the review could not run") for campo in changes}
+        vereditos = {v.field: (v.accept, v.reason) for v in getattr(review, "verdicts", []) if v.field in changes}
+        return {campo: vereditos.get(campo, (False, "no verdict returned")) for campo in changes}
