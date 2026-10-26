@@ -125,6 +125,13 @@ class ProductIdentification(BaseModel):
             "one of them is the same product. Null when none is, or when no candidates were listed."
         ),
     )
+    broader_catalog_match: int | None = Field(
+        default=None,
+        description=(
+            "When no candidate is this product: the number of the candidate that is a BROADER product this one "
+            "is a narrower kind of (the same product with a defining qualifier added). Null otherwise."
+        ),
+    )
     brand: str | None
     model: str | None = Field(
         default=None,
@@ -212,7 +219,9 @@ _INSTRUCTIONS = (
     "— or, when it names none and the product is one brand's own model, the brand that makes it; null only "
     "for a product many brands sell — and leave every other field empty: the catalog already holds them. "
     "If none is, set "
-    "`catalog_match`=null and identify the product as follows. "
+    "`catalog_match`=null — and, when one candidate is a broader product this one is a narrower kind "
+    "of (the same product with a defining qualifier added), `broader_catalog_match` to its number — and "
+    "identify the product as follows. "
     "Describe the product exactly as the input gives it: `brand`; `model` (the specific model, edition "
     "or reference named, or null); `product_type` (the kind of product, specific enough to tell it apart "
     "from the other kinds sold under the same generic name); `defining_attributes` (each attribute that, "

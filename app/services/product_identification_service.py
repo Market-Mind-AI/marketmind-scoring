@@ -115,7 +115,13 @@ class ProductIdentificationService:
             image_base64=image_base64,
             image_media_type=image_media_type,
             hint_text=hint_text,
-            countries=countries,
+            # Nenhum país: a identificação devolve só a identidade. Escrever os
+            # termos de busca de cada país era a maior parte da espera — medido
+            # em 26/10/2026, 7–9 s sem eles contra 18–32 s com um a três
+            # países —, e o /analyze os gera de novo em segundo plano de
+            # qualquer jeito (AnalysisService._ensure_product_enrichment), agora
+            # com os atributos e antagônicos que esta chamada grava.
+            countries=[],
             candidates=[descricao for _, descricao in candidatos] or None,
         )
         if identification.catalog_match is not None:
@@ -127,6 +133,13 @@ class ProductIdentificationService:
                 else None
             )
             return await self._do_catalogo(entity, marca, countries, method="catalog")
+
+        pai = (
+            candidatos[identification.broader_catalog_match - 1][0]
+            if identification.broader_catalog_match is not None
+            and 1 <= identification.broader_catalog_match <= len(candidatos)
+            else None
+        )
 
         # Vision-only identify (fast): keep ONLY the terms the vision model
         # already returned. The heavy per-country enrichment (localized_markets)
@@ -158,6 +171,8 @@ class ProductIdentificationService:
             model=identification.model,
             estimated_price=identification.estimated_price,
             price_currency=identification.price_currency,
+            julgados={entidade.entity_key for entidade, _ in candidatos},
+            pai_julgado=pai,
         )
 
         return IdentifyImageResponse(

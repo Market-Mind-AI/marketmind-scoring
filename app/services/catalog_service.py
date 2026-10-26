@@ -277,6 +277,8 @@ class CatalogService:
         model: str | None = None,
         estimated_price: float | None = None,
         price_currency: str | None = None,
+        julgados: set[uuid.UUID] | None = None,
+        pai_julgado: ProductCatalog | None = None,
     ) -> CatalogResolveResponse:
         """`text` é o NOME GENÉRICO do produto, sem marca. A marca vem separada,
         e desde 24/09/2026 ela NÃO cria entidade: o catálogo tem um produto por
@@ -327,6 +329,8 @@ class CatalogService:
             target_age_min=target_age_min,
             target_age_max=target_age_max,
             model=model,
+            julgados=julgados,
+            pai_julgado=pai_julgado,
         )
         # Atributos e antagônicos são da identidade, não da marca: ficam no
         # produto. Só preenchem o que está vazio, pela mesma razão do
@@ -374,6 +378,8 @@ class CatalogService:
         target_age_min: int | None,
         target_age_max: int | None,
         model: str | None = None,
+        julgados: set[uuid.UUID] | None = None,
+        pai_julgado: ProductCatalog | None = None,
     ) -> _Resolvido:
         """Os quatro passos da resolução, dentro de UMA partição de marca.
 
@@ -512,11 +518,24 @@ class CatalogService:
         candidatos = await self._repo.list_match_candidates(
             category=category, priority=trigram.vetoed, semantic=semanticos, brand_key=brand_key
         )
-        evidencias = await self._evidencias_de_polaridade(generico, candidatos)
         motivo: dict[str, Any] = {}
-        correspondente = await self._matcher.pick(
-            text=text, candidates=candidatos, motivo=motivo, category=category, evidencias=evidencias
-        )
+        recuperados = {e.entity_key for e in [*trigram.vetoed, *semanticos]}
+        if julgados is not None and recuperados <= julgados:
+            # A identificação acabou de ver os mesmos produtos que a busca por
+            # forma e por significado traz aqui, e disse que nenhum é este — e
+            # qual, se algum, é a versão mais ampla dele. O resto da lista são
+            # produtos da mesma categoria e os mais recentes, sem relação com o
+            # texto.
+            # Perguntar de novo era uma segunda chamada (~4 s, medido em
+            # 26/10/2026) para a mesma decisão.
+            correspondente = pai_julgado
+            if pai_julgado is not None:
+                motivo = {"relationship": "subtype", "reasoning": "narrower kind, judged by the identification"}
+        else:
+            evidencias = await self._evidencias_de_polaridade(generico, candidatos)
+            correspondente = await self._matcher.pick(
+                text=text, candidates=candidatos, motivo=motivo, category=category, evidencias=evidencias
+            )
         if correspondente is not None and motivo.get("relationship") == "subtype":
             # SUB-PRODUTO: entidade própria, pendurada na mais ampla.
             #

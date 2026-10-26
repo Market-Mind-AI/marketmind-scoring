@@ -497,3 +497,22 @@ async def test_the_identity_backfill_fills_only_what_is_empty(db_session: AsyncS
     assert produto.defining_attributes == ["cooks with hot air"]
     assert produto.antagonist_products == ["oil deep fryer"]
     assert (produto.category, produto.target_age_min, produto.target_age_max) == ("Kitchen", 25, 65)
+
+
+async def test_candidates_the_identification_already_judged_are_not_asked_again(db_session: AsyncSession) -> None:
+    """A identificação vê os mesmos candidatos e diz se algum é o produto ou a
+    versão mais ampla dele; perguntar de novo ao match era uma segunda chamada
+    (~4 s) para a mesma decisão."""
+    sufixo = uuid.uuid4().hex[:8]
+    cafe = await CatalogService(db_session, matcher=_sem_match()).resolve(f"coffee {sufixo}", source="test")
+    pai = await CatalogService(db_session, matcher=_sem_match())._repo.get_by_entity_key(cafe.entity_key)
+    matcher = _sem_match()
+    service = CatalogService(db_session, matcher=matcher)
+
+    instantaneo = await service.resolve(
+        f"instant coffee {sufixo}", source="test", julgados={cafe.entity_key}, pai_julgado=pai
+    )
+
+    matcher.pick.assert_not_awaited()
+    assert instantaneo.method == "subtype"
+    assert instantaneo.generic_title == f"coffee {sufixo}"
