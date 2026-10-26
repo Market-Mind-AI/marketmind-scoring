@@ -82,7 +82,7 @@ async def _vision_prompt(image: str | None, media_type: str | None, hint: str | 
 
 @pytest.mark.parametrize(("language", "single", "champion", "user_prompt"), _EXPLANATION_CASES)
 def test_the_explanation_system_prompt_is_unchanged(language, single, champion, user_prompt) -> None:
-    rendered = _system_prompt(language, single_country=single, user_prompt=user_prompt, external_champion=champion)
+    rendered = _system_prompt(language, single_country=single, user_prompt=user_prompt, champion=champion)
 
     assert rendered == _snapshot()[_explanation_key(language, single, champion, user_prompt)]
 

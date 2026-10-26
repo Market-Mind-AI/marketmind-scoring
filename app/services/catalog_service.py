@@ -232,6 +232,41 @@ def _falta_o_modelo(modelo: str | None, titulo_casado: str) -> bool:
     return not do_modelo <= set(normalize_alias(titulo_casado).split())
 
 
+def preencher_identidade(
+    entity: ProductCatalog,
+    *,
+    category: str | None,
+    target_age_min: int | None,
+    target_age_max: int | None,
+    defining_attributes: list[str] | None,
+    antagonist_products: list[str] | None,
+    estimated_price: float | None,
+    price_currency: str | None,
+) -> None:
+    """Preenche os campos da identidade que estão vazios; nunca troca um valor
+    gravado. A ÚNICA regra para isso, usada pela resolução e pelo backfill.
+
+    Trocar deixava cada identificação substituir o gravado pelo chute novo do
+    modelo — 20–55, 18–65, 20–60 anos para a mesma impressora —, e a nota mudava
+    sem dado novo. Quem muda um valor gravado é a edição do usuário, conferida
+    em CatalogService.revisar_edicoes. Lista vazia conta como resposta ("não há
+    antagônico") e é gravada; ausência (None) não.
+    """
+    if category and entity.category is None:
+        entity.category = category
+    if target_age_min is not None and entity.target_age_min is None:
+        entity.target_age_min = target_age_min
+    if target_age_max is not None and entity.target_age_max is None:
+        entity.target_age_max = target_age_max
+    if defining_attributes is not None and entity.defining_attributes is None:
+        entity.defining_attributes = list(dict.fromkeys(defining_attributes))
+    if antagonist_products is not None and entity.antagonist_products is None:
+        entity.antagonist_products = list(dict.fromkeys(antagonist_products))
+    if estimated_price is not None and entity.estimated_price is None:
+        entity.estimated_price = Decimal(str(estimated_price))
+        entity.price_currency = price_currency
+
+
 def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
     return CatalogResolveResponse(
         entity_key=resolvido.entity.entity_key,
@@ -332,17 +367,18 @@ class CatalogService:
             julgados=julgados,
             pai_julgado=pai_julgado,
         )
-        # Atributos e antagônicos são da identidade, não da marca: ficam no
-        # produto. Só preenchem o que está vazio, pela mesma razão do
-        # vocabulário fixo — quem já mediu este produto mediu com estes.
-        entity = resolvido.entity
-        if defining_attributes and not entity.defining_attributes:
-            entity.defining_attributes = list(dict.fromkeys(defining_attributes))
-        if antagonist_products and not entity.antagonist_products:
-            entity.antagonist_products = list(dict.fromkeys(antagonist_products))
-        if estimated_price is not None and entity.estimated_price is None:
-            entity.estimated_price = Decimal(str(estimated_price))
-            entity.price_currency = price_currency
+        # A identidade é do produto, não da marca, e por qualquer caminho que a
+        # resolução tenha saído só preenche o que está vazio.
+        preencher_identidade(
+            resolvido.entity,
+            category=category,
+            target_age_min=target_age_min,
+            target_age_max=target_age_max,
+            defining_attributes=defining_attributes,
+            antagonist_products=antagonist_products,
+            estimated_price=estimated_price,
+            price_currency=price_currency,
+        )
         if marca is not None:
             resolvido.marca = marca
             if localized_markets:
@@ -433,11 +469,8 @@ class CatalogService:
                 await self._repo.bump_alias_hit(alias_existente)
                 await self._atualizar(
                     entity,
-                    category=category,
                     localized_markets=localized_markets,
                     reference_candidates=reference_candidates,
-                    target_age_min=target_age_min,
-                    target_age_max=target_age_max,
                 )
                 return _Resolvido(entity=entity, method="alias", marca=marca, familia=familia)
             if not _categorias_batem(entity.category, category):
@@ -498,11 +531,8 @@ class CatalogService:
             await self._registrar_chave(chave, entity, source=source, alias_orfao=alias_orfao, category=category)
             await self._atualizar(
                 entity,
-                category=category,
                 localized_markets=localized_markets,
                 reference_candidates=reference_candidates,
-                target_age_min=target_age_min,
-                target_age_max=target_age_max,
             )
             return _Resolvido(
                 entity=entity, method="trigram", match_score=trigram.match.similarity, marca=marca, familia=familia
@@ -593,11 +623,8 @@ class CatalogService:
                 )
             await self._atualizar(
                 correspondente,
-                category=category,
                 localized_markets=localized_markets,
                 reference_candidates=reference_candidates,
-                target_age_min=target_age_min,
-                target_age_max=target_age_max,
             )
             return _Resolvido(
                 entity=correspondente,
@@ -625,22 +652,14 @@ class CatalogService:
         self,
         entity: ProductCatalog,
         *,
-        category: str | None,
         localized_markets: dict[str, dict[str, Any]] | None,
         reference_candidates: list[dict[str, Any]] | None,
-        target_age_min: int | None,
-        target_age_max: int | None,
     ) -> None:
         """Reanálise refresca a entidade com o que o chamador trouxe e indexa o
         vocabulário novo — os dois sempre juntos, porque indexar sem refrescar
         deixaria alias apontando para termo que a entidade não declara."""
         aplicado = self._refresh_entity_fields(
-            entity,
-            category=category,
-            localized_markets=localized_markets,
-            reference_candidates=reference_candidates,
-            target_age_min=target_age_min,
-            target_age_max=target_age_max,
+            entity, localized_markets=localized_markets, reference_candidates=reference_candidates
         )
         await self._index_terms(entity, aplicado)
 
@@ -913,10 +932,6 @@ class CatalogService:
             linhas = [_describe(entidade, evidencia=evidencias.get(entidade.entity_key))]
             for marca, termos in (await self._repo.brand_terms(entidade.entity_key)).items():
                 linhas.append(f"  sold as {marca}: {', '.join(termos[:8])}")
-            if entidade.defining_attributes:
-                linhas.append(f"  what makes it this product: {'; '.join(entidade.defining_attributes)}")
-            if entidade.antagonist_products:
-                linhas.append(f"  NOT these products: {'; '.join(entidade.antagonist_products)}")
             descritos.append((entidade, "\n".join(linhas)))
         return descritos
 
@@ -1010,17 +1025,16 @@ class CatalogService:
                     logger.warning(f"Identidade de {entidade.canonical_title!r} não completada: {exc}")
                     relatorio["falhas"] += 1
                     continue
-                if entidade.estimated_price is None and ident.estimated_price is not None:
-                    entidade.estimated_price = Decimal(str(ident.estimated_price))
-                    entidade.price_currency = ident.price_currency
-                if entidade.defining_attributes is None:
-                    entidade.defining_attributes = list(dict.fromkeys(ident.defining_attributes))
-                if entidade.antagonist_products is None:
-                    entidade.antagonist_products = list(dict.fromkeys(ident.antagonist_products))
-                if entidade.category is None and ident.category:
-                    entidade.category = ident.category
-                if entidade.target_age_min is None and entidade.target_age_max is None:
-                    entidade.target_age_min, entidade.target_age_max = ident.target_age_min, ident.target_age_max
+                preencher_identidade(
+                    entidade,
+                    category=ident.category,
+                    target_age_min=ident.target_age_min,
+                    target_age_max=ident.target_age_max,
+                    defining_attributes=ident.defining_attributes,
+                    antagonist_products=ident.antagonist_products,
+                    estimated_price=ident.estimated_price,
+                    price_currency=ident.price_currency,
+                )
                 await self._session.commit()
                 relatorio["completadas"] += 1
                 logger.info(
@@ -1274,28 +1288,19 @@ class CatalogService:
     def _refresh_entity_fields(
         entity: ProductCatalog,
         *,
-        category: str | None,
         localized_markets: dict[str, dict[str, Any]] | None,
         reference_candidates: list[dict[str, Any]] | None,
-        target_age_min: int | None,
-        target_age_max: int | None,
     ) -> dict[str, dict[str, Any]] | None:
         """Update an already-resolved entity with the fields a re-analysis
         brought, so its curated data stays current. Only NON-None values are
         applied — a text-only resolve (no markets) never wipes existing data.
         The entity is session-attached, so the surrounding commit persists it.
 
-        Categoria e faixa etária só PREENCHEM o que está vazio (2026-10-26).
-        Sobrescrever deixava cada identificação trocar a faixa gravada pelo
-        chute novo do modelo — 20–55, 18–65, 20–60 para a mesma impressora —,
-        e a nota mudava sem dado novo. Quem muda um valor gravado é a edição
-        do usuário, conferida em CatalogService.revisar_edicoes.
+        Os campos da identidade não passam por aqui: ver preencher_identidade.
 
         Returns the vocabulary actually applied, which is what gets indexed:
         indexing words the entity does not keep would point aliases at terms
         it never declares."""
-        if category is not None and entity.category is None:
-            entity.category = category
         aplicado = localized_markets
         fixo = vocabulary_is_fixed(entity.vocabulary_at)
         if localized_markets is not None:
@@ -1322,8 +1327,4 @@ class CatalogService:
                 entity.reference_candidates = _merge_reference_candidates(
                     entity.reference_candidates, reference_candidates
                 )
-        if target_age_min is not None and entity.target_age_min is None:
-            entity.target_age_min = target_age_min
-        if target_age_max is not None and entity.target_age_max is None:
-            entity.target_age_max = target_age_max
         return aplicado

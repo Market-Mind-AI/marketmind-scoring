@@ -370,28 +370,27 @@ Texto del usuario: "{user_prompt}\""""
 
 
 _CHAMPION_RULE_PT = (
-    "MERCADO DESTAQUE (\"rei\" 👑): um país no pacote está marcado com `is_champion` = true e `requested` = false "
-    "— é o mercado de MAIOR MOS para este produto entre os candidatos de referência e NÃO foi solicitado pelo "
-    "usuário. Inclua-o como BENCHMARK: diga que é o mercado de maior potencial para o produto (com o MOS dele), "
-    "deixe EXPLÍCITO que não estava entre os mercados pedidos, e compare o(s) mercado(s) solicitado(s) com ele "
-    "(quão perto ou longe estão do melhor mercado). NÃO o trate como um alvo pedido nem o inclua na recomendação "
-    "de priorização dos mercados solicitados."
+    "MERCADO DESTAQUE (\"rei\" 👑): o país marcado com `is_champion` = true é o de MAIOR MOS para este produto "
+    "entre os mercados pedidos e os candidatos de referência. Diga, com o MOS dele, que é o mercado de maior "
+    "potencial para o produto. Se `requested` = true, ele é um dos mercados pedidos e lidera a recomendação. Se "
+    "`requested` = false, deixe EXPLÍCITO que não estava entre os mercados pedidos, use-o como BENCHMARK (quão perto "
+    "ou longe os mercados solicitados estão dele) e NÃO o inclua na recomendação de priorização dos solicitados."
 )
 _CHAMPION_RULE_EN = (
-    "STANDOUT MARKET (\"king\" 👑): one country in the packet is flagged `is_champion` = true and `requested` = "
-    "false — it is the HIGHEST-MOS market for this product among the reference candidates and was NOT requested by "
-    "the user. Include it as a BENCHMARK: state it is the product's highest-potential market (with its MOS), make it "
-    "EXPLICIT that it was not among the requested markets, and compare the requested market(s) against it (how close "
-    "or far they are from the best market). Do NOT treat it as a requested target nor include it in the "
+    "STANDOUT MARKET (\"king\" 👑): the country flagged `is_champion` = true is the HIGHEST-MOS market for this "
+    "product among the requested markets and the reference candidates. State, with its MOS, that it is the "
+    "product's highest-potential market. If `requested` = true, it is one of the requested markets and leads the "
+    "recommendation. If `requested` = false, make it EXPLICIT that it was not among the requested markets, use it "
+    "as a BENCHMARK (how close or far the requested markets are from it) and do NOT include it in the "
     "prioritization recommendation for the requested markets."
 )
 _CHAMPION_RULE_ES = (
-    "MERCADO DESTACADO (\"rey\" 👑): un país del paquete está marcado con `is_champion` = true y `requested` = false "
-    "— es el mercado de MAYOR MOS para este producto entre los candidatos de referencia y NO fue solicitado por el "
-    "usuario. Inclúyelo como BENCHMARK: di que es el mercado de mayor potencial para el producto (con su MOS), "
-    "deja EXPLÍCITO que no estaba entre los mercados pedidos, y compara el/los mercado(s) solicitado(s) con él "
-    "(qué tan cerca o lejos están del mejor mercado). NO lo trates como un objetivo pedido ni lo incluyas en la "
-    "recomendación de priorización de los mercados solicitados."
+    "MERCADO DESTACADO (\"rey\" 👑): el país marcado con `is_champion` = true es el de MAYOR MOS para este producto "
+    "entre los mercados pedidos y los candidatos de referencia. Di, con su MOS, que es el mercado de mayor "
+    "potencial para el producto. Si `requested` = true, es uno de los mercados pedidos y encabeza la recomendación. "
+    "Si `requested` = false, deja EXPLÍCITO que no estaba entre los mercados pedidos, úsalo como BENCHMARK (qué tan "
+    "cerca o lejos están de él los mercados solicitados) y NO lo incluyas en la recomendación de priorización de "
+    "los solicitados."
 )
 
 
@@ -569,7 +568,7 @@ def _system_prompt(
     *,
     single_country: bool,
     user_prompt: str | None = None,
-    external_champion: bool = False,
+    champion: bool = False,
     brand: str | None = None,
     product: str | None = None,
 ) -> str:
@@ -579,7 +578,7 @@ def _system_prompt(
         language,
         single_country=single_country,
         user_prompt=user_prompt,
-        external_champion=external_champion,
+        champion=champion,
         brand=brand,
         product=product,
     )
@@ -591,13 +590,13 @@ def _system_parts(
     *,
     single_country: bool,
     user_prompt: str | None = None,
-    external_champion: bool = False,
+    champion: bool = False,
     brand: str | None = None,
     product: str | None = None,
 ) -> tuple[str, str | None]:
     """(stable, tail). The stable part depends only on the language and on
     whether it is one country or a ranking, so it repeats across analyses and
-    is what the provider caches. The tail — the off-request champion, the
+    is what the provider caches. The tail — the crowned market, the
     brand, the user's own words — changes per analysis and goes after the
     cache breakpoint; kept in the cached part, every analysis would write a
     fresh cache entry nobody reads."""
@@ -616,7 +615,7 @@ def _system_parts(
     base = f"{base}\n\n{_DEMAND_CONFIDENCE_RULE[key]}"
     base = f"{base}\n\n{_DEMAND_TERMS_RULE[key]}"
     tail: list[str] = []
-    if external_champion:
+    if champion:
         tail.append(_CHAMPION_RULE[key])
     if brand:
         tail.append(_BRAND_RULE[key].replace("{brand}", brand).replace("{product}", product or ""))
@@ -794,17 +793,18 @@ class ExplanationClient:
             return None
         # "single-country" framing follows the REQUESTED markets (an off-request
         # champion added for benchmark doesn't turn a 1-country request into a
-        # ranking). The champion rule is injected only when that champion is
-        # off-request (is_champion and not requested).
+        # ranking). The champion rule is injected whenever a market is crowned,
+        # requested or not: until 26/10/2026 only an off-request one was named,
+        # and a crowned requested market went unmentioned in the text.
         requested = [c for c in countries if c.get("requested", True)]
         single = len(requested) <= 1
-        external_champion = any(c.get("is_champion") and not c.get("requested", True) for c in countries)
+        champion = any(c.get("is_champion") for c in countries)
         try:
             system, system_tail = _system_parts(
                 _narrative_language(language),
                 single_country=single,
                 user_prompt=user_prompt,
-                external_champion=external_champion,
+                champion=champion,
                 brand=brand,
                 product=product_name,
             )

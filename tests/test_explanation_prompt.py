@@ -109,7 +109,7 @@ def test_what_changes_per_analysis_stays_out_of_the_cached_part() -> None:
     from app.services.explanation_client import _system_parts
 
     stable, tail = _system_parts(
-        "en", single_country=False, user_prompt="Is Spain worth it?", external_champion=True, brand="Cardhu"
+        "en", single_country=False, user_prompt="Is Spain worth it?", champion=True, brand="Cardhu"
     )
     plain, no_tail = _system_parts("en", single_country=False)
 
@@ -117,5 +117,5 @@ def test_what_changes_per_analysis_stays_out_of_the_cached_part() -> None:
     assert no_tail is None
     assert "Cardhu" in tail and "Is Spain worth it?" in tail
     assert _system_prompt(
-        "en", single_country=False, user_prompt="Is Spain worth it?", external_champion=True, brand="Cardhu"
+        "en", single_country=False, user_prompt="Is Spain worth it?", champion=True, brand="Cardhu"
     ) == f"{stable}\n\n{tail}"

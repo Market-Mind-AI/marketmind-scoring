@@ -634,45 +634,72 @@ class AnalysisService:
           volume elects the biggest among them (consistent with the search-based
           metric — a sales-biggest market like China, barely on Google, won't
           dominate the ruler).
+        - the requested countries are measured too, and one above every
+          candidate joins the candidates (at the top, persisted), so the ruler
+          is always the largest market measured.
         - fixed — None (no candidate had volume), so the engine uses the 2M bound.
         Volumes are read from already-collected data via compute_trend_score."""
-        measured: list[dict[str, Any]] = []
+        vocabulario = await self.vocabulario(entity, marca)
         candidatos = await self.candidatos_de_referencia(entity, marca)
+        # Os mercados medidos: os candidatos de referência e os países pedidos,
+        # cada um pelo vocabulário que foi de fato coletado — o desta análise
+        # (da marca, quando há marca) se o país foi pedido, o do candidato se
+        # não foi. Medir um país pedido com os termos do candidato daria dois
+        # números para a mesma coisa.
+        mercados: dict[str, dict[str, Any]] = {}
         for cand in _top_reference_candidates(candidatos):
             iso3 = cand.get("country")
-            if not iso3:
-                continue
-            # A candidate that is also requested was collected under its own
-            # localized_markets terms (same coverage key); measure it with those
-            # to avoid reading a never-collected reference-term series.
-            # O vocabulário DESTA análise — da marca quando há marca. Medir o
-            # país pedido com os termos do candidato daria dois números para a
-            # mesma coisa.
-            market = (await self.vocabulario(entity, marca)).get(iso3, {}) if iso3 in countries else cand
-            terms = as_term_list(market.get("search_terms"))
-            country = await self._country_repo.get_by_iso3(iso3)
-            if not (terms and country is not None and country.iso2 is not None):
-                continue
-            # Identical pipeline to the requested countries — including the
-            # related-keyword expansion — so the ceiling is apples-to-apples.
-            r = await pytrends_indicators.compute_trend_score(
-                terms,
-                country.iso2,
-                period_key,
-                seed_terms=pytrends_indicators.build_seed_terms(terms),
-                language=_idioma_do_mercado(cand, country),
-            )
-            if r.raw_value is not None and float(r.raw_value) > 0:
-                measured.append({"country": iso3, "volume": float(r.raw_value)})
-        if measured:
-            winner = max(measured, key=lambda m: m["volume"])
-            return winner["volume"], {
-                "mode": "reference",
-                "country": winner["country"],
-                "volume": winner["volume"],
-                "candidates": measured,
-            }
-        return None, {"mode": "fixed"}
+            if iso3:
+                mercados[iso3] = vocabulario.get(iso3, {}) if iso3 in countries else cand
+        for iso3 in countries:
+            mercados.setdefault(iso3, vocabulario.get(iso3, {}))
+
+        measured: list[dict[str, Any]] = []
+        for iso3, market in mercados.items():
+            volume = await self._volume_de_busca(iso3, market, period_key)
+            if volume:
+                measured.append({"country": iso3, "volume": volume})
+        if not measured:
+            return None, {"mode": "fixed"}
+        winner = max(measured, key=lambda m: m["volume"])
+
+        # A régua é o MAIOR mercado medido, e um país pedido pode ser maior que
+        # todos os candidatos — medido em 26/10/2026: o Brasil com 17.020
+        # buscas contra os EUA com 15.800; o Brasil batia no teto e a narrativa
+        # dizia que os EUA eram o maior mercado avaliado. Esse país ENTRA nos
+        # candidatos do produto, no topo, e fica: a régua sobe agora e é a
+        # mesma nas próximas análises, peçam ou não esse país, o que mantém a
+        # nota de cada país independente do pedido.
+        if winner["country"] not in {c.get("country") for c in candidatos}:
+            novo = {"country": winner["country"], **mercados[winner["country"]]}
+            await self._gravar_candidatos(entity, marca, [novo, *candidatos])
+            # O campeão guardado neste período foi calculado com a régua antiga.
+            await self._product_repo.forget_champion(entity, marca.brand_key if marca is not None else None, period_key)
+            await self._session.commit()
+            logger.info(f"Régua de demanda subiu para {winner['country']} ({winner['volume']:.0f} buscas/mês)")
+        return winner["volume"], {
+            "mode": "reference",
+            "country": winner["country"],
+            "volume": winner["volume"],
+            "candidates": measured,
+        }
+
+    async def _volume_de_busca(self, iso3: str, market: dict[str, Any], period_key: str) -> float | None:
+        """O volume mensal de busca de um país, lido do que já foi coletado,
+        pelo mesmo caminho dos países pedidos — inclusive a expansão por
+        palavras relacionadas —, para que a régua compare igual com igual."""
+        terms = as_term_list(market.get("search_terms"))
+        country = await self._country_repo.get_by_iso3(iso3)
+        if not (terms and country is not None and country.iso2 is not None):
+            return None
+        r = await pytrends_indicators.compute_trend_score(
+            terms,
+            country.iso2,
+            period_key,
+            seed_terms=pytrends_indicators.build_seed_terms(terms),
+            language=_idioma_do_mercado(market, country),
+        )
+        return float(r.raw_value) if r.raw_value is not None and float(r.raw_value) > 0 else None
 
     async def score_reference_candidates(
         self,

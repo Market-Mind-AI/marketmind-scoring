@@ -216,6 +216,12 @@ def _describe(product: "ProductCatalog", max_terms: int = 12, evidencia: str | N
             atributos.extend(a for a in (m.get("contrast_attributes") or []) if a and a not in atributos)
     if atributos:
         linhas.append(f"  defining attributes vs. its confusables: {'; '.join(atributos[:6])}")
+    # O que a identificação disse do produto (migration 058): o que o faz ser
+    # ele e os produtos que se confundem com ele.
+    if getattr(product, "defining_attributes", None):
+        linhas.append(f"  what makes it this product: {'; '.join(product.defining_attributes)}")
+    if getattr(product, "antagonist_products", None):
+        linhas.append(f"  NOT these products: {'; '.join(product.antagonist_products)}")
     if excluidos:
         linhas.append(f"  NOT this product: {', '.join(excluidos[:max_terms])}")
     if evidencia:
@@ -316,10 +322,7 @@ class CatalogMatcher:
             return {}
         provider = self._provider or resolve_catalog_match_llm()
         linhas = "\n".join(f"- {campo}: {antes or '(empty)'} -> {depois}" for campo, (antes, depois) in changes.items())
-        descricao = _describe(product)
-        if product.defining_attributes:
-            descricao += f"\n  what makes it this product: {'; '.join(product.defining_attributes)}"
-        prompt = f"Product:\n{descricao}\n\nChanges the user made:\n{linhas}"
+        prompt = f"Product:\n{_describe(product)}\n\nChanges the user made:\n{linhas}"
         try:
             review = await provider.complete(
                 system=prompt_text("catalog-edit-review-system", _EDIT_REVIEW_SYSTEM),

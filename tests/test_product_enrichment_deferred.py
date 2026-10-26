@@ -49,7 +49,14 @@ async def test_enrichment_called_only_for_missing_country() -> None:
         svc._reference_market_client.candidates = AsyncMock(return_value=[])
         svc._country_repo.get_by_iso3 = AsyncMock(return_value=SimpleNamespace(search_language="ja"))
         entity = _entity(
-            {"USA": {"primary_name": "air fryer", "search_terms": ["air fryer"], "excluded_terms": [], "confidence": 0.9}},
+            {
+                "USA": {
+                    "primary_name": "air fryer",
+                    "search_terms": ["air fryer"],
+                    "excluded_terms": [],
+                    "confidence": 0.9,
+                }
+            },
             candidates=[{"country": "BRA", "primary_name": "fritadeira", "search_terms": ["fritadeira"]}],
         )
         await svc.ensure_product_enrichment(entity, ["USA", "JPN"])
@@ -79,7 +86,14 @@ async def test_no_llm_call_when_base_already_complete() -> None:
         svc._enrichment_client.localized_markets = AsyncMock()
         svc._reference_market_client.candidates = AsyncMock()
         entity = _entity(
-            {"USA": {"primary_name": "air fryer", "search_terms": ["air fryer"], "excluded_terms": [], "confidence": 0.9}},
+            {
+                "USA": {
+                    "primary_name": "air fryer",
+                    "search_terms": ["air fryer"],
+                    "excluded_terms": [],
+                    "confidence": 0.9,
+                }
+            },
             candidates=[{"country": "BRA", "search_terms": ["fritadeira"]}],
         )
         await svc.ensure_product_enrichment(entity, ["USA"])
@@ -100,7 +114,14 @@ async def test_reference_candidates_outside_basket_dropped() -> None:
             return_value=[_market("XXX", "x"), _market("BRA", "fritadeira")]
         )
         entity = _entity(
-            {"USA": {"primary_name": "air fryer", "search_terms": ["air fryer"], "excluded_terms": [], "confidence": 0.9}},
+            {
+                "USA": {
+                    "primary_name": "air fryer",
+                    "search_terms": ["air fryer"],
+                    "excluded_terms": [],
+                    "confidence": 0.9,
+                }
+            },
             candidates=None,  # empty → candidates call runs
         )
         await svc.ensure_product_enrichment(entity, ["USA"])
@@ -138,3 +159,53 @@ def test_a_market_from_before_this_change_still_has_an_answer() -> None:
     assert _idioma_do_mercado(antigo, SimpleNamespace(search_language="ja")) == "ja"
     assert _idioma_do_mercado(antigo, SimpleNamespace(search_language=None)) == "en"
     assert _idioma_do_mercado(None, None) == "en"
+
+
+# --- a régua sobe quando um país pedido passa do teto (2026-10-26) ----------
+#
+# O Brasil tinha 17.020 buscas contra a régua dos EUA de 15.800: batia no teto
+# e a narrativa dizia que os EUA eram o maior mercado avaliado.
+
+
+async def _regua(volumes: dict[str, float], candidatos: list[str], pedidos: list[str]):  # noqa: ANN202
+    from app.services import analysis_service
+
+    svc, patchers = _bare_service()
+    entity = _entity(
+        {iso3: {"search_terms": [f"termo {iso3}"]} for iso3 in pedidos},
+        candidates=[{"country": iso3, "search_terms": [f"termo {iso3}"]} for iso3 in candidatos],
+    )
+    svc._country_repo.get_by_iso3 = AsyncMock(
+        side_effect=lambda iso3: SimpleNamespace(iso3=iso3, iso2=iso3[:2], search_language="en")
+    )
+    svc._product_repo.forget_champion = AsyncMock()
+
+    async def _volume(terms, iso2, period_key, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        iso3 = terms[0].split()[-1]
+        return SimpleNamespace(raw_value=volumes.get(iso3))
+
+    try:
+        with patch.object(analysis_service.pytrends_indicators, "compute_trend_score", side_effect=_volume):
+            teto, regua = await svc.resolve_demand_ceiling(entity, pedidos, "2026-10")
+    finally:
+        for p in patchers:
+            p.stop()
+    return teto, regua, entity, svc._product_repo.forget_champion
+
+
+async def test_a_requested_country_above_the_ruler_becomes_the_ruler_and_stays() -> None:
+    teto, regua, entity, esquecer = await _regua(
+        {"USA": 15800, "DEU": 2730, "BRA": 17020, "ESP": 9090}, ["USA", "DEU"], ["BRA", "ESP"]
+    )
+
+    assert (teto, regua["country"]) == (17020, "BRA")
+    assert [c["country"] for c in entity.reference_candidates] == ["BRA", "USA", "DEU"], "no topo, e gravado"
+    esquecer.assert_awaited_once()  # o campeão do mês foi calculado com a régua antiga
+
+
+async def test_a_requested_country_below_the_ruler_changes_nothing() -> None:
+    teto, regua, entity, esquecer = await _regua({"USA": 15800, "ESP": 9090}, ["USA"], ["ESP"])
+
+    assert (teto, regua["country"]) == (15800, "USA")
+    assert [c["country"] for c in entity.reference_candidates] == ["USA"]
+    esquecer.assert_not_awaited()

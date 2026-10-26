@@ -1035,6 +1035,22 @@ class ProductRepository:
             return False, None, None
         return True, linha.country, linha.mos
 
+    async def forget_champion(self, entity: ProductCatalog, brand_key: uuid.UUID | None, period_key: str) -> None:
+        """Esquece o campeão do período: foi calculado com uma régua que mudou."""
+        if brand_key is None:
+            if entity.champion_period_key == period_key:
+                entity.champion_period_key = None
+                entity.champion_country = None
+                entity.champion_mos = None
+            return
+        await self._session.execute(
+            delete(BrandChampion).where(
+                BrandChampion.entity_key == entity.entity_key,
+                BrandChampion.brand_key == brand_key,
+                BrandChampion.period_key == period_key,
+            )
+        )
+
     async def set_champion(
         self,
         entity: ProductCatalog,
