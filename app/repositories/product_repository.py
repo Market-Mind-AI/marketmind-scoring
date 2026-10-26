@@ -248,6 +248,27 @@ class ProductRepository:
         linhas = await self._session.execute(consulta, {"termo": " ".join(termo.lower().split())})
         return {(linha[0], linha[1]) for linha in linhas.all()}
 
+    async def list_incomplete_entities(self, *, after: uuid.UUID | None, limit: int) -> list[ProductCatalog]:
+        """Produtos vivos a que falta algum campo da identidade: preço,
+        atributos, antagônicos, categoria ou faixa etária. Paginados pela chave."""
+        stmt = (
+            select(ProductCatalog)
+            .where(
+                ProductCatalog.merged_into.is_(None),
+                (ProductCatalog.estimated_price.is_(None))
+                | (ProductCatalog.defining_attributes.is_(None))
+                | (ProductCatalog.antagonist_products.is_(None))
+                | (ProductCatalog.category.is_(None))
+                | (ProductCatalog.target_age_min.is_(None))
+                | (ProductCatalog.target_age_max.is_(None)),
+            )
+            .order_by(ProductCatalog.entity_key)
+            .limit(limit)
+        )
+        if after is not None:
+            stmt = stmt.where(ProductCatalog.entity_key > after)
+        return list((await self._session.execute(stmt)).scalars().all())
+
     async def brand_terms(self, entity_key: uuid.UUID) -> dict[str, list[str]]:
         """Cada marca já analisada neste produto, com os termos de busca dela."""
         linhas = await self._session.execute(

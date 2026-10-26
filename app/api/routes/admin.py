@@ -9,6 +9,7 @@ from app.db.session import get_session
 from app.schemas.admin import (
     BackfillAntagonistsResponse,
     BackfillEmbeddingsResponse,
+    BackfillIdentityResponse,
     BackfillTermsResponse,
     BrandSplitRequest,
     BrandSplitResponse,
@@ -21,6 +22,7 @@ from app.services.catalog_service import CatalogService
 from app.services.embedding_client import EmbeddingError
 from app.services.enrichment_client import EnrichmentClient
 from app.services.macro_coverage import MacroPrewarmService
+from app.services.vision_client import VisionClient
 from app.services.weight_calibration_service import WeightCalibrationService
 from app.utils.period import current_month_period_key
 
@@ -87,6 +89,21 @@ async def backfill_antagonists(
     except EmbeddingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return BackfillAntagonistsResponse(**relatorio, vetores=BackfillEmbeddingsResponse(**vetores))
+
+
+@router.post(
+    "/catalog/backfill-identity",
+    response_model=BackfillIdentityResponse,
+    summary="Fill in the identity fields of catalog products created before they existed",
+    description=(
+        "Runs the SAME identification call a new product gets, once per product that lacks the estimated "
+        "price, the defining attributes, the antagonist products, the category or the audience age range, "
+        "with its stored name (and its brand, when it has exactly one) as the description. Only fills what "
+        "is empty: a stored value is what earlier analyses measured. Costs model tokens; commits per product."
+    ),
+)
+async def backfill_identity(session: AsyncSession = Depends(get_session)) -> BackfillIdentityResponse:
+    return BackfillIdentityResponse(**await CatalogService(session).backfill_identidade(VisionClient()))
 
 
 @router.post(

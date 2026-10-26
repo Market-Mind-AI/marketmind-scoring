@@ -463,3 +463,37 @@ async def test_nothing_edited_asks_no_model(db_session: AsyncSession) -> None:
     )
 
     matcher.review_edits.assert_not_awaited()
+
+
+async def test_the_identity_backfill_fills_only_what_is_empty(db_session: AsyncSession) -> None:
+    """Preço, atributos e antagônicos para os produtos criados antes deles — e
+    nada do que já estava gravado muda, porque foi o que as análises mediram."""
+    from app.repositories.product_repository import ProductRepository
+    from app.services.vision_client import ProductIdentification
+
+    repo = ProductRepository(db_session)
+    produto = await repo.create_entity(canonical_title=f"air fryer {uuid.uuid4().hex[:8]}", category="Kitchen")
+    produto.target_age_min, produto.target_age_max = 25, 65
+    await db_session.commit()
+    visao = AsyncMock()
+    visao.identify_product.return_value = ProductIdentification(
+        product_name="air fryer",
+        brand=None,
+        category="Small Appliances",
+        defining_attributes=["cooks with hot air"],
+        antagonist_products=["oil deep fryer"],
+        target_age_min=18,
+        target_age_max=80,
+        estimated_price=89.9,
+        price_currency="EUR",
+        confidence=0.9,
+    )
+
+    relatorio = await CatalogService(db_session, matcher=_sem_match()).backfill_identidade(visao)
+
+    await db_session.refresh(produto)
+    assert relatorio["completadas"] >= 1
+    assert (float(produto.estimated_price), produto.price_currency) == (89.9, "EUR")
+    assert produto.defining_attributes == ["cooks with hot air"]
+    assert produto.antagonist_products == ["oil deep fryer"]
+    assert (produto.category, produto.target_age_min, produto.target_age_max) == ("Kitchen", 25, 65)

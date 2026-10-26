@@ -31,6 +31,12 @@ class BackfillAntagonistsResponse(BaseModel):
     vetores: BackfillEmbeddingsResponse
 
 
+class BackfillIdentityResponse(BaseModel):
+    entidades: int
+    completadas: int
+    falhas: int
+
+
 class BrandSplitRequest(BaseModel):
     entity_key: uuid.UUID
     brand: str = Field(..., min_length=1, description="A marca que o vocabulário da entidade realmente mede")

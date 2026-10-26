@@ -65,6 +65,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
 from app.db.models.brand import Brand
 from app.db.models.product_alias import ProductAlias
@@ -75,6 +76,7 @@ from app.schemas.catalog import CatalogResolveResponse
 from app.services.catalog_matcher import CatalogMatcher, _describe
 from app.services.embedding_client import EmbeddingClient, EmbeddingError, vector_literal
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
+from app.services.vision_client import VisionClient
 from app.services.vocabulary_window import vocabulary_is_fixed
 from app.utils.text import as_term_list, normalize_alias
 from app.utils.time import utc_now
@@ -956,6 +958,57 @@ class CatalogService:
             logger.info(f"Backfill de embeddings: {relatorio['aliases']} aliases")
         relatorio["tokens"] = self._embedder.tokens - tokens_antes
         logger.info(f"Backfill de embeddings concluído: {relatorio}")
+        return relatorio
+
+    async def backfill_identidade(self, client: VisionClient, *, batch_size: int = 50) -> dict[str, int]:
+        """Completa a identidade dos produtos criados antes dos campos dela:
+        preço estimado (migration 059), atributos e antagônicos (058), e
+        categoria e faixa etária quando faltam.
+
+        A MESMA chamada de identificação que um produto novo recebe, com o nome
+        gravado (e a marca, quando o produto tem uma só) como descrição. Só
+        PREENCHE o que está vazio: o que já está gravado foi o que as análises
+        anteriores mediram, e trocá-lo mudaria a nota delas.
+
+        Commit por produto, como os outros backfills: chamada lenta e paga, e
+        uma falha no meio não pode jogar fora as anteriores."""
+        relatorio = {"entidades": 0, "completadas": 0, "falhas": 0}
+        ultima: uuid.UUID | None = None
+        while True:
+            entidades = await self._repo.list_incomplete_entities(after=ultima, limit=batch_size)
+            if not entidades:
+                break
+            ultima = entidades[-1].entity_key
+            for entidade in entidades:
+                relatorio["entidades"] += 1
+                marcas = list(await self._repo.brand_terms(entidade.entity_key))
+                descricao = f"{marcas[0]} {entidade.canonical_title}" if len(marcas) == 1 else entidade.canonical_title
+                try:
+                    ident = await client.identify_product(
+                        image_base64=None, image_media_type=None, hint_text=descricao, countries=[]
+                    )
+                except MarketMindCoreError as exc:
+                    logger.warning(f"Identidade de {entidade.canonical_title!r} não completada: {exc}")
+                    relatorio["falhas"] += 1
+                    continue
+                if entidade.estimated_price is None and ident.estimated_price is not None:
+                    entidade.estimated_price = Decimal(str(ident.estimated_price))
+                    entidade.price_currency = ident.price_currency
+                if entidade.defining_attributes is None:
+                    entidade.defining_attributes = list(dict.fromkeys(ident.defining_attributes))
+                if entidade.antagonist_products is None:
+                    entidade.antagonist_products = list(dict.fromkeys(ident.antagonist_products))
+                if entidade.category is None and ident.category:
+                    entidade.category = ident.category
+                if entidade.target_age_min is None and entidade.target_age_max is None:
+                    entidade.target_age_min, entidade.target_age_max = ident.target_age_min, ident.target_age_max
+                await self._session.commit()
+                relatorio["completadas"] += 1
+                logger.info(
+                    f"Identidade completada: {descricao!r} — preço {entidade.estimated_price} "
+                    f"{entidade.price_currency}, idade {entidade.target_age_min}-{entidade.target_age_max}"
+                )
+        logger.info(f"Backfill de identidade concluído: {relatorio}")
         return relatorio
 
     async def backfill_antagonists(
