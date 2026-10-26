@@ -201,7 +201,7 @@ class AnalysisService:
             logger.exception(f"AnalysisRequest {request_id} could not be handed to the orchestrator")
             await self._session.rollback()
             current = await self._analysis_repo.get(request_id)
-            if current is not None and current.status not in ("done", "failed"):
+            if current is not None:
                 await self._analysis_repo.mark_failed(
                     current, error_message=f"The orchestrator could not be reached: {exc}"
                 )

@@ -280,14 +280,16 @@ async def record_progress(
         "`explanation` is optional here on purpose. The numbers are the answer "
         "and the prose is a reading of them, so the request completes with its "
         "scores and the narrative is attached afterwards — a single model call "
-        "once took longer than the entire rest of the analysis."
+        "once took longer than the entire rest of the analysis.\n\n"
+        "409 when the analysis already failed. Completing a done one again is "
+        "allowed: resuming is re-running."
     ),
 )
 async def complete_analysis(
     request_id: uuid.UUID, request: CompleteAnalysisRequest, session: AsyncSession = Depends(get_session)
 ) -> AnalysisStateResponse:
     analysis_request = await _load(session, request_id)
-    await AnalysisRepository(session).mark_done(
+    concluida = await AnalysisRepository(session).mark_done(
         analysis_request,
         # As marcas e o que se mostra de cada linha são decididos aqui, não por
         # quem entrega (ver app/services/presentation.py).
@@ -299,6 +301,10 @@ async def complete_analysis(
         explanation=request.explanation,
         breakdown=request.breakdown,
     )
+    if not concluida:
+        # Já falhou: o comprador leu o motivo, e concluir agora seria cobrar
+        # por uma análise que a tela dele diz que não houve.
+        raise HTTPException(status_code=409, detail=f"Analysis request {request_id} already failed")
     await session.commit()
     return AnalysisStateResponse(request_id=request_id, status=analysis_request.status)
 
@@ -328,7 +334,10 @@ async def attach_narrative(
     summary="Fail an analysis with a readable reason",
     description=(
         "The reason is required. A failed analysis with no stated cause is the "
-        "one nobody can act on, and it is the one the buyer asks about."
+        "one nobody can act on, and it is the one the buyer asks about.\n\n"
+        "An analysis that already ended is left as it is and its status comes "
+        "back: a done analysis never becomes failed, and a failed one keeps the "
+        "first reason."
     ),
 )
 async def fail_analysis(

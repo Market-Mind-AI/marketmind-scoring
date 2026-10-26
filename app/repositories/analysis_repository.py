@@ -9,6 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.analysis_request import AnalysisRequest
 from app.utils.time import utc_now
 
+# Os estados de que uma análise não sai mais. As transições moram aqui, e não
+# em quem chama: eram três chamadores, cada um com o seu `if status not in`, e
+# o que não tinha deixava uma análise entregue virar falha.
+TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "failed"})
+
 
 class AnalysisRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -89,9 +94,14 @@ class AnalysisRepository:
         await self._session.flush()
         return True
 
-    async def mark_running(self, analysis_request: AnalysisRequest) -> None:
+    async def mark_running(self, analysis_request: AnalysisRequest) -> bool:
+        """False, e nada muda, para uma análise já terminada: retomar uma
+        concluída a punha de volta em `running` e a tela voltava a esperar."""
+        if analysis_request.status in TERMINAL_STATUSES:
+            return False
         analysis_request.status = "running"
         await self._session.flush()
+        return True
 
     async def set_explanation(self, analysis_request: AnalysisRequest, explanation: str | None) -> None:
         """Attach the narrative to an already-completed analysis.
@@ -116,7 +126,12 @@ class AnalysisRepository:
         result: list[dict[str, Any]],
         explanation: str | None = None,
         breakdown: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
+        """False, e nada muda, para uma análise que já falhou: o comprador já
+        leu o motivo, e a cobrança é amarrada a `done`. Concluir de novo uma
+        concluída é permitido — retomar é refazer, e o resultado é o mesmo."""
+        if analysis_request.status == "failed":
+            return False
         analysis_request.status = "done"
         analysis_request.result = result
         analysis_request.explanation = explanation
@@ -128,10 +143,18 @@ class AnalysisRepository:
         # screen that shows it.
         analysis_request.progress = None
         await self._session.flush()
+        return True
 
-    async def mark_failed(self, analysis_request: AnalysisRequest, *, error_message: str) -> None:
+    async def mark_failed(self, analysis_request: AnalysisRequest, *, error_message: str) -> bool:
+        """False, e nada muda, para uma análise já terminada. Uma concluída
+        nunca vira falha — ela foi entregue e cobrada, e uma falha tardia de
+        quem a executava (a narrativa, uma retomada, a varredura) não desfaz
+        isso. Uma que já falhou guarda o primeiro motivo, que é o que a causou."""
+        if analysis_request.status in TERMINAL_STATUSES:
+            return False
         analysis_request.status = "failed"
         analysis_request.error_message = error_message
         analysis_request.finished_at = utc_now()
         analysis_request.progress = None
         await self._session.flush()
+        return True
