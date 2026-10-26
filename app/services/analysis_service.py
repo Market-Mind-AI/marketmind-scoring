@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import logger
+from app.db.models.analysis_request import AnalysisRequest
 from app.db.models.mos_result import MosResult
 from app.domain.enums import DataSource
 from app.repositories.analysis_repository import AnalysisRepository
@@ -32,8 +33,9 @@ from app.repositories.country_repository import CountryRepository
 from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.mos_repository import MosRepository
 from app.repositories.product_repository import ProductRepository
+from app.schemas.analyze import AnalyzeRequest
 from app.schemas.coverage import CoverageGap, JobTaskResult
-from app.services.catalog_service import _merge_localized_markets
+from app.services.catalog_service import CatalogService, _merge_localized_markets
 from app.services.coverage_service import CoverageService
 from app.services.demand_inputs import DemandInputs, demand_inputs
 from app.services.enrichment_client import EnrichmentClient, EnrichmentError
@@ -206,6 +208,63 @@ class AnalysisService:
                     current, error_message=f"The orchestrator could not be reached: {exc}"
                 )
                 await self._session.commit()
+
+    async def register(self, request: AnalyzeRequest) -> AnalysisRequest:
+        """Registra uma análise por inteiro: resolve o produto com tudo o que a
+        identificação trouxe, confere as edições do usuário e cria o registro
+        com a marca e o fato do catálogo.
+
+        Eram duas portas e nenhuma completa. A do orquestrador passava por
+        /catalog/resolve, que descartava o vocabulário curado e os candidatos de
+        referência, e nunca conferia as edições; a de POST /analyze fazia as
+        duas coisas e criava o registro sem a marca e sem como o catálogo chegou
+        na entidade — uma análise de marca virava análise do produto.
+        """
+        catalog_service = CatalogService(self._session)
+        # A marca é um vínculo de quem pergunta, não parte da identidade. Ver
+        # catalog_service.resolve.
+        resolved = await catalog_service.resolve(
+            request.product_name,
+            source="analyze",
+            brand=request.brand,
+            category=request.category,
+            localized_markets=request.localized_markets,
+            reference_candidates=request.reference_candidates,
+            target_age_min=request.target_age_min,
+            target_age_max=request.target_age_max,
+            estimated_price=request.estimated_price,
+            price_currency=request.price_currency,
+        )
+        # O que o usuário mudou na tela de revisão só entra no catálogo — que é
+        # compartilhado — se fizer sentido para este produto.
+        await catalog_service.revisar_edicoes(
+            resolved.entity_key,
+            category=request.category,
+            target_age_min=request.target_age_min,
+            target_age_max=request.target_age_max,
+            estimated_price=request.estimated_price,
+            price_currency=request.price_currency,
+        )
+        analysis_request = await self._analysis_repo.create(
+            entity_key=resolved.entity_key,
+            canonical_title=resolved.canonical_title,
+            countries=request.countries,
+            estimated_price=request.estimated_price,
+            price_currency=request.price_currency,
+            user_prompt=request.user_prompt,
+            # Como o catálogo chegou nesta entidade, e o que foi perguntado: sem
+            # o par, uma resolução não é auditável, e uma retomada nunca a refaz.
+            catalog_method=resolved.method,
+            catalog_match_score=resolved.match_score,
+            catalog_match_reasoning=resolved.match_reasoning,
+            catalog_query_text=request.product_name,
+            # Nulo é "foi do produto" — é o que separa as duas análises depois.
+            brand_key=resolved.brand_key,
+            brand_name=resolved.brand,
+            language=request.language,
+        )
+        await self._session.commit()
+        return analysis_request
 
     async def vocabulario(self, entity: Any, marca: Any | None) -> dict[str, dict[str, Any]]:
         """Os termos de busca desta análise: do produto, ou DESTA marca.

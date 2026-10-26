@@ -30,7 +30,7 @@ from app.db.models.brand import Brand
 from app.db.session import get_session
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.product_repository import ProductRepository
-from app.schemas.analyze import AnalysisStatusResponse
+from app.schemas.analyze import AnalysisStatusResponse, AnalyzeRequest
 from app.schemas.internal import (
     AnalysisDetailResponse,
     AnalysisStateResponse,
@@ -81,11 +81,43 @@ async def _load(session: AsyncSession, request_id: uuid.UUID):  # noqa: ANN202
 
 
 @router.post(
+    "/analyses/register",
+    response_model=RegisteredAnalysisResponse,
+    status_code=201,
+    summary="Resolve the product and register an analysis, completely",
+    description=(
+        "Same body as POST /analyze. Resolves the product with everything the "
+        "identification produced (localized_markets and reference_candidates "
+        "included), checks the user's edits against the product before they "
+        "enter the shared catalog, and creates the record with the brand and "
+        "how the catalog matched. The one way an analysis is registered; "
+        "POST /analyze uses it too."
+    ),
+)
+async def register_full_analysis(
+    request: AnalyzeRequest, session: AsyncSession = Depends(get_session)
+) -> RegisteredAnalysisResponse:
+    analysis_request = await AnalysisService(session).register(request)
+    return RegisteredAnalysisResponse(
+        request_id=analysis_request.id,
+        status=analysis_request.status,
+        entity_key=analysis_request.entity_key,
+        canonical_title=analysis_request.canonical_title,
+        brand_key=analysis_request.brand_key,
+        brand_name=analysis_request.brand_name,
+    )
+
+
+@router.post(
     "/analyses",
     response_model=RegisteredAnalysisResponse,
     status_code=201,
     summary="Register an analysis",
+    deprecated=True,
     description=(
+        "DEPRECATED — POST /internal/analyses/register resolves and registers "
+        "in one call, without dropping the curated vocabulary or the review "
+        "of the user's edits.\n\n"
         "Creates the record an analysis is tracked and billed against. The "
         "product must already be resolved — the entity_key comes from "
         "POST /catalog/resolve — because identity decides what is being "

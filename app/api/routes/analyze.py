@@ -15,7 +15,6 @@ from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.analyze import AnalysisStatusResponse, AnalyzeAcceptedResponse, AnalyzeRequest
 from app.services.analysis_service import AnalysisService
-from app.services.catalog_service import CatalogService
 from app.services.presentation import display_order, headline_country, present_rows
 from app.utils.language import analysis_language
 
@@ -140,44 +139,8 @@ async def analyze(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> AnalyzeAcceptedResponse:
-    catalog_service = CatalogService(session)
-    # A marca PARTICIONA a identidade: um pedido com marca resolve para a
-    # entidade daquela marca (título com a marca), com a família genérica
-    # ligada por trás. Ver catalog_service.resolve.
-    resolved = await catalog_service.resolve(
-        request.product_name,
-        source="analyze",
-        brand=request.brand,
-        category=request.category,
-        localized_markets=request.localized_markets,
-        reference_candidates=request.reference_candidates,
-        target_age_min=request.target_age_min,
-        target_age_max=request.target_age_max,
-        estimated_price=request.estimated_price,
-        price_currency=request.price_currency,
-    )
-    # O que o usuário mudou na tela de revisão só entra no catálogo — que é
-    # compartilhado — se fizer sentido para este produto. Ver revisar_edicoes.
-    await catalog_service.revisar_edicoes(
-        resolved.entity_key,
-        category=request.category,
-        target_age_min=request.target_age_min,
-        target_age_max=request.target_age_max,
-        estimated_price=request.estimated_price,
-        price_currency=request.price_currency,
-    )
-
-    analysis_repo = AnalysisRepository(session)
-    analysis_request = await analysis_repo.create(
-        entity_key=resolved.entity_key,
-        canonical_title=resolved.canonical_title,
-        countries=request.countries,
-        estimated_price=request.estimated_price,
-        price_currency=request.price_currency,
-        user_prompt=request.user_prompt,
-        language=request.language,
-    )
-    await session.commit()
+    # O mesmo registro que o orquestrador usa (POST /internal/analyses/register).
+    analysis_request = await AnalysisService(session).register(request)
 
     background_tasks.add_task(AnalysisService(session).run, analysis_request.id)
 

@@ -45,6 +45,12 @@ class RegisterAnalysisRequest(BaseModel):
 class RegisteredAnalysisResponse(BaseModel):
     request_id: uuid.UUID
     status: str
+    # O que a resolução decidiu, para quem registrou não ter de perguntar de
+    # novo. Preenchidos por POST /internal/analyses/register.
+    entity_key: uuid.UUID | None = None
+    canonical_title: str | None = None
+    brand_key: uuid.UUID | None = None
+    brand_name: str | None = None
 
 
 class MarkRunningRequest(BaseModel):
