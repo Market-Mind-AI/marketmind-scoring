@@ -41,6 +41,9 @@ from app.schemas.internal import (
     CompleteAnalysisRequest,
     CrownChampionRequest,
     CrownChampionResponse,
+    DemandAbsence,
+    DemandAbsenceRequest,
+    DemandAbsenceResponse,
     DemandCeilingRequest,
     DemandCeilingResponse,
     EnrichTermsRequest,
@@ -789,3 +792,32 @@ async def crown_champion(
 def _linha_de_mos(row: Any) -> dict[str, Any]:  # noqa: ANN401
     """Uma linha de MOS no formato de POST /mos/compute."""
     return MosResultResponse.model_validate(row, from_attributes=True).model_dump(mode="json")
+
+
+@router.post(
+    "/markets/demand-absence",
+    response_model=DemandAbsenceResponse,
+    summary="Which markets had no demand for this product and brand, recently",
+    description=(
+        "For each country, whether every search term of this product (and "
+        "brand) was answered by the demand source inside the demand freshness "
+        "window and none has volume that counts. A country with a term still "
+        "to collect answers absent=false: that is not knowing, not barren.\n\n"
+        "Read from the stored data, so it heals itself: a source that gains "
+        "volume answers absent=false on the next call, and the window is the "
+        "demand's own. Free — nothing is collected."
+    ),
+)
+async def demand_absence(
+    request: DemandAbsenceRequest, session: AsyncSession = Depends(get_session)
+) -> DemandAbsenceResponse:
+    entity = await _entity(session, request.entity_key)
+    marca = await _marca(session, request.brand_key)
+    servico = AnalysisService(session)
+    return DemandAbsenceResponse(
+        markets=[
+            DemandAbsence(**await servico.demand_absence(entity, pais, period_key=request.period_key, marca=marca))
+            for pais in request.countries
+        ],
+        window_days=settings.demand_stale_after_days,
+    )

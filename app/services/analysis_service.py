@@ -42,6 +42,7 @@ from app.services.enrichment_client import EnrichmentClient, EnrichmentError
 from app.services.explanation_client import ExplanationClient
 from app.services.indicator_engine import IndicatorEngine
 from app.services.indicators import pytrends as pytrends_indicators
+from app.services.indicators.sources import pytrends_stored_volume
 from app.services.macro_coverage import fontes_sem_cobertura_de, macro_gaps
 from app.services.mos_engine import MosEngine
 from app.services.product_identification_service import _fallback_market, _has_terms, _market_to_dict
@@ -909,3 +910,26 @@ class AnalysisService:
             requested=requested,
             language=language,
         )
+
+    async def demand_absence(
+        self, entity: Any, country_iso3: str, *, period_key: str, marca: Any | None = None
+    ) -> dict[str, Any]:
+        """Se este mercado ficou sem demanda medida na última janela de frescor
+        (`demand_stale_after_days`), para este produto e esta marca.
+
+        É a memória de "mercado estéril" que o orquestrador guardava sozinho,
+        por 30 dias e só pelo produto — então a marca de um produto herdava a
+        esterilidade da outra, e a janela não era a da demanda. A resposta vem
+        do próprio dado: todos os termos foram respondidos dentro da janela
+        (nada a coletar) e nenhum tem volume que conte. Um termo ainda por
+        coletar é "não sei", nunca "estéril".
+        """
+        insumos = await self._insumos(entity, country_iso3, marca)
+        if insumos is None or not insumos.search_terms or insumos.location is None:
+            return {"country": country_iso3, "absent": False, "checked_at": None}
+        guardado = await pytrends_stored_volume(insumos.location, insumos.search_terms)
+        if guardado["missing"]:
+            return {"country": country_iso3, "absent": False, "checked_at": None}
+        volume = await self._volume_de_busca(insumos, period_key)
+        datas = [str(item["collected_at"]) for item in guardado["keywords"] if item.get("collected_at")]
+        return {"country": country_iso3, "absent": volume is None, "checked_at": max(datas) if datas else None}

@@ -351,3 +351,26 @@ class CrownChampionResponse(BaseModel):
     from_cache: bool = False
     # A régua contra a qual o campeão foi medido (nula = régua fixa).
     demand_ceiling: float | None = None
+
+
+class DemandAbsenceRequest(BaseModel):
+    entity_key: uuid.UUID
+    countries: list[str] = Field(..., min_length=1)
+    period_key: str = Field(..., min_length=1)
+    brand_key: uuid.UUID | None = None
+
+
+class DemandAbsence(BaseModel):
+    country: str
+    # Todos os termos foram respondidos dentro da janela e nenhum tem volume
+    # que conte. Falso também quando ainda há termo a coletar: aí não se sabe.
+    absent: bool
+    # Quando os termos foram respondidos pela última vez (ISO 8601), se a fonte
+    # disse.
+    checked_at: str | None = None
+
+
+class DemandAbsenceResponse(BaseModel):
+    markets: list[DemandAbsence]
+    # A janela em que "recente" vale: a mesma do frescor da demanda.
+    window_days: int
