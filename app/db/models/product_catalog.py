@@ -93,6 +93,12 @@ class ProductCatalog(Base):
     )
     target_age_min: Mapped[int | None] = mapped_column(nullable=True)
     target_age_max: Mapped[int | None] = mapped_column(nullable=True)
+    # O que faz deste produto ESTE produto e o que se confunde com ele, ditos
+    # pela identificação (migration 058). O enriquecimento, que roda depois e
+    # só tem a entidade, usa os dois para não medir um produto mais largo nem
+    # contar o antagônico como demanda. NULL: identificado antes disso.
+    defining_attributes: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    antagonist_products: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     # The product's standout reference market, cached here because it is a
     # property of the product and not of any one request: MOS uses fixed 100/0

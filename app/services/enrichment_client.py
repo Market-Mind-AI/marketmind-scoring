@@ -38,7 +38,9 @@ _SYSTEM = (
     "terms are SUMMED into one product's demand score:\n"
     "  - A BRAND was given: EVERY term must name that brand, in whatever script local buyers use "
     "('cardhu 12', 'whisky cardhu', 'カーデュ 12年'). Vary the model/size/variant around the brand "
-    "('KTM Duke', 'KTM 390', 'KTM 390 Duke'). NEVER the plain generic product name on its own "
+    "('KTM Duke', 'KTM 390', 'KTM 390 Duke') — unless the product name carries a MODEL: then EVERY "
+    "term names that model too and never another one, since another model's volume is another "
+    "product's demand. NEVER the plain generic product name on its own "
     "('single malt whisky', 'motorcycle'): the whole category's search volume would be counted as this "
     "brand's demand. NEVER another brand's name.\n"
     "  - NO brand was given: use only generic names, never any brand — a branded term would make one "
@@ -100,7 +102,10 @@ _TASK = (
     "Neighbours in the category, accessories, and broader or narrower versions of the product are "
     "NOT antagonists either: they belong, if anywhere, in excluded_terms. Usage, recipe and lookup "
     "words stay in excluded_terms too. A product with no real minimal pair gets empty lists — an "
-    "empty list is a correct answer, a polluted one is not."
+    "empty list is a correct answer, a polluted one is not.\n\n"
+    "When the identity lists `Defining attributes`, every search term keeps all of them. When it lists "
+    "`Antagonist products`, none of them is ever a search term, and they are where `antagonist_terms` "
+    "and `excluded_terms` start from — in the local language."
 )
 
 
@@ -117,6 +122,8 @@ class EnrichmentClient:
         brand: str | None,
         category: str | None,
         countries: list[tuple[str, str | None]],
+        defining_attributes: list[str] | None = None,
+        antagonist_products: list[str] | None = None,
     ) -> list[MarketTerms]:
         """Generate a MarketTerms entry for each (ISO3, language) in ``countries``.
         Raises EnrichmentError on provider failure — the caller falls back to a
@@ -129,9 +136,11 @@ class EnrichmentClient:
         )
         prompt = (
             f"Product: {product_line}\n"
-            f"Generic name: {product_name}\n"
+            f"Name: {product_name}\n"
             f"Brand: {brand or '(none)'}\n"
-            f"Category: {category or '(unknown)'}\n\n"
+            f"Category: {category or '(unknown)'}\n"
+            f"Defining attributes: {'; '.join(defining_attributes or []) or '(none given)'}\n"
+            f"Antagonist products: {'; '.join(antagonist_products or []) or '(none given)'}\n\n"
             "Produce EXACTLY ONE markets entry for EACH of these countries (by ISO-3166 alpha-3):\n"
             f"{country_lines}"
         )
@@ -139,8 +148,9 @@ class EnrichmentClient:
         # (see LLMProvider): the rest of the instructions repeat on every call.
         brand_rule = (
             f"EVERY search term must name the brand {brand!r} (in the local script), varying model/size/"
-            "variant around it. NEVER the bare generic name and NEVER another brand: the volumes are "
-            "summed into this brand's demand score."
+            "variant around it — unless the product name carries a model, which then every term names too. "
+            "NEVER the bare generic name and NEVER another brand: the volumes are summed into this brand's "
+            "demand score."
             if brand
             else "This product is the CATEGORY, so no term may carry a brand name — a branded term would "
             "make one brand's demand stand for the whole category."
@@ -157,4 +167,3 @@ class EnrichmentClient:
         if not isinstance(result, LocalizedMarketsResult):  # defensive; schema is provider-enforced
             raise EnrichmentError("Enrichment LLM returned an unexpected result type")
         return result.markets
-

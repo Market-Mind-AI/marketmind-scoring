@@ -118,14 +118,40 @@ class ProductIdentification(BaseModel):
             "be reported as product_found=false, not fabricated."
         ),
     )
+    brand: str | None
+    model: str | None = Field(
+        default=None,
+        description="The specific model, edition or reference the input names, exactly as sold. Null when none.",
+    )
+    product_type: str | None = Field(
+        default=None,
+        description=(
+            "The kind of product this is, specific enough to tell it apart from the other kinds sold under the "
+            "same generic name (the technology, format or variety that makes it a different product). English."
+        ),
+    )
+    defining_attributes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Short English phrases for each attribute that makes this product THIS product — change one and it "
+            "becomes a different product a buyer would not accept instead. Not marketing claims, not size."
+        ),
+    )
+    antagonist_products: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Short English names of the products most easily confused with this one that are NOT it: the "
+            "brand's other models and types, and other products sharing its name. Never this product itself."
+        ),
+    )
     product_name: str = Field(
         description=(
-            "Short, generic, commonly-searched canonical product name in plain ASCII (e.g. 'Iberian ham', "
-            "'air fryer'). No brand, certification, breed/percentage, size, or parenthetical translations. "
+            "Commonly-searched canonical product name in plain ASCII, built as model + type + generic name "
+            "(only the parts that exist). No brand, certification, breed/percentage, size, or parenthetical "
+            "translations. "
             "Strip accents/diacritics (e.g. 'Jamon Iberico', not 'Jamón Ibérico'). Empty when product_found=false."
         )
     )
-    brand: str | None
     category: str | None = Field(
         description=(
             "Short, generic product category in English, one level broader than `product_name` (e.g. "
@@ -165,13 +191,19 @@ _INSTRUCTIONS = (
     "the text does not name or describe a concrete product (e.g. it is empty or just 'quero', 'hello', "
     "'test', or a question with no product), set `product_found`=false, leave `product_name` empty, and "
     "return no markets — do NOT invent, guess, or default to any product. "
-    "`product_name`: short, generic, commonly-searched canonical name, plain ASCII, no brand/size/"
-    "certification (e.g. 'Iberian ham', 'air fryer'; 'Jamon Iberico', not 'Jamón Ibérico'). "
+    "Describe the product exactly as the input gives it: `brand`; `model` (the specific model, edition "
+    "or reference named, or null); `product_type` (the kind of product, specific enough to tell it apart "
+    "from the other kinds sold under the same generic name); `defining_attributes` (each attribute that, "
+    "if changed, makes it a different product a buyer would not accept instead); and "
+    "`antagonist_products` (the products most easily confused with it that are NOT it — the brand's other "
+    "models and types, and other products sharing its name). "
+    "`product_name`: model + type + generic name (only the parts that exist), commonly-searched, plain "
+    "ASCII, no brand/size/certification ('Jamon Iberico', not 'Jamón Ibérico'). "
     "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'); an "
     "ACCESSORY, part, consumable, service or content FOR another product gets its OWN category "
     "('Kitchen Accessories', 'Spare Parts', 'Cookbooks', 'Services'), never the category of the product "
     "it belongs to. "
-    "Put the brand only in `brand`; `product_name` stays generic. "
+    "Put the brand only in `brand`, never in `product_name`. "
     "`markets`: provide EXACTLY ONE entry for EACH ISO-3166 alpha-3 country listed in the request. "
     "For each country, `search_terms` is a GENEROUS list of the real terms a local "
     "buyer actually types for THIS product — genuine colloquial/regional/loanword names and spelling/"
@@ -181,9 +213,11 @@ _INSTRUCTIONS = (
     "demand (be generous, but every term must truly mean this product). THE BRAND DECIDES WHAT "
     "'this product' MEANS: if you identified a brand, EVERY term must name it, in whatever script "
     "local buyers use ('cardhu 12', 'whisky cardhu', 'カーデュ 12年'), varying model/size/variant "
-    "around the brand — NEVER the bare generic name ('single malt whisky'), which would count the "
-    "entire category's search volume as this brand's demand, and NEVER another brand. If there is no "
-    "brand, the product IS the category: use only generic terms, never a branded one. "
+    "around the brand — unless there is a `model`: then EVERY term names that model too, never another "
+    "model — and no term may denote one of the `antagonist_products`. NEVER the bare generic name "
+    "('single malt whisky'), which would count the entire category's search volume as this brand's "
+    "demand, and NEVER another brand. If there is no brand, the product IS the category: use only "
+    "generic terms, never a branded one. "
     "Set `primary_name` to the single most-used term. "
     "These volumes are summed into a score answering 'should I sell this here', so `search_terms` "
     "must only be what someone types while deciding to BUY or looking for where to buy.\n"

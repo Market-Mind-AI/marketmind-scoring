@@ -114,6 +114,9 @@ class ProductIdentificationService:
             reference_candidates=None,  # deferred to the /analyze background task
             target_age_min=identification.target_age_min,
             target_age_max=identification.target_age_max,
+            defining_attributes=identification.defining_attributes,
+            antagonist_products=identification.antagonist_products,
+            model=identification.model,
         )
 
         return IdentifyImageResponse(

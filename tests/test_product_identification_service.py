@@ -79,6 +79,26 @@ async def test_identify_resolves_by_generic_name_and_passes_brand_apart(mock_ses
     # all: they live in AnalysisService and run in the /analyze background task.
 
 
+async def test_identify_hands_attributes_and_antagonists_to_the_catalog(mock_session: AsyncMock) -> None:
+    # O enriquecimento roda depois, no /analyze, e só tem a entidade: o que a
+    # identificação disse sobre o produto precisa ficar gravado nela.
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification(
+        defining_attributes=["cooks with hot air"], antagonist_products=["oil deep fryer"]
+    )
+    catalog_cls, patchers = _patch_collaborators()
+    try:
+        service = ProductIdentificationService(mock_session, vision_client=vision)
+        await service.identify(image_base64=None, image_media_type=None, hint_text="air fryer", countries=["USA"])
+    finally:
+        for p in patchers:
+            p.stop()
+
+    kwargs = catalog_cls.return_value.resolve.call_args.kwargs
+    assert kwargs["defining_attributes"] == ["cooks with hot air"]
+    assert kwargs["antagonist_products"] == ["oil deep fryer"]
+
+
 async def test_identify_is_vision_only_defers_enrichment(mock_session: AsyncMock) -> None:
     # Vision returns USA only; requesting USA+BRA. identify does NOT enrich BRA
     # (that happens later in the background), so only the vision market is kept.

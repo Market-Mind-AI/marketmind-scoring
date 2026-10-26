@@ -38,6 +38,7 @@ def _entity(localized: dict[str, Any], candidates: list[dict[str, Any]] | None) 
     return SimpleNamespace(
         canonical_title="air fryer", category="kitchen",
         localized_markets=localized, reference_candidates=candidates,
+        defining_attributes=["cooks with hot air"], antagonist_products=["oil deep fryer"],
     )  # fmt: skip
 
 
@@ -63,6 +64,9 @@ async def test_enrichment_called_only_for_missing_country() -> None:
     # mandamos, e o que mandávamos era a tabela preenchida à mão que deixou de
     # existir.
     assert svc._enrichment_client.localized_markets.await_args.kwargs["countries"] == [("JPN", None)]
+    # O que a identificação disse sobre o produto chega ao enriquecimento.
+    assert svc._enrichment_client.localized_markets.await_args.kwargs["defining_attributes"] == ["cooks with hot air"]
+    assert svc._enrichment_client.localized_markets.await_args.kwargs["antagonist_products"] == ["oil deep fryer"]
     assert entity.localized_markets["JPN"]["search_terms"] == ["ノンフライヤー"]
     assert entity.localized_markets["USA"]["search_terms"] == ["air fryer"]  # untouched
     # reference_candidates already present → NOT regenerated.

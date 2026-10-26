@@ -216,6 +216,18 @@ def _difere_em_qualificacao(consulta: str, titulo_casado: str) -> bool:
     return do_casado < da_consulta or da_consulta < do_casado
 
 
+def _falta_o_modelo(modelo: str | None, titulo_casado: str) -> bool:
+    """Se o pedido nomeia um modelo que o nome casado não contém.
+
+    Palavra a palavra, pelo mesmo normalizador dos dois lados, como em
+    `_difere_em_qualificacao`. Sem modelo no pedido não há o que conferir.
+    """
+    do_modelo = set(normalize_alias(modelo or "").split())
+    if not do_modelo:
+        return False
+    return not do_modelo <= set(normalize_alias(titulo_casado).split())
+
+
 def _resposta(resolvido: _Resolvido) -> CatalogResolveResponse:
     return CatalogResolveResponse(
         entity_key=resolvido.entity.entity_key,
@@ -256,6 +268,9 @@ class CatalogService:
         reference_candidates: list[dict[str, Any]] | None = None,
         target_age_min: int | None = None,
         target_age_max: int | None = None,
+        defining_attributes: list[str] | None = None,
+        antagonist_products: list[str] | None = None,
+        model: str | None = None,
     ) -> CatalogResolveResponse:
         """`text` é o NOME GENÉRICO do produto, sem marca. A marca vem separada,
         e desde 24/09/2026 ela NÃO cria entidade: o catálogo tem um produto por
@@ -305,7 +320,16 @@ class CatalogService:
             reference_candidates=reference_candidates,
             target_age_min=target_age_min,
             target_age_max=target_age_max,
+            model=model,
         )
+        # Atributos e antagônicos são da identidade, não da marca: ficam no
+        # produto. Só preenchem o que está vazio, pela mesma razão do
+        # vocabulário fixo — quem já mediu este produto mediu com estes.
+        entity = resolvido.entity
+        if defining_attributes and not entity.defining_attributes:
+            entity.defining_attributes = list(dict.fromkeys(defining_attributes))
+        if antagonist_products and not entity.antagonist_products:
+            entity.antagonist_products = list(dict.fromkeys(antagonist_products))
         if marca is not None:
             resolvido.marca = marca
             if localized_markets:
@@ -340,6 +364,7 @@ class CatalogService:
         reference_candidates: list[dict[str, Any]] | None,
         target_age_min: int | None,
         target_age_max: int | None,
+        model: str | None = None,
     ) -> _Resolvido:
         """Os quatro passos da resolução, dentro de UMA partição de marca.
 
@@ -437,6 +462,16 @@ class CatalogService:
             logger.info(
                 f"Passo 2 recusado para {text!r}: difere de {trigram.match.product.canonical_title!r} por uma "
                 f"qualificação; escalando para o LLM"
+            )
+        elif trigram.match is not None and _falta_o_modelo(model, trigram.match.product.canonical_title):
+            # O pedido nomeia um modelo e o casado não o tem. Nomes com modelo
+            # dividem quase toda a escrita ("... 3D Printer") e só o código
+            # muda, então a semelhança de forma não separa dois modelos.
+            # Medido em 26/10/2026: `A1 3D Printer` casava por trigram com
+            # `J1s IDEX 3D Printer`, de outra marca. Quem decide é o passo 3.
+            logger.info(
+                f"Passo 2 recusado para {text!r}: o modelo {model!r} não está em "
+                f"{trigram.match.product.canonical_title!r}; escalando para o LLM"
             )
         elif trigram.match is not None and await self._veto_semantico(generico, trigram.match.product):
             # A forma da palavra dizia "é ela" e o significado diz "é o produto

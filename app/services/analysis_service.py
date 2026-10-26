@@ -285,7 +285,12 @@ class AnalysisService:
                 # a análise de marca mediria a categoria.
                 fill = [(iso3, None) for iso3 in missing]
                 markets = await self._enrichment_client.localized_markets(
-                    product_name=product_name, brand=nome_marca, category=entity.category, countries=fill
+                    product_name=product_name,
+                    brand=nome_marca,
+                    category=entity.category,
+                    countries=fill,
+                    defining_attributes=entity.defining_attributes,
+                    antagonist_products=entity.antagonist_products,
                 )
                 incoming = {
                     m.country: _market_to_dict(m)

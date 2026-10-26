@@ -324,3 +324,30 @@ async def test_backfill_reporta_quantos_termos_podou(db_session: AsyncSession) -
 
     assert relatorio["obsoletos"] >= 1
     assert set(relatorio) == {"entidades", "aliases", "excluidos", "obsoletos"}
+
+
+async def test_outro_modelo_nao_casa_por_trigram(db_session: AsyncSession) -> None:
+    """Nomes com modelo dividem quase toda a escrita e só o código muda: em
+    26/10/2026 `A1 3D Printer` casava por trigram com `J1s IDEX 3D Printer`.
+    Pedido com modelo que o casado não tem vai para o passo 3."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    j1s = await service.resolve(f"J1s IDEX 3D Printer {sufixo}", source="test", model="J1s")
+
+    a1 = await service.resolve(f"A1 3D Printer {sufixo}", source="test", model="A1")
+
+    assert a1.entity_key != j1s.entity_key
+    assert a1.method == "created"
+
+
+async def test_mesmo_modelo_escrito_de_outro_jeito_casa(db_session: AsyncSession) -> None:
+    """A guarda não pode custar o reaproveitamento: o mesmo modelo com outra
+    descrição continua resolvendo pelo passo 2, sem comprar vocabulário novo."""
+    sufixo = uuid.uuid4().hex[:8]
+    service = CatalogService(db_session, matcher=_sem_match())
+    criado = await service.resolve(f"U1 Multi Color Toolchanger 3D Printer {sufixo}", source="test", model="U1")
+
+    variante = await service.resolve(f"U1 Multicolor Toolchanger 3D Printer {sufixo}", source="test", model="U1")
+
+    assert variante.entity_key == criado.entity_key
+    assert variante.method == "trigram"
