@@ -280,3 +280,37 @@ async def test_a_candidate_the_model_recognises_comes_back_as_stored(mock_sessio
     assert result.entity_key == entidade.entity_key
     assert (result.target_age_min, result.target_age_max) == (20, 55), "o modelo só diz a marca"
     repo_mock.get_or_create_brand.assert_awaited_once()
+
+
+async def test_a_photo_of_a_known_product_comes_back_as_stored(mock_session: AsyncMock) -> None:
+    # Só a foto: não há texto para buscar candidatos, quem reconhece é o
+    # resolve. O chute do modelo não pode voltar para a tela de revisão — o
+    # /analyze o tomava por edição do usuário e mudava o catálogo.
+    entidade, repo_mock, patchers = _com_catalogo(donos=set(), candidatos=[])
+    catalog = patch("app.services.product_identification_service.CatalogService")
+    catalog_cls = catalog.start()
+    catalog_cls.return_value.resolve = AsyncMock(
+        return_value=CatalogResolveResponse(
+            entity_key=entidade.entity_key,
+            canonical_title=entidade.canonical_title,
+            method="alias",
+            brand_key=uuid.uuid4(),
+        )
+    )
+    vision = AsyncMock()
+    vision.identify_product.return_value = _identification(
+        product_name="U1 3D Printer", brand="Snapmaker", target_age_min=14, target_age_max=60
+    )
+    try:
+        result = await ProductIdentificationService(mock_session, vision_client=vision).identify(
+            image_base64="aGVsbG8=", image_media_type="image/png", hint_text=None, countries=["ESP"]
+        )
+    finally:
+        for p in [catalog, *patchers]:
+            p.stop()
+
+    assert result.method == "alias"
+    assert (result.product_name, result.brand) == (entidade.canonical_title, "Snapmaker")
+    assert (result.target_age_min, result.target_age_max) == (20, 55), "a faixa gravada, não a da foto"
+    assert (result.estimated_price, result.price_currency) == (999.0, "EUR")
+    repo_mock.get_brand.assert_awaited_once()

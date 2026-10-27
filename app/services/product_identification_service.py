@@ -161,6 +161,17 @@ class ProductIdentificationService:
             pai_julgado=pai,
         )
 
+        # Só pela foto não há texto para buscar candidatos, e o catálogo só
+        # reconhece o produto aqui. Devolver o chute do modelo fazia a tela de
+        # revisão mandar outro nome, idade e preço, e o /analyze os tratava como
+        # edição do usuário — medido em 27/10/2026: a U1 foi de 20–60 para
+        # 14–60 anos e o MOS do Brasil de 69,76 para 70,11 sem dado novo.
+        if resolved.method in ("alias", "trigram", "llm"):
+            entity = await self._repo.get_by_entity_key(resolved.entity_key)
+            if entity is not None:
+                marca = await self._repo.get_brand(resolved.brand_key)
+                return await self._do_catalogo(entity, marca, countries, method=resolved.method)
+
         return IdentifyImageResponse(
             entity_key=resolved.entity_key,
             canonical_title=resolved.canonical_title,
