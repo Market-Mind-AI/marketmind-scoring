@@ -138,6 +138,9 @@ class NarrateRequest(BaseModel):
     # O idioma que a análise pediu (lido do registro dela). Nulo é o
     # configurado no serviço — o que toda análise recebia antes.
     language: NarrativeLanguage | None = None
+    # A análise dona do texto. Com ela, o texto parcial é gravado nela enquanto
+    # o modelo escreve, e a tela o mostra sem esperar o fim.
+    request_id: uuid.UUID | None = None
 
 
 class NarrateResponse(BaseModel):

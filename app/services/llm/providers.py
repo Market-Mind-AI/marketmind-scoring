@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from app.services.llm import usage
-from app.services.llm.base import ImageInput, LLMError, LLMProvider, joined_system
+from app.services.llm.base import ImageInput, LLMError, LLMProvider, TextSink, joined_system
 
 logger = logging.getLogger("marketmind-scoring.llm_usage")
 
@@ -57,6 +57,7 @@ class ClaudeProvider(LLMProvider):
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
+        on_text: TextSink | None = None,
     ) -> str | BaseModel:
         content: list[dict[str, Any]] = []
         if image is not None:
@@ -101,7 +102,15 @@ class ClaudeProvider(LLMProvider):
             if response.parsed_output is None:
                 raise LLMError(f"Claude returned no parseable result (stop_reason={response.stop_reason})")
             return response.parsed_output
-        response = await self._client.messages.create(**kwargs)
+        if on_text is not None:
+            written = ""
+            async with self._client.messages.stream(**kwargs) as stream:
+                async for chunk in stream.text_stream:
+                    written += chunk
+                    await on_text(written)
+                response = await stream.get_final_message()
+        else:
+            response = await self._client.messages.create(**kwargs)
         usage.record(self.model, getattr(response, "usage", None))
         log_claude_usage(self.model, self.site, getattr(response, "usage", None))
         return "".join(block.text for block in response.content if block.type == "text")
@@ -122,6 +131,7 @@ class GptProvider(LLMProvider):
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
+        on_text: TextSink | None = None,
     ) -> str | BaseModel:
         user_content: list[dict[str, Any]] = [{"type": "text", "text": user}]
         if image is not None:
@@ -170,6 +180,7 @@ class OllamaProvider(LLMProvider):
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
+        on_text: TextSink | None = None,
     ) -> str | BaseModel:
         system = joined_system(system, system_tail)
         fmt = response_model.model_json_schema() if response_model is not None else None

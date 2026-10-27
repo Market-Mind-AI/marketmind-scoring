@@ -11,6 +11,7 @@ answers. Consistent with the project principle that the LLM explains/identifies
 but never computes MOS values (Cap. 4 §4.0)."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -30,6 +31,10 @@ class ImageInput:
     media_type: str = "image/jpeg"
 
 
+# Recebe o texto acumulado até agora, a cada pedaço que o modelo escreve.
+TextSink = Callable[[str], Awaitable[None]]
+
+
 class LLMProvider(ABC):
     """One resolved (provider, model) pair. ``complete`` returns a plain string
     when ``response_model`` is None, or a validated instance of it otherwise
@@ -41,7 +46,11 @@ class LLMProvider(ABC):
     split exists for prompt caching: a provider that caches a prefix (Claude)
     caches ``system`` and sends the tail after it, so a per-request detail does
     not turn every call into a fresh cache write. Providers without that just
-    join the two."""
+    join the two.
+
+    ``on_text``, for a plain-text call, receives the text written so far while
+    the model writes it, so a long answer can be shown before it ends. A
+    provider that cannot stream ignores it and only returns the whole text."""
 
     def __init__(self, model: str) -> None:
         self.model = model
@@ -59,6 +68,7 @@ class LLMProvider(ABC):
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
+        on_text: TextSink | None = None,
     ) -> str | BaseModel: ...
 
 

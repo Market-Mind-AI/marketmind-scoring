@@ -27,7 +27,7 @@ from app.repositories.indicator_repository import IndicatorRepository
 from app.repositories.metric_explanation_repository import MetricExplanationRepository
 from app.repositories.mos_repository import MosRepository
 from app.services.llm import resolve_explanation_llm
-from app.services.llm.base import joined_system
+from app.services.llm.base import TextSink, joined_system
 from app.services.mos.dimension_mapping import DIMENSION_BY_INDICATOR, compute_dimension_subscores
 from app.services.mos.explanation_builder import ExplanationCatalog
 from app.services.mos.interpretation import (
@@ -844,6 +844,7 @@ class ExplanationClient:
         brand: str | None = None,
         user_prompt: str | None = None,
         language: str | None = None,
+        on_text: TextSink | None = None,
     ) -> str | None:
         """Best-effort: turn a deterministic evidence packet into a business
         narrative via the resolved explanation LLM. Any failure returns None and
@@ -851,7 +852,9 @@ class ExplanationClient:
         EXPLAINS; it never computes or alters a score (Cap. 4 §4.0).
 
         `language` is the one the analysis asked for — the buyer's interface
-        language, stored with the request. None means the configured default."""
+        language, stored with the request. None means the configured default.
+
+        `on_text` receives the text written so far while the model writes it."""
         countries = packet.get("countries") or []
         if not countries:
             return None
@@ -887,7 +890,10 @@ class ExplanationClient:
                 ensure_ascii=False,
                 indent=2,
             )
-            narrative = await resolve_explanation_llm().complete(system=system, system_tail=system_tail, user=user)
+            streaming = {"on_text": on_text} if on_text is not None else {}
+            narrative = await resolve_explanation_llm().complete(
+                system=system, system_tail=system_tail, user=user, **streaming
+            )
             if not narrative or not str(narrative).strip():
                 logger.warning("Explanation LLM returned an empty narrative")
                 return None

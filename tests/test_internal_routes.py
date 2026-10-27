@@ -536,6 +536,29 @@ def test_a_language_the_narrative_has_no_texts_for_is_refused(client: TestClient
     assert response.status_code == 422
 
 
+def test_narrate_stores_the_text_while_it_is_written_and_drops_it_if_it_fails(client: TestClient) -> None:
+    """Com a análise dona do texto, os pedaços vão para ela enquanto o modelo
+    escreve. Se o modelo falha no meio, o pedaço não fica como explicação."""
+
+    async def narrar_e_falhar(_self, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        await kwargs["on_text"]("Espanha li")
+        return None
+
+    stored = AsyncMock()
+    with (
+        patch("app.services.explanation_client.ExplanationClient.narrate", narrar_e_falhar),
+        patch("app.api.routes.internal._PartialNarrative._store", stored),
+    ):
+        response = client.post(
+            "/internal/narrate",
+            json={"packet": {"countries": []}, "product_name": "air fryer", "request_id": str(uuid.uuid4())},
+            headers=_HEADERS,
+        )
+
+    assert response.status_code == 200
+    assert [call.args[0] for call in stored.await_args_list] == ["Espanha li", None]
+
+
 def test_narrate_writes_in_the_language_the_analysis_asked_for(client: TestClient) -> None:
     narrate = AsyncMock(return_value="España lidera.")
     with patch("app.services.explanation_client.ExplanationClient.narrate", narrate):

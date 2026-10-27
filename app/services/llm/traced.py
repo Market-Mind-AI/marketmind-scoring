@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 from app import observability, pricing, prompts
 from app.services.llm import usage
-from app.services.llm.base import ImageInput, LLMProvider, joined_system
+from app.services.llm.base import ImageInput, LLMProvider, TextSink, joined_system
 
 logger = logging.getLogger("marketmind-scoring.llm_tracing")
 
@@ -69,12 +69,15 @@ class TracedProvider(LLMProvider):
         user: str,
         image: ImageInput | None = None,
         response_model: type[BaseModel] | None = None,
+        on_text: TextSink | None = None,
     ) -> str | BaseModel:
         opened = self._start(joined_system(system, system_tail), user, image)
         before = _tokens(usage.current())
         # The tail only when there is one, so a provider written before the
         # split (the test doubles) keeps its signature.
-        tail = {"system_tail": system_tail} if system_tail else {}
+        tail: dict[str, Any] = {"system_tail": system_tail} if system_tail else {}
+        if on_text is not None:
+            tail["on_text"] = on_text
         try:
             result = await self.inner.complete(
                 system=system, user=user, image=image, response_model=response_model, **tail

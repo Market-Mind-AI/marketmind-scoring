@@ -16,6 +16,7 @@ period halfway, and a tool that picks its own period cannot be replayed to the
 same answer.
 """
 
+import time
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -27,7 +28,7 @@ from app.api.dependencies import require_internal_token
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.models.brand import Brand
-from app.db.session import get_session
+from app.db.session import async_session_factory, get_session
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.product_repository import ProductRepository
 from app.schemas.analyze import AnalysisStatusResponse, AnalyzeRequest
@@ -419,14 +420,56 @@ async def build_evidence(request: EvidenceRequest, session: AsyncSession = Depen
     ),
 )
 async def narrate(request: NarrateRequest, session: AsyncSession = Depends(get_session)) -> NarrateResponse:
+    partial = _PartialNarrative(request.request_id) if request.request_id else None
     narrative = await ExplanationClient(session).narrate(
         packet=request.packet,
         product_name=request.product_name,
         brand=request.brand,
         user_prompt=request.user_prompt,
         language=request.language,
+        on_text=partial.write if partial else None,
     )
+    if partial and narrative is None:
+        # Um texto pela metade não fica na análise como se fosse a explicação.
+        await partial.clear()
     return NarrateResponse(narrative=narrative)
+
+
+class _PartialNarrative:
+    """Grava na análise o texto que o modelo já escreveu, no máximo uma vez a
+    cada `_PARTIAL_SECONDS`. O texto final continua chegando por
+    POST /analyses/{id}/narrative, que é quem diz que ele terminou.
+
+    Sessão própria por escrita: a da rota está lendo a evidência, e um commit
+    no meio dela expiraria o que ela carregou."""
+
+    _PARTIAL_SECONDS = 1.0
+
+    def __init__(self, request_id: uuid.UUID) -> None:
+        self._request_id = request_id
+        self._last = 0.0
+
+    async def write(self, text: str) -> None:
+        now = time.monotonic()
+        if now - self._last < self._PARTIAL_SECONDS:
+            return
+        self._last = now
+        await self._store(text)
+
+    async def clear(self) -> None:
+        await self._store(None)
+
+    async def _store(self, text: str | None) -> None:
+        try:
+            async with async_session_factory() as session:
+                repository = AnalysisRepository(session)
+                analysis_request = await repository.get(self._request_id)
+                if analysis_request is None:
+                    return
+                await repository.set_explanation(analysis_request, text)
+                await session.commit()
+        except Exception:  # noqa: BLE001 — mostrar antes é conforto; o texto final não depende disto
+            logger.warning(f"Could not store the partial narrative of {self._request_id}", exc_info=True)
 
 
 # --- The steps that carry the analysis's own judgement ---

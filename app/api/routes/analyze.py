@@ -194,7 +194,7 @@ async def stream_analysis(request_id: str, request: Request) -> StreamingRespons
     parsed_id = _parse_request_id(request_id)
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        last: tuple[str, str | None, bool] | None = None
+        last: tuple[str, str | None, int] | None = None
         waited = 0.0
         done_since: float | None = None
         while True:
@@ -208,14 +208,18 @@ async def stream_analysis(request_id: str, request: Request) -> StreamingRespons
 
             status = analysis_request.status
             progress = analysis_request.progress
-            has_explanation = bool(analysis_request.explanation and analysis_request.explanation.strip())
+            written = len((analysis_request.explanation or "").strip())
+            # O texto é gravado aos pedaços enquanto o modelo escreve, com o
+            # progresso dizendo que está sendo escrito; pronto é quando o
+            # progresso se apaga. Até lá, cada pedaço novo é um evento.
+            has_explanation = bool(written) and progress is None
 
-            # Pushed on ANY of the three changing, not on the status alone. The
+            # Pushed on ANY of these changing, not on the status alone. The
             # progress line is what the waiting screen says it is doing, and it
             # moves many times within one status; watching only the status meant
             # the caller had to poll for it anyway, which is what this endpoint
             # exists to avoid.
-            current = (status, progress, has_explanation)
+            current = (status, progress, written)
             if current != last:
                 last = current
                 yield "data: " + json.dumps(

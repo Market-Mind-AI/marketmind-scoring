@@ -77,6 +77,22 @@ def test_the_stream_stays_open_until_the_narrative_lands() -> None:
     assert events[-1]["status"] == "done"
 
 
+def test_the_narrative_is_pushed_while_it_is_written() -> None:
+    """O texto chega aos pedaços, com o progresso dizendo que está sendo
+    escrito. Cada pedaço é um evento, e só o progresso apagado diz que acabou."""
+    writing = "writing the explanation"
+    events = _events(
+        [
+            _row("done", progress=writing, explanation=None),
+            _row("done", progress=writing, explanation="Spain"),
+            _row("done", progress=writing, explanation="Spain leads"),
+            _row("done", progress=None, explanation="Spain leads."),
+        ]
+    )
+
+    assert [e["has_explanation"] for e in events] == [False, False, False, True]
+
+
 def test_a_narrative_that_never_arrives_closes_the_stream_saying_so() -> None:
     """The narration is best-effort and the scores are already delivered, so a
     text that never lands must end the stream rather than hold it open — and it

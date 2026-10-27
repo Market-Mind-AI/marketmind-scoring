@@ -104,3 +104,43 @@ def test_each_claude_call_logs_what_it_was_billed_for(caplog) -> None:  # noqa: 
         "CLAUDE_USAGE site=vision model=claude-opus-5 input=49 cache_read=4092 "
         "cache_write_5m=0 cache_write_1h=2348 output=1156"
     ) in caplog.text
+
+
+class _Stream:
+    def __init__(self, chunks: list[str]) -> None:
+        self._chunks = chunks
+
+    async def __aenter__(self):  # noqa: ANN204
+        return self
+
+    async def __aexit__(self, *_exc) -> None:  # noqa: ANN002
+        return None
+
+    @property
+    async def text_stream(self):  # noqa: ANN201
+        for chunk in self._chunks:
+            yield chunk
+
+    async def get_final_message(self):  # noqa: ANN201
+        from types import SimpleNamespace
+
+        text = "".join(self._chunks)
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], usage=None)
+
+
+async def test_a_text_sink_receives_the_text_while_it_is_written() -> None:
+    """A explicação leva quase um minuto; com quem receba os pedaços, a tela
+    mostra o texto enquanto o modelo escreve, e a resposta final é a mesma."""
+    provider = ClaudeProvider("claude-opus-5", "sk-ant-test")
+    messages = _Messages()
+    messages.stream = lambda **_kwargs: _Stream(["Spain ", "leads."])  # type: ignore[attr-defined]
+    provider._client.messages = messages  # type: ignore[assignment]
+    seen: list[str] = []
+
+    async def sink(text: str) -> None:
+        seen.append(text)
+
+    answer = await provider.complete(user="Explain", on_text=sink)
+
+    assert seen == ["Spain ", "Spain leads."]
+    assert answer == "Spain leads."
