@@ -2,16 +2,19 @@
 
 import uuid
 from collections.abc import Generator
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.main import app
+from app.services.catalog_service import CatalogService
 
 _TOKEN = "test-internal-token"
 _HEADERS = {"X-Internal-Token": _TOKEN}
@@ -44,16 +47,41 @@ def client() -> Generator[TestClient, None, None]:
         yield test_client
 
 
+def _registrar(client: TestClient, corpo: dict, headers: dict | None = None) -> Any:
+    """Registra uma análise pelo único caminho que existe, sem rede: o LLM do
+    match e os vetores ficam desligados. `catalog_method` e
+    `catalog_match_score`, quando o teste é sobre eles, viram o que a resolução
+    responde — é de lá que o registro os tira."""
+    corpo = dict(corpo)
+    corpo.setdefault("product_name", corpo.pop("canonical_title", None) or f"produto {uuid.uuid4().hex[:8]}")
+    metodo = corpo.pop("catalog_method", None)
+    score = corpo.pop("catalog_match_score", None)
+    with ExitStack() as pilha:
+        pilha.enter_context(patch("app.services.catalog_service.CatalogMatcher.pick", AsyncMock(return_value=None)))
+        pilha.enter_context(
+            patch("app.services.catalog_service.EmbeddingClient.enabled", new_callable=PropertyMock, return_value=False)
+        )
+        if metodo:
+            resolver = CatalogService.resolve
+
+            async def _resolve(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+                resolvido = await resolver(self, *args, **kwargs)
+                return resolvido.model_copy(update={"method": metodo, "match_score": score})
+
+            pilha.enter_context(patch("app.services.catalog_service.CatalogService.resolve", _resolve))
+        return client.post("/internal/analyses/register", json=corpo, headers=headers)
+
+
 # --- these routes write, so they are not for the browser ---
 
 
 def test_a_call_without_the_token_is_refused(client: TestClient) -> None:
-    response = client.post("/internal/analyses", json={"countries": ["ESP"]})
+    response = _registrar(client, {"countries": ["ESP"]})
     assert response.status_code == 401
 
 
 def test_a_call_with_the_wrong_token_is_refused(client: TestClient) -> None:
-    response = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers={"X-Internal-Token": "wrong"})
+    response = _registrar(client, {"countries": ["ESP"]}, headers={"X-Internal-Token": "wrong"})
     assert response.status_code == 401
 
 
@@ -61,7 +89,7 @@ def test_with_no_secret_configured_everything_is_refused(client: TestClient) -> 
     """Fails closed. An unset secret that waved calls through would look, from
     outside a running deployment, exactly like one configured correctly."""
     settings.internal_api_token = ""
-    response = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS)
+    response = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS)
     assert response.status_code == 503
 
 
@@ -69,9 +97,9 @@ def test_with_no_secret_configured_everything_is_refused(client: TestClient) -> 
 
 
 def test_registering_an_analysis_returns_something_to_track_it_by(client: TestClient) -> None:
-    response = client.post(
-        "/internal/analyses",
-        json={"countries": ["ESP", "PRT"], "canonical_title": "air fryer", "user_prompt": "vale a pena?"},
+    response = _registrar(
+        client,
+        {"countries": ["ESP", "PRT"], "canonical_title": "air fryer", "user_prompt": "vale a pena?"},
         headers=_HEADERS,
     )
 
@@ -87,9 +115,9 @@ def test_how_the_catalogue_matched_survives_to_the_resumed_run(client: TestClien
     o produto outra vez. Sem o campo voltar na leitura, o trace diria "não sei"
     de algo que se soube, e nada acusaria: o fio inteiro é silencioso.
     """
-    request_id = client.post(
-        "/internal/analyses",
-        json={
+    request_id = _registrar(
+        client,
+        {
             "countries": ["ESP"],
             "canonical_title": "Picanha Swift",
             "catalog_method": "trigram",
@@ -108,9 +136,9 @@ def test_an_analysis_registered_without_the_catalogue_fact_reads_back_empty(clie
     """Nulo, não zero: `catalog_match_score` só existe para `trigram`, que é o
     único passo que decide por número. Zero ali seria "não se parecia nada",
     que é uma afirmação diferente de "não se aplica"."""
-    request_id = client.post(
-        "/internal/analyses", json={"countries": ["ESP"], "catalog_method": "created"}, headers=_HEADERS
-    ).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"], "catalog_method": "created"}, headers=_HEADERS).json()[
+        "request_id"
+    ]
 
     lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
 
@@ -121,7 +149,7 @@ def test_an_analysis_registered_without_the_catalogue_fact_reads_back_empty(clie
 def test_progress_records_the_note_and_the_heartbeat(client: TestClient) -> None:
     """Two different readers. The note is for whoever is watching; the heartbeat
     is how a run that died is told apart from one that is merely slow."""
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
 
     response = client.patch(
         f"/internal/analyses/{request_id}/progress",
@@ -134,7 +162,7 @@ def test_progress_records_the_note_and_the_heartbeat(client: TestClient) -> None
 
 
 def test_an_empty_progress_note_still_counts_as_a_sign_of_life(client: TestClient) -> None:
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
 
     response = client.patch(f"/internal/analyses/{request_id}/progress", json={"message": None}, headers=_HEADERS)
 
@@ -145,7 +173,7 @@ def test_an_empty_progress_note_still_counts_as_a_sign_of_life(client: TestClien
 def test_completing_requires_at_least_one_scored_market(client: TestClient) -> None:
     """Billing is tied to this state, so completing with nothing is how a buyer
     ends up paying for an empty answer."""
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
 
     response = client.post(f"/internal/analyses/{request_id}/complete", json={"result": []}, headers=_HEADERS)
 
@@ -153,7 +181,7 @@ def test_completing_requires_at_least_one_scored_market(client: TestClient) -> N
 
 
 def test_completing_with_markets_marks_it_done(client: TestClient) -> None:
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
 
     response = client.post(
         f"/internal/analyses/{request_id}/complete",
@@ -168,7 +196,7 @@ def test_completing_with_markets_marks_it_done(client: TestClient) -> None:
 def test_the_narrative_is_attached_after_the_answer_lands(client: TestClient) -> None:
     """Separate calls on purpose: a single model call once took longer than the
     whole rest of the analysis, so the scores are delivered without it."""
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
     client.post(
         f"/internal/analyses/{request_id}/complete",
         json={"result": [{"country": "ESP", "mos": 70.0}]},
@@ -186,7 +214,7 @@ def test_the_narrative_is_attached_after_the_answer_lands(client: TestClient) ->
 
 
 def test_failing_requires_a_reason(client: TestClient) -> None:
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
 
     response = client.post(f"/internal/analyses/{request_id}/fail", json={"error_message": ""}, headers=_HEADERS)
 
@@ -194,7 +222,7 @@ def test_failing_requires_a_reason(client: TestClient) -> None:
 
 
 def test_failing_with_a_reason_records_it(client: TestClient) -> None:
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
 
     response = client.post(
         f"/internal/analyses/{request_id}/fail",
@@ -260,9 +288,9 @@ def test_narrate_answers_null_when_the_model_fails(client: TestClient) -> None:
 def test_reading_an_analysis_back_gives_a_resumed_run_what_it_needs(client: TestClient) -> None:
     """Resuming is re-running, so the only thing that must not be re-decided is
     what was already decided: the product, the countries, the buyer's question."""
-    request_id = client.post(
-        "/internal/analyses",
-        json={"countries": ["ESP", "PRT"], "canonical_title": "air fryer", "user_prompt": "vale a pena?"},
+    request_id = _registrar(
+        client,
+        {"countries": ["ESP", "PRT"], "canonical_title": "air fryer", "user_prompt": "vale a pena?"},
         headers=_HEADERS,
     ).json()["request_id"]
 
@@ -331,14 +359,14 @@ def test_candidate_collection_is_skipped_when_the_champion_is_cached(client: Tes
     it produces the same answer."""
     entity_key = _resolve(client, f"cached champion {uuid.uuid4().hex[:6]}")
     period = "2026-09"
-    client.post(
-        "/internal/champion",
-        json={"entity_key": entity_key, "period_key": period, "country": "BRA", "mos": 66.4},
-        headers=_HEADERS,
-    )
+    # O campeão guardado vale para a régua com que foi calculado; aqui, a de agora.
+    guardado = AsyncMock(return_value=(True, "BRA", Decimal("66.4")))
 
     collected = AsyncMock(return_value=None)
-    with patch("app.services.analysis_service.AnalysisService.ensure_candidates_coverage", collected):
+    with (
+        patch("app.services.analysis_service.AnalysisService.ensure_candidates_coverage", collected),
+        patch("app.repositories.product_repository.ProductRepository.champion_for", guardado),
+    ):
         response = client.post(
             "/internal/candidates/coverage",
             json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": period},
@@ -389,26 +417,6 @@ def test_candidate_collection_reports_what_it_did(client: TestClient) -> None:
     assert body["tasks"] == []
 
 
-def test_a_champion_can_be_stored_as_nothing_scorable(client: TestClient) -> None:
-    """A real outcome that has to be recorded: without it, the same fruitless
-    candidate work is attempted again on every later analysis."""
-    entity_key = _resolve(client, f"nothing scorable {uuid.uuid4().hex[:6]}")
-
-    response = client.post(
-        "/internal/champion",
-        json={"entity_key": entity_key, "period_key": "2026-09", "country": None, "mos": None},
-        headers=_HEADERS,
-    )
-
-    assert response.status_code == 200
-    cached = client.post(
-        "/internal/candidates/coverage",
-        json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": "2026-09"},
-        headers=_HEADERS,
-    )
-    assert cached.json()["champion_cached"] is True
-
-
 def test_crowning_answers_the_champion_and_its_row_when_it_was_not_requested(client: TestClient) -> None:
     from app.services.analysis_service import CrownedChampion
 
@@ -455,43 +463,12 @@ def test_the_demand_ceiling_reports_which_ruler_was_used(client: TestClient) -> 
     assert body["demand_ruler"]["mode"] == "reference_candidate"
 
 
-def test_scoring_candidates_reports_the_ones_it_could_not_score(client: TestClient) -> None:
-    """Excluded is reported with its reason, never omitted — a country missing
-    from the answer is indistinguishable from one that was never tried."""
-    entity_key = _resolve(client, f"candidates {uuid.uuid4().hex[:6]}")
-    from types import SimpleNamespace
-
-    rows = [
-        SimpleNamespace(country="BRA", mos=66.4, availability_status="available", excluded_reason=None),
-        SimpleNamespace(
-            country="PER",
-            mos=None,
-            availability_status="unavailable",
-            excluded_reason="Missing mandatory indicator(s): trend_score",
-        ),
-    ]
-    with patch(
-        "app.services.analysis_service.AnalysisService.score_reference_candidates",
-        AsyncMock(return_value=rows),
-    ):
-        response = client.post(
-            "/internal/candidates/score",
-            json={"entity_key": entity_key, "requested_countries": ["ESP"], "period_key": "2026-09"},
-            headers=_HEADERS,
-        )
-
-    candidates = response.json()["candidates"]
-    assert [c["country"] for c in candidates] == ["BRA", "PER"]
-    assert candidates[1]["mos"] is None
-    assert "trend_score" in candidates[1]["excluded_reason"]
-
-
 def test_every_judgement_tool_needs_the_token(client: TestClient) -> None:
     for path, payload in [
         ("/internal/enrich-terms", {"entity_key": str(uuid.uuid4()), "countries": ["ESP"]}),
         ("/internal/coverage/ensure", {"country_iso3": "ESP"}),
         ("/internal/demand-ceiling", {"entity_key": str(uuid.uuid4()), "countries": ["ESP"], "period_key": "x"}),
-        ("/internal/champion", {"entity_key": str(uuid.uuid4()), "period_key": "x"}),
+        ("/internal/champion/crown", {"entity_key": str(uuid.uuid4()), "period_key": "x"}),
     ]:
         assert client.post(path, json=payload).status_code == 401, path
 
@@ -501,10 +478,8 @@ def test_a_match_near_the_threshold_is_reported_as_borderline(client: TestClient
     repetir o 0.4 do lado dele só para escrever "BORDERLINE", e número repetido
     envelhece sozinho: mudar o limiar aqui deixaria o rótulo de lá mentindo sem
     nada acusar."""
-    request_id = client.post(
-        "/internal/analyses",
-        json={"countries": ["ESP"], "catalog_method": "trigram", "catalog_match_score": 0.41},
-        headers=_HEADERS,
+    request_id = _registrar(
+        client, {"countries": ["ESP"], "catalog_method": "trigram", "catalog_match_score": 0.41}, headers=_HEADERS
     ).json()["request_id"]
 
     lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
@@ -513,10 +488,8 @@ def test_a_match_near_the_threshold_is_reported_as_borderline(client: TestClient
 
 
 def test_a_comfortable_match_is_not_borderline(client: TestClient) -> None:
-    request_id = client.post(
-        "/internal/analyses",
-        json={"countries": ["ESP"], "catalog_method": "trigram", "catalog_match_score": 0.87},
-        headers=_HEADERS,
+    request_id = _registrar(
+        client, {"countries": ["ESP"], "catalog_method": "trigram", "catalog_match_score": 0.87}, headers=_HEADERS
     ).json()["request_id"]
 
     assert client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()["catalog_match_borderline"] is False
@@ -524,9 +497,9 @@ def test_a_comfortable_match_is_not_borderline(client: TestClient) -> None:
 
 def test_a_match_with_no_score_is_not_borderline(client: TestClient) -> None:
     """`alias`, `llm` e `created` não têm score — não há de que estar perto."""
-    request_id = client.post(
-        "/internal/analyses", json={"countries": ["ESP"], "catalog_method": "alias"}, headers=_HEADERS
-    ).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"], "catalog_method": "alias"}, headers=_HEADERS).json()[
+        "request_id"
+    ]
 
     assert client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()["catalog_match_borderline"] is False
 
@@ -540,9 +513,7 @@ def test_a_match_with_no_score_is_not_borderline(client: TestClient) -> None:
 
 
 def test_the_language_asked_for_is_stored_and_read_back(client: TestClient) -> None:
-    request_id = client.post(
-        "/internal/analyses", json={"countries": ["ESP"], "language": "es"}, headers=_HEADERS
-    ).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"], "language": "es"}, headers=_HEADERS).json()["request_id"]
 
     lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
 
@@ -552,7 +523,7 @@ def test_the_language_asked_for_is_stored_and_read_back(client: TestClient) -> N
 def test_an_analysis_registered_without_a_language_reads_back_null(client: TestClient) -> None:
     """Null is "the configured default" — what every analysis got before the
     language travelled with the request."""
-    request_id = client.post("/internal/analyses", json={"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"]}, headers=_HEADERS).json()["request_id"]
 
     lido = client.get(f"/internal/analyses/{request_id}", headers=_HEADERS).json()
 
@@ -560,7 +531,7 @@ def test_an_analysis_registered_without_a_language_reads_back_null(client: TestC
 
 
 def test_a_language_the_narrative_has_no_texts_for_is_refused(client: TestClient) -> None:
-    response = client.post("/internal/analyses", json={"countries": ["ESP"], "language": "fr"}, headers=_HEADERS)
+    response = _registrar(client, {"countries": ["ESP"], "language": "fr"}, headers=_HEADERS)
 
     assert response.status_code == 422
 
@@ -579,9 +550,9 @@ def test_narrate_writes_in_the_language_the_analysis_asked_for(client: TestClien
 
 
 def test_running_accepts_the_deadline(client: TestClient) -> None:
-    request_id = client.post(
-        "/internal/analyses", json={"countries": ["ESP"], "canonical_title": "prazo"}, headers=_HEADERS
-    ).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"], "canonical_title": "prazo"}, headers=_HEADERS).json()[
+        "request_id"
+    ]
     resposta = client.post(
         f"/internal/analyses/{request_id}/running", json={"deadline_at": "2026-10-27T12:00:00+00:00"}, headers=_HEADERS
     )
@@ -591,8 +562,8 @@ def test_running_accepts_the_deadline(client: TestClient) -> None:
 
 
 def test_running_without_a_body_still_works(client: TestClient) -> None:
-    request_id = client.post(
-        "/internal/analyses", json={"countries": ["ESP"], "canonical_title": "sem prazo"}, headers=_HEADERS
-    ).json()["request_id"]
+    request_id = _registrar(client, {"countries": ["ESP"], "canonical_title": "sem prazo"}, headers=_HEADERS).json()[
+        "request_id"
+    ]
 
     assert client.post(f"/internal/analyses/{request_id}/running", headers=_HEADERS).json()["status"] == "running"

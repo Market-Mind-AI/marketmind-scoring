@@ -18,30 +18,6 @@ from app.domain.enums import NarrativeLanguage
 from app.schemas.coverage import JobTaskResult
 
 
-class RegisterAnalysisRequest(BaseModel):
-    entity_key: uuid.UUID | None = None
-    canonical_title: str | None = None
-    countries: list[str] = Field(..., min_length=1)
-    estimated_price: Decimal | None = None
-    price_currency: str | None = None
-    user_prompt: str | None = None
-    # Como o catálogo chegou nesta entidade: `alias`, `trigram`, `llm` ou
-    # `created`. Quem resolve é quem sabe, e é ele que conta — aqui não se
-    # tenta deduzir. Ver a migration 039.
-    catalog_method: str | None = None
-    catalog_match_score: Decimal | None = None
-    catalog_match_reasoning: str | None = None
-    catalog_query_text: str | None = None
-    # A marca desta análise. Nulo é uma resposta — "foi do produto" —, e é o
-    # par (produto, marca) que dá a rastreabilidade de quem foi analisado com
-    # marca e quem não.
-    brand_key: uuid.UUID | None = None
-    brand_name: str | None = None
-    # O idioma da interface de quem pediu, em que a narrativa deve sair.
-    # Nulo é o configurado no serviço.
-    language: NarrativeLanguage | None = None
-
-
 class RegisteredAnalysisResponse(BaseModel):
     request_id: uuid.UUID
     status: str
@@ -257,12 +233,6 @@ class CandidatesCoverageResponse(BaseModel):
     tasks: list[JobTaskResult] = []
     reused: dict[str, int] = {}
     related_fresh: int = 0
-    # The champion this product already has for the period, when it has one.
-    # The caller needs the figure, not just the fact: a stored champion that a
-    # requested market now beats must be replaced, or it is reloaded and
-    # crowned again on every later analysis.
-    champion_country: str | None = None
-    champion_mos: float | None = None
     # Whether a champion computed for this period already exists. When it does,
     # candidate collection is the slowest work in the system and it produces the
     # same answer, so the caller should skip it: three consecutive analyses of
@@ -290,41 +260,12 @@ class DemandCeilingResponse(BaseModel):
     demand_ruler: dict[str, Any] | None = None
 
 
-class ScoreCandidatesRequest(BaseModel):
-    entity_key: uuid.UUID
-    requested_countries: list[str] = Field(..., min_length=1)
-    period_key: str = Field(..., min_length=1)
-    demand_ceiling: float | None = None
-    # A marca desta análise: os candidatos dela são os DELA. Onde o café é mais
-    # procurado não é onde a Juan Valdez é mais procurada.
-    brand_key: uuid.UUID | None = None
 
 
-class ScoredCandidate(BaseModel):
-    country: str
-    mos: float | None = None
-    availability_status: str
-    excluded_reason: str | None = None
 
 
-class ScoreCandidatesResponse(BaseModel):
-    # The product's reference markets, scored. The MOS uses fixed anchors, so
-    # scoring these never changes what a requested country scores -- which is
-    # what makes it safe to surface the best one as a benchmark.
-    candidates: list[ScoredCandidate]
 
 
-class SetChampionRequest(BaseModel):
-    entity_key: uuid.UUID
-    period_key: str = Field(..., min_length=1)
-    # Null records "nothing scorable this period", which is a real outcome and
-    # has to be stored: without it the same fruitless candidate work is
-    # attempted again on every later analysis.
-    country: str | None = None
-    mos: float | None = None
-    # A marca desta análise, quando há. É ela que decide QUAL vocabulário
-    # medir — sem ela uma análise de marca mediria a categoria.
-    brand_key: uuid.UUID | None = None
 
 
 class CrownChampionRequest(BaseModel):

@@ -60,12 +60,7 @@ from app.schemas.internal import (
     NarrateResponse,
     ProgressRequest,
     ProgressResponse,
-    RegisterAnalysisRequest,
     RegisteredAnalysisResponse,
-    ScoreCandidatesRequest,
-    ScoreCandidatesResponse,
-    ScoredCandidate,
-    SetChampionRequest,
 )
 from app.schemas.mos import MosResultResponse
 from app.services.analysis_service import AnalysisService
@@ -112,45 +107,6 @@ async def register_full_analysis(
         brand_key=analysis_request.brand_key,
         brand_name=analysis_request.brand_name,
     )
-
-
-@router.post(
-    "/analyses",
-    response_model=RegisteredAnalysisResponse,
-    status_code=201,
-    summary="Register an analysis",
-    deprecated=True,
-    description=(
-        "DEPRECATED — POST /internal/analyses/register resolves and registers "
-        "in one call, without dropping the curated vocabulary or the review "
-        "of the user's edits.\n\n"
-        "Creates the record an analysis is tracked and billed against. The "
-        "product must already be resolved — the entity_key comes from "
-        "POST /catalog/resolve — because identity decides what is being "
-        "analysed, and guessing it here would let two different products share "
-        "one record."
-    ),
-)
-async def register_analysis(
-    request: RegisterAnalysisRequest, session: AsyncSession = Depends(get_session)
-) -> RegisteredAnalysisResponse:
-    analysis_request = await AnalysisRepository(session).create(
-        entity_key=request.entity_key,
-        canonical_title=request.canonical_title,
-        countries=request.countries,
-        estimated_price=request.estimated_price,
-        price_currency=request.price_currency,
-        user_prompt=request.user_prompt,
-        catalog_method=request.catalog_method,
-        catalog_match_score=request.catalog_match_score,
-        catalog_match_reasoning=request.catalog_match_reasoning,
-        catalog_query_text=request.catalog_query_text,
-        brand_key=request.brand_key,
-        brand_name=request.brand_name,
-        language=request.language,
-    )
-    await session.commit()
-    return RegisteredAnalysisResponse(request_id=analysis_request.id, status=analysis_request.status)
 
 
 @router.get(
@@ -602,8 +558,7 @@ async def ensure_coverage(
         "When champion_cached comes back true the collection was skipped: the "
         "period already has a champion computed against the CURRENT demand "
         "ruler. A champion computed against an older ruler does not count. "
-        "champion_country/champion_mos are deprecated — crowning is POST "
-        "/internal/champion/crown's.\n\n"
+        "Crowning is POST /internal/champion/crown's.\n\n"
         "Candidate demand is "
         "the slowest collection in the system and re-running it produces the "
         "same answer: three consecutive analyses of one product took 594s, 203s "
@@ -622,7 +577,7 @@ async def candidates_coverage(
     teto, _regua, _novo = await servico.measure_demand_ceiling(
         entity, request.requested_countries, request.period_key, marca=marca
     )
-    cached, pais, mos = await ProductRepository(session).champion_for(
+    cached, _pais, _mos = await ProductRepository(session).champion_for(
         entity, marca.brand_key if marca is not None else None, request.period_key, demand_ceiling=teto
     )
     tarefas: list = []
@@ -642,10 +597,6 @@ async def candidates_coverage(
         reused=reuso.get("reused", {}),
         related_fresh=int(reuso.get("related_fresh") or 0),
         champion_cached=cached,
-        # O da marca quando há marca: devolver `entity.champion_*` coroava o
-        # campeão do PRODUTO numa análise de marca.
-        champion_country=pais if cached else None,
-        champion_mos=float(mos) if cached and mos is not None else None,
     )
 
 
@@ -672,86 +623,6 @@ async def demand_ceiling(
         entity, request.countries, request.period_key, marca=await _marca(session, request.brand_key)
     )
     return DemandCeilingResponse(demand_ceiling=ceiling, demand_ruler=ruler)
-
-
-@router.post(
-    "/candidates/score",
-    response_model=ScoreCandidatesResponse,
-    summary="Score the product's reference markets",
-    deprecated=True,
-    description=(
-        "DEPRECATED — POST /internal/champion/crown scores the candidates and "
-        "crowns the champion in one call.\n\n"
-        "Scores the reference-market candidates the caller did not ask about. "
-        "The MOS uses fixed anchors, so this never changes what a requested "
-        "country scores — which is what makes it safe to surface the best of "
-        "them as a benchmark.\n\n"
-        "Their demand is already collected by then, so this adds only free "
-        "macro data and arithmetic."
-    ),
-)
-async def score_candidates(
-    request: ScoreCandidatesRequest, session: AsyncSession = Depends(get_session)
-) -> ScoreCandidatesResponse:
-    entity = await _entity(session, request.entity_key)
-    results = await AnalysisService(session).score_reference_candidates(
-        entity=entity,
-        requested=request.requested_countries,
-        period_key=request.period_key,
-        demand_ceiling=request.demand_ceiling,
-        marca=await _marca(session, request.brand_key),
-    )
-    await session.commit()
-    return ScoreCandidatesResponse(
-        candidates=[
-            ScoredCandidate(
-                country=row.country,
-                mos=None if row.mos is None else float(row.mos),
-                availability_status=row.availability_status,
-                excluded_reason=row.excluded_reason,
-            )
-            for row in results
-        ]
-    )
-
-
-@router.post(
-    "/champion",
-    response_model=AnalysisStateResponse,
-    summary="Record the product's best known market for a period",
-    deprecated=True,
-    description=(
-        "DEPRECATED — POST /internal/champion/crown decides and stores the "
-        "champion itself.\n\n"
-        "Stores which market this product scores highest in, so a later "
-        "analysis reuses it instead of recollecting the candidates.\n\n"
-        "A null country is a real outcome and must be recorded: it means "
-        "nothing was scorable this period, and without storing that the same "
-        "fruitless work is attempted again on every later analysis.\n\n"
-        "Store the best REQUESTED market when it beats the stored champion. "
-        "The stored value means 'this product's best known market', so leaving "
-        "a beaten one in place keeps it wrong for every analysis after."
-    ),
-)
-async def set_champion(
-    request: SetChampionRequest, session: AsyncSession = Depends(get_session)
-) -> AnalysisStateResponse:
-    entity = await _entity(session, request.entity_key)
-    marca = await _marca(session, request.brand_key)
-    # A régua de agora vai junto: é o que diz para qual régua este campeão vale.
-    teto, _regua, _novo = await AnalysisService(session).measure_demand_ceiling(
-        entity, [request.country] if request.country else [], request.period_key, marca=marca
-    )
-    await ProductRepository(session).set_champion(
-        entity,
-        country=request.country,
-        mos=None if request.mos is None else Decimal(str(request.mos)),
-        period_key=request.period_key,
-        demand_ceiling=teto,
-        brand_key=marca.brand_key if marca is not None else None,
-    )
-    await session.commit()
-    return AnalysisStateResponse(request_id=request.entity_key, status="stored")
 
 
 @router.post(

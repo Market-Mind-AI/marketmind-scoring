@@ -11,8 +11,9 @@ schemas/routes, not assumed):
 - All 4 collection POST endpoints return ``{"metadata": {"ingestion_run_id": ...}}``.
 - ``GET /runs/{id}`` returns the run flat (``{"status": ...}``) for PyTrends,
   WorldBank and OECD, but UNData wraps it as ``{"data": {"run": {"status": ...}}}``.
-- UNData's raw status vocabulary is wider (pending/running/success/partial/failed)
-  than the other 3 (running/success/failed) — normalized via IngestionRunStatus.
+- UNData's raw status vocabulary adds `pending` to the others' running/success/failed
+  — normalized via IngestionRunStatus. `partial` is no longer written by any
+  collector (2026-10-27): a run that got nothing fails, one that got an answer succeeds.
 """
 
 import asyncio
@@ -41,8 +42,6 @@ _RAW_STATUS_MAP: dict[str, IngestionRunStatus] = {
     "pending": IngestionRunStatus.RUNNING,
     "running": IngestionRunStatus.RUNNING,
     "success": IngestionRunStatus.SUCCESS,
-    # "sem imputação": a partially-succeeded run does not count as coverage.
-    "partial": IngestionRunStatus.FAILED,
     "failed": IngestionRunStatus.FAILED,
 }
 

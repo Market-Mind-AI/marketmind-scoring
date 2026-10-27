@@ -211,7 +211,6 @@ class TestExtractRunStatus:
             (DataSource.PYTRENDS, {"status": "success"}, IngestionRunStatus.SUCCESS),
             (DataSource.PYTRENDS, {"status": "failed"}, IngestionRunStatus.FAILED),
             (DataSource.UNDATA, {"data": {"run": {"status": "pending"}}}, IngestionRunStatus.RUNNING),
-            (DataSource.UNDATA, {"data": {"run": {"status": "partial"}}}, IngestionRunStatus.FAILED),
             (DataSource.UNDATA, {"data": {"run": {"status": "success"}}}, IngestionRunStatus.SUCCESS),
         ],
     )

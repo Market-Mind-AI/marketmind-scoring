@@ -1,36 +1,21 @@
-"""Retoma análises que morreram no meio, e encerra as que já passaram do prazo.
+"""Encerra as análises que passaram do prazo enquanto estavam paradas.
 
-POR QUE EXISTE. A decisão D3 ("nada parcial sai") transformou uma falha de
-fonte numa espera: a análise fica em `running`, insistindo, até o dado vir. Se
-o pod que a conduzia reinicia, ela para de avançar e o pedido fica em `running`
-para sempre. Sem retomada, trocamos "entrega incompleta" por "não entrega
-nunca", que é pior: o usuário paga e não recebe nem o parcial.
+RETOMAR NÃO É MAIS DAQUI (2026-10-27). Esta varredura reinvocava o grafo de
+toda análise calada há mais de `analysis_stale_after_seconds`, enquanto o
+orchestrator tinha a própria vigia de órfãs, com outra regra de vida (um claim
+que vence em 120 s). Duas regras para a mesma pergunta deixavam uma análise
+retomada aqui ser tomada de novo pela vigia do orchestrator e rodar duas vezes.
+Quem decide e retoma é o orchestrator, pelo claim; aqui fica só o que é regra de
+status, e status é do scoring.
 
-E o checkpointer sozinho não resolve isso. Ele guarda onde a execução parou,
-mas não percebe que parou — alguém tem que reinvocar o grafo. Esta varredura é
-esse alguém.
+O PRAZO. Uma análise cujo `deadline_at` passou enquanto estava parada não é
+retomada por ninguém: é encerrada como `failed` com o motivo. É a mesma regra
+que o laço aplicaria se estivesse vivo (D5).
 
 COMO SE DISTINGUE MORTA DE OCUPADA. Pelo batimento (`heartbeat_at`, migration
-034), carimbado a cada vez que o agente diz o que está fazendo.
-Silêncio maior que `analysis_stale_after_seconds` é morte, porque é mais longo
-que o maior passo entre dois batimentos. Só isso torna a varredura segura se um
-dia rodar com mais de uma réplica: uma análise viva nunca é retomada em
-paralelo com ela mesma.
-
-POR QUE RETOMAR É SIMPLESMENTE REINVOCAR. `AnalysisService.run` entrega o
-pedido ao orchestrator com o mesmo `analysis_id`, e é esse id que dá nome ao
-checkpoint — então o grafo continua do último nó concluído em vez de recomeçar.
-Mesmo se recomeçasse não haveria dano: todo passo é idempotente por construção,
-e não por acidente. A coleta pula o que já está fresco, os indicadores são
-upsert por (país, indicador, período), o MOS é upsert por (produto, país,
-período) e o campeão é cacheado por período.
-
-O prazo é verificado antes: uma análise cujo `deadline_at` já passou enquanto
-estava interrompida não é retomada, é encerrada como `failed` com o motivo. É a
-mesma regra que o laço aplicaria se estivesse vivo (D5).
-
-Sem broker e sem worker dedicado, no mesmo espírito do SSE, que observa o banco
-em vez de fila.
+034), carimbado a cada vez que o agente diz o que está fazendo. Uma análise viva
+nunca é encerrada por esta varredura, mesmo depois do prazo: quem está rodando
+encerra a si mesmo.
 """
 
 import asyncio
@@ -51,24 +36,23 @@ from app.utils.time import utc_now
 @dataclass
 class SweepReport:
     verificadas: int = 0
-    retomadas: list[uuid.UUID] = field(default_factory=list)
     expiradas: list[uuid.UUID] = field(default_factory=list)
 
 
 class AnalysisResumeService:
     async def sweep(self) -> SweepReport:
-        """Uma passada: encerra o que passou do prazo, retoma o resto."""
-        from app.services.analysis_service import AnalysisService  # ciclo: run() é quem retoma
-
+        """Uma passada: encerra as paradas cujo prazo já passou."""
         limite = utc_now() - timedelta(seconds=settings.analysis_stale_after_seconds)
         report = SweepReport()
 
         async with async_session_factory() as session:
-            paradas = (
+            vencidas = (
                 (
                     await session.execute(
                         select(AnalysisRequest).where(
                             AnalysisRequest.status == "running",
+                            AnalysisRequest.deadline_at.is_not(None),
+                            AnalysisRequest.deadline_at <= utc_now(),
                             # Batimento nulo é análise que morreu antes do
                             # primeiro sinal de vida — ou de antes da migration
                             # 034. `created_at` é o único relógio que ela tem.
@@ -82,17 +66,9 @@ class AnalysisResumeService:
                 .scalars()
                 .all()
             )
-            report.verificadas = len(paradas)
-            expirar: list[AnalysisRequest] = []
-            retomar: list[uuid.UUID] = []
-            for pedido in paradas:
-                if pedido.deadline_at is not None and pedido.deadline_at <= utc_now():
-                    expirar.append(pedido)
-                else:
-                    retomar.append(pedido.id)
-
+            report.verificadas = len(vencidas)
             repo = AnalysisRepository(session)
-            for pedido in expirar:
+            for pedido in vencidas:
                 await repo.mark_failed(
                     pedido,
                     error_message=(
@@ -101,35 +77,22 @@ class AnalysisResumeService:
                     ),
                 )
                 report.expiradas.append(pedido.id)
-            if expirar:
+            if vencidas:
                 await session.commit()
 
-        # Fora da sessão da varredura: cada retomada abre a sua.
-        for request_id in retomar:
-            calada_ha = settings.analysis_stale_after_seconds
-            logger.warning(f"Retomando análise {request_id}, parada há mais de {calada_ha}s")
-            async with async_session_factory() as session:
-                await AnalysisService(session).run(request_id)
-            report.retomadas.append(request_id)
-
-        if report.verificadas:
-            logger.info(
-                f"Varredura de análises: {report.verificadas} paradas, "
-                f"{len(report.retomadas)} retomadas, {len(report.expiradas)} expiradas"
-            )
+        if report.expiradas:
+            logger.info(f"Varredura de análises: {len(report.expiradas)} expiradas")
         return report
 
     async def run_forever(self) -> None:
-        """Laço da varredura, ligado no lifespan da aplicação. A primeira passada
-        é imediata: no startup, toda análise em `running` é órfã de um processo
-        que não existe mais — é o caso mais comum e o mais fácil de perder."""
+        """Laço da varredura, ligado no lifespan da aplicação."""
         intervalo = settings.analysis_sweep_interval_seconds
         if intervalo <= 0:
-            logger.info("Varredura de análises paradas desligada (analysis_sweep_interval_seconds=0)")
+            logger.info("Varredura de análises vencidas desligada (analysis_sweep_interval_seconds=0)")
             return
         while True:
             try:
                 await self.sweep()
             except Exception:  # noqa: BLE001 — laço de fundo, nunca pode morrer por uma passada ruim
-                logger.exception("Varredura de análises paradas falhou; tentando de novo no próximo intervalo")
+                logger.exception("Varredura de análises vencidas falhou; tentando de novo no próximo intervalo")
             await asyncio.sleep(intervalo)
