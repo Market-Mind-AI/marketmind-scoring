@@ -14,6 +14,11 @@ instruction (`explanation-system-es`) instead of the English one plus a "write
 in this language" line. The `fr` entries pin that fallback, which is what any
 language without texts of its own still gets.
 
+The explanation entries were regenerated on 2026-10-27, on purpose: the
+narrative became about a third as long — the few factors that explain each
+MOS instead of every dimension, and the two or three main search terms instead
+of all of them — measured against the previous text on seven real analyses.
+
 To regenerate: render each key below with the same calls these tests make and
 write the JSON back (ensure_ascii=False, indent=2, sort_keys=True); then check
 that only the entries you meant to change did."""

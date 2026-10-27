@@ -169,12 +169,16 @@ grande significa que o mercado existe e a marca não está nele, o que é difere
 A marca PODE ser maior que os termos genéricos, e aí a leitura é que ela é procurada por nome — nunca \
 apresente isso como "share" acima de 100%. \
 Há ainda um `glossary` no topo definindo o que cada métrica mede. USE o `explanation` de cada score e o \
-`glossary` para construir uma explicação RICA, aproveitando TODOS os dados que entram no MOS \
-(todas as dimensões e sinais), não só o volume.
+`glossary` para ler os números, mas NÃO percorra todas as dimensões e sinais: a tela já mostra cada um ao \
+lado do texto. Escolha, para cada país, os poucos que mais explicam o MOS — o que mais o sustenta e o que \
+mais o segura — e explique-os bem: NOMEIE a dimensão que mais segura o MOS (pode ser o próprio Volume de \
+Demanda) e o sinal dentro dela que explica isso, sempre atribuindo cada sinal à dimensão a que ele pertence no \
+pacote. Se o poder de compra (PIB per capita) for um freio relevante, diga-o.
 
 FORMATO (MUITO IMPORTANTE): escreva como um analista humano escreveria um parecer para um executivo — \
 PROSA CORRIDA, fluida e natural. É PROIBIDO usar bullets, listas, tabelas, subtítulos por dimensão ou \
 enumerar "dimensão: score" item a item. As dimensões e números entram TECIDOS nas frases, não em tópicos.
+SEJA CONCISO: cada frase traz uma informação nova; não repita um número já dito nem reexplique a mesma ideia.
 
 {{structure}}
 
@@ -218,12 +222,17 @@ market exists and this brand is not in it, a different conclusion from "there is
 CAN be larger than the generic terms, and then the reading is that it is searched by name — never present \
 that as a "share" above 100%. A \
 top-level `glossary` defines what each metric measures. USE each score's `explanation` and the \
-`glossary` to build a RICH explanation that draws on ALL the data feeding the MOS (every dimension and \
-signal), not just volume.
+`glossary` to read the numbers, but do NOT walk through every dimension and signal: the screen already \
+shows each one next to the text. For each country pick the few that best explain its MOS — what holds it \
+up most and what holds it back most — and explain those well: NAME the dimension that holds the MOS back \
+most (it may be Demand Volume itself) and the signal within it that explains why, always attributing each \
+signal to the dimension it belongs to in the packet. If purchasing power (GDP per capita) is a relevant brake, \
+say so.
 
 FORMAT (VERY IMPORTANT): write the way a human analyst writes a brief for an executive — FLOWING PROSE, \
 natural and readable. Bullets, lists, tables, per-dimension sub-headings, or enumerating "dimension: score" \
 item by item are FORBIDDEN. Dimensions and numbers are WOVEN into the sentences, not listed.
+BE CONCISE: every sentence adds something new; do not repeat a figure already given or re-explain an idea.
 
 {{structure}}
 
@@ -266,12 +275,16 @@ grande significa que el mercado existe y la marca no está en él, que es distin
 La marca PUEDE ser mayor que los términos genéricos, y entonces la lectura es que se la busca por nombre — nunca \
 presentes eso como una "cuota" por encima del 100%. \
 Hay además un `glossary` al inicio que define qué mide cada métrica. USA el `explanation` de cada score y el \
-`glossary` para construir una explicación RICA, aprovechando TODOS los datos que entran en el MOS \
-(todas las dimensiones y señales), no solo el volumen.
+`glossary` para leer los números, pero NO recorras todas las dimensiones y señales: la pantalla ya muestra cada \
+una junto al texto. Elige, para cada país, las pocas que más explican su MOS — lo que más lo sostiene y lo que \
+más lo frena — y explícalas bien: NOMBRA la dimensión que más frena el MOS (puede ser el propio Volumen de \
+Demanda) y la señal dentro de ella que lo explica, atribuyendo siempre cada señal a la dimensión a la que \
+pertenece en el paquete. Si el poder adquisitivo (PIB per cápita) es un freno relevante, dilo.
 
 FORMATO (MUY IMPORTANTE): escribe como un analista humano escribiría un informe para un ejecutivo — \
 PROSA CORRIDA, fluida y natural. Está PROHIBIDO usar viñetas, listas, tablas, subtítulos por dimensión o \
 enumerar "dimensión: score" ítem por ítem. Las dimensiones y los números van TEJIDOS en las frases, no en puntos.
+SÉ CONCISO: cada frase aporta algo nuevo; no repitas un número ya dicho ni vuelvas a explicar la misma idea.
 
 {{structure}}
 
@@ -303,73 +316,74 @@ Tono humano de analista, prosa corrida de principio a fin — nada de viñetas, 
 # markets" language before). Injected into the `{structure}` placeholder.
 _STRUCTURE_PT_MULTI = """PRODUZA, nesta ordem:
 1) Uma frase/linha curta de recomendação — a ordem de prioridade dos países pelo MOS (com o MOS de cada um).
-2) UM PARÁGRAFO CORRIDO POR PAÍS (um único parágrafo fluido cada): conte a "história" daquele mercado \
-costurando naturalmente as dimensões e sinais que importam — os pontos fortes E os fracos, com os números \
-reais —, e explique, em linguagem natural, por que o MOS ficou onde ficou. Cubra o essencial das dimensões \
-sem listá-las mecanicamente; deixe claro, dentro do texto, por que uma dimensão forte (ex.: volume) NÃO \
-leva o MOS ao máximo — porque as demais dimensões, somadas ao seu peso, o seguram (o Volume de Demanda é \
-a de maior peso, mas responde por menos da metade do total). Explique a lógica do peso em palavras, sem \
-precisar citar os pesos numéricos.
-3) UM PARÁGRAFO FINAL comparando todos os países entre si — quem lidera e por quê, os trade-offs (volume \
-enorme vs. poder de compra, nicho de alta qualidade vs. escala) e a recomendação de priorização."""
+2) UM PARÁGRAFO CORRIDO POR PAÍS (um único parágrafo fluido cada, de até cerca de 140 palavras): conte a \
+"história" daquele mercado pelo que mais sustenta o MOS e pelo que mais o segura, com os números reais, e \
+explique, em linguagem natural, por que o MOS ficou onde ficou. O Volume de Demanda é a dimensão de maior \
+peso, mas responde por menos da metade do total: se ele é FORTE, deixe claro que as demais dimensões o \
+seguram e por isso o MOS não chega ao máximo; se ele é FRACO, deixe claro que, sendo o de maior peso, ele \
+puxa o MOS para baixo e as demais não compensam. Explique a lógica do peso em palavras, sem precisar citar \
+os pesos numéricos.
+3) UM PARÁGRAFO FINAL CURTO (até cerca de 90 palavras) comparando os países — quem lidera e por quê, o \
+principal trade-off (volume enorme vs. poder de compra, nicho de alta qualidade vs. escala) e a recomendação \
+de priorização, sem repetir os números já dados."""
 
 _STRUCTURE_PT_SINGLE = """PRODUZA (há APENAS UM país nesta análise — portanto NÃO use linguagem de "ordem \
 de prioridade", "ranking" ou "comparação entre países"; não há com o que comparar):
 1) Uma frase de abertura com o veredito deste mercado — o país, seu MOS e a banda (ex.: boa/moderada/fraca \
 oportunidade).
-2) UM ou DOIS PARÁGRAFOS CORRIDOS analisando ESTE mercado: conte a "história" dele costurando naturalmente \
-as dimensões e sinais que importam — os pontos fortes E os fracos, com os números reais —, e explique, em \
-linguagem natural, por que o MOS ficou onde ficou (inclusive por que uma dimensão forte, ex.: volume, não \
-leva o MOS ao máximo, porque as demais dimensões, somadas ao seu peso, o seguram; o Volume de Demanda é a \
-de maior peso mas responde por menos da metade do total).
+2) UM ou DOIS PARÁGRAFOS CORRIDOS (até cerca de 200 palavras no total) analisando ESTE mercado: conte a \
+"história" dele pelo que mais sustenta o MOS e pelo que mais o segura, com os números reais, e explique, em \
+linguagem natural, por que o MOS ficou onde ficou. O Volume de Demanda é a dimensão de maior peso, mas \
+responde por menos da metade do total: se ele é FORTE, as demais o seguram e o MOS não chega ao máximo; se \
+é FRACO, ele puxa o MOS para baixo e as demais não compensam.
 3) UM PARÁGRAFO DE FECHO com a recomendação prática para ESTE país (entrar agora / testar / esperar / \
 despriorizar) e o principal motivo — SEM comparar com outros países."""
 
 _STRUCTURE_EN_MULTI = """PRODUCE, in this order:
 1) One short recommendation line — the countries' priority order by MOS (quoting each MOS).
-2) ONE FLOWING PARAGRAPH PER COUNTRY (a single cohesive paragraph each): tell that market's "story", \
-weaving in naturally the dimensions and signals that matter — the strengths AND the weaknesses, with the \
-real numbers — and explain, in plain prose, why the MOS landed where it did. Cover the essentials of the \
-dimensions without listing them mechanically; make clear, within the text, why a strong dimension (e.g. \
-volume) does NOT push the MOS to the max — because the other dimensions, plus their weight, hold it back \
-(Demand Volume carries the most weight but less than half the total). Explain the weighting logic in words, \
-no need to quote numeric weights.
-3) ONE FINAL PARAGRAPH comparing all the countries — who leads and why, the trade-offs (huge volume vs. \
-purchasing power, high-quality niche vs. scale), and the prioritization recommendation."""
+2) ONE FLOWING PARAGRAPH PER COUNTRY (a single cohesive paragraph each, up to about 140 words): tell that \
+market's "story" through what holds its MOS up most and what holds it back most, with the real numbers, \
+and explain, in plain prose, why the MOS landed where it did. Demand Volume is the heaviest dimension but \
+less than half the total: if it is STRONG, make clear the other dimensions hold the MOS back from the max; \
+if it is WEAK, make clear that, being the heaviest, it drags the MOS down and the others cannot make up for \
+it. Explain the weighting logic in words, no need to quote numeric weights.
+3) ONE SHORT FINAL PARAGRAPH (up to about 90 words) comparing the countries — who leads and why, the main \
+trade-off (huge volume vs. purchasing power, high-quality niche vs. scale), and the prioritization \
+recommendation, without repeating figures already given."""
 
 _STRUCTURE_EN_SINGLE = """PRODUCE (there is ONLY ONE country in this analysis — so do NOT use any \
 "priority order", "ranking" or "comparison between countries" language; there is nothing to compare):
 1) An opening sentence with this market's verdict — the country, its MOS and the band (e.g. good/moderate/\
 weak opportunity).
-2) ONE or TWO FLOWING PARAGRAPHS analysing THIS market: tell its "story", weaving in naturally the \
-dimensions and signals that matter — the strengths AND the weaknesses, with the real numbers — and explain, \
-in plain prose, why the MOS landed where it did (including why a strong dimension, e.g. volume, does not \
-push the MOS to the max, because the other dimensions plus their weight hold it back; Demand Volume carries \
-the most weight but less than half the total).
+2) ONE or TWO FLOWING PARAGRAPHS (up to about 200 words in all) analysing THIS market: tell its "story" \
+through what holds its MOS up most and what holds it back most, with the real numbers, and explain, \
+in plain prose, why the MOS landed where it did. Demand Volume is the heaviest dimension but less than half \
+the total: if it is STRONG, the others hold the MOS back from the max; if it is WEAK, it drags the MOS down \
+and the others cannot make up for it.
 3) ONE CLOSING PARAGRAPH with the practical recommendation for THIS country (enter now / test / wait / \
 deprioritize) and the main reason — WITHOUT comparing to other countries."""
 
 _STRUCTURE_ES_MULTI = """PRODUCE, en este orden:
 1) Una frase/línea corta de recomendación — el orden de prioridad de los países por MOS (con el MOS de cada uno).
-2) UN PÁRRAFO CORRIDO POR PAÍS (un único párrafo fluido cada uno): cuenta la "historia" de ese mercado \
-hilando con naturalidad las dimensiones y señales que importan — los puntos fuertes Y los débiles, con los \
-números reales —, y explica, en lenguaje natural, por qué el MOS quedó donde quedó. Cubre lo esencial de las \
-dimensiones sin listarlas mecánicamente; deja claro, dentro del texto, por qué una dimensión fuerte (p. ej., \
-volumen) NO lleva el MOS al máximo — porque las demás dimensiones, sumadas a su peso, lo frenan (el Volumen de \
-Demanda es la de mayor peso, pero responde por menos de la mitad del total). Explica la lógica del peso con \
-palabras, sin necesidad de citar los pesos numéricos.
-3) UN PÁRRAFO FINAL comparando todos los países entre sí — quién lidera y por qué, los trade-offs (volumen \
-enorme vs. poder adquisitivo, nicho de alta calidad vs. escala) y la recomendación de priorización."""
+2) UN PÁRRAFO CORRIDO POR PAÍS (un único párrafo fluido cada uno, de hasta unas 140 palabras): cuenta la \
+"historia" de ese mercado por lo que más sostiene su MOS y lo que más lo frena, con los números reales, y \
+explica, en lenguaje natural, por qué el MOS quedó donde quedó. El Volumen de Demanda es la dimensión de mayor \
+peso, pero responde por menos de la mitad del total: si es FUERTE, deja claro que las demás lo frenan y por eso \
+el MOS no llega al máximo; si es DÉBIL, deja claro que, siendo el de mayor peso, arrastra el MOS hacia abajo y \
+las demás no lo compensan. Explica la lógica del peso con palabras, sin necesidad de citar los pesos numéricos.
+3) UN PÁRRAFO FINAL CORTO (de hasta unas 90 palabras) comparando los países — quién lidera y por qué, el \
+principal trade-off (volumen enorme vs. poder adquisitivo, nicho de alta calidad vs. escala) y la recomendación \
+de priorización, sin repetir los números ya dados."""
 
 _STRUCTURE_ES_SINGLE = """PRODUCE (hay UN SOLO país en este análisis — por lo tanto NO uses lenguaje de "orden \
 de prioridad", "ranking" o "comparación entre países"; no hay con qué comparar):
 1) Una frase de apertura con el veredicto de este mercado — el país, su MOS y la banda (p. ej., buena/moderada/\
 débil oportunidad).
-2) UNO o DOS PÁRRAFOS CORRIDOS analizando ESTE mercado: cuenta su "historia" hilando con naturalidad las \
-dimensiones y señales que importan — los puntos fuertes Y los débiles, con los números reales —, y explica, en \
-lenguaje natural, por qué el MOS quedó donde quedó (incluso por qué una dimensión fuerte, p. ej., volumen, no \
-lleva el MOS al máximo, porque las demás dimensiones, sumadas a su peso, lo frenan; el Volumen de Demanda es la \
-de mayor peso pero responde por menos de la mitad del total).
+2) UNO o DOS PÁRRAFOS CORRIDOS (de hasta unas 200 palabras en total) analizando ESTE mercado: cuenta su \
+"historia" por lo que más sostiene su MOS y lo que más lo frena, con los números reales, y explica, en \
+lenguaje natural, por qué el MOS quedó donde quedó. El Volumen de Demanda es la dimensión de mayor peso, pero \
+responde por menos de la mitad del total: si es FUERTE, las demás lo frenan y el MOS no llega al máximo; si es \
+DÉBIL, arrastra el MOS hacia abajo y las demás no lo compensan.
 3) UN PÁRRAFO DE CIERRE con la recomendación práctica para ESTE país (entrar ahora / probar / esperar / \
 despriorizar) y el motivo principal — SIN comparar con otros países."""
 
@@ -447,23 +461,23 @@ _DEMAND_CONFIDENCE_RULE_ES = (
 _DEMAND_TERMS_RULE_PT = (
     "PALAVRAS BUSCADAS (obrigatório): para CADA país, o `context` do sinal de Demand Volume traz o detalhamento "
     "\"Per-term monthly search volume — termo volume; termo volume; ...\" e o total. Na prosa daquele país, "
-    "LISTE as palavras que foram buscadas com o volume individual de cada uma e o TOTAL de buscas mensais — "
-    "fielmente aos números do pacote, sem inventar. Se houver muitos termos, apresente os de maior volume um a um "
-    "e agrupe a cauda de menor volume (ex.: \"e outros N termos somando X\"), mas SEMPRE informe o total."
+    "cite as DUAS ou TRÊS palavras de maior volume, com o volume de cada uma, e o TOTAL de buscas mensais — "
+    "fielmente aos números do pacote, sem inventar. As demais ficam na tela; não as liste — exceto um termo "
+    "que revele algo útil sobre o produto (um formato, uma preocupação, uma preferência), que vale citar."
 )
 _DEMAND_TERMS_RULE_EN = (
     "SEARCHED TERMS (required): for EACH country the Demand Volume signal's `context` carries the breakdown "
     "\"Per-term monthly search volume — term volume; term volume; ...\" and the total. In that country's prose, "
-    "LIST the words that were searched with each one's individual volume and the TOTAL monthly searches — "
-    "faithful to the packet's numbers, never invented. If there are many terms, present the highest-volume ones "
-    "individually and group the low-volume tail (e.g. \"and N other terms totalling X\"), but ALWAYS state the total."
+    "name the TWO or THREE highest-volume words with each one's volume, and the TOTAL monthly searches — "
+    "faithful to the packet's numbers, never invented. The rest are on the screen; do not list them — except a "
+    "term that reveals something useful about the product (a format, a concern, a preference), worth citing."
 )
 _DEMAND_TERMS_RULE_ES = (
     "PALABRAS BUSCADAS (obligatorio): para CADA país, el `context` de la señal de Demand Volume trae el detalle "
     "\"Per-term monthly search volume — término volumen; término volumen; ...\" y el total. En la prosa de ese país, "
-    "LISTA las palabras que se buscaron con el volumen individual de cada una y el TOTAL de búsquedas mensuales — "
-    "fiel a los números del paquete, sin inventar. Si hay muchos términos, presenta los de mayor volumen uno a uno "
-    "y agrupa la cola de menor volumen (p. ej.: \"y otros N términos que suman X\"), pero SIEMPRE informa el total."
+    "cita las DOS o TRES palabras de mayor volumen, con el volumen de cada una, y el TOTAL de búsquedas mensuales — "
+    "fiel a los números del paquete, sin inventar. Las demás están en la pantalla; no las listes — salvo un "
+    "término que revele algo útil sobre el producto (un formato, una preocupación, una preferencia), que vale citar."
 )
 
 
