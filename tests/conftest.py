@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 import app.db.models  # noqa: F401 — registers every model on Base.metadata before _PRESERVE_TABLES logic reads it
 from app import prompts
+from app.services.indicators import pytrends as pytrends_indicators
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine as app_engine
@@ -111,6 +112,16 @@ async def _reset_database_after_test() -> AsyncGenerator[None, None]:
         await app_engine.dispose()
     except RuntimeError:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _forget_demand_rows() -> Generator[None, None, None]:
+    """The demand rows are cached per (location, terms) for the length of an
+    analysis. Tests reuse the same terms and location with different stored
+    data, so each one starts with nothing remembered."""
+    pytrends_indicators.forget_demand_rows()
+    yield
+    pytrends_indicators.forget_demand_rows()
 
 
 @pytest.fixture(autouse=True)

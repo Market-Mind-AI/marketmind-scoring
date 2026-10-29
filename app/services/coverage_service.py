@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,12 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import MarketMindCoreError
 from app.core.logging import logger
+from app.db.models.country import Country
 from app.db.models.job_task import JobTask
 from app.domain.enums import DataSource, IngestionRunStatus, JobTaskStatus
 from app.repositories.country_repository import CountryRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.coverage import CoverageGap, GapStatus, JobTaskResult
 from app.services.collection_client import CollectionClient, CollectionRequest, resolve_source_country_code
+from app.services.indicators.pytrends import forget_demand_rows
+
+# Collections of one request in flight at once. Four is below what the
+# collectors and DataForSEO take without complaint, and above the number of
+# demand gaps a country has (volume and related keywords).
+_COLETAS_EM_PARALELO = 4
 
 
 class CoverageService:
@@ -55,8 +63,8 @@ class CoverageService:
         for (source, janela), do_source in por_fonte.items():
             if source == DataSource.PYTRENDS:
                 # Não é "demanda nunca vence" — vence, e desde 23/09/2026 tem
-                # janela própria (`demand_stale_after_days`, 30 dias, a cadência
-                # do volume mensal do Google Ads).
+                # janela própria (`demand_stale_after_days`, um semestre
+                # — ver config).
                 #
                 # É que a pergunta JÁ FOI FEITA quando o gap foi montado. Um gap
                 # de pytrends só nasce depois de `missing_volume_terms` /
@@ -137,18 +145,47 @@ class CoverageService:
         # either way, and asking inside the loop would make it one per gap.
         stale = await self._stale(gaps)
 
-        results = []
+        # Three passes, because the session is one and the sources are many.
+        # Claiming a task and recording its outcome touch the session, one gap
+        # at a time; the collection itself is HTTP to another service and waits
+        # on DataForSEO for ten to twenty seconds a call. Done one after the
+        # other, the six reference markets of the air fryer took 100 seconds
+        # to collect on 29/10/2026; the sources do not mind being asked at
+        # once, and the orchestrator's per-country calls already were.
+        results: list[JobTaskResult | None] = []
+        claimed: list[tuple[int, JobTask, CoverageGap, Country]] = []
         for gap in gaps:
-            result = await self._process_gap(job_id, gap, stale=stale[id(gap)])
+            result, claim = await self._process_gap(job_id, gap, stale=stale[id(gap)])
             await self._session.commit()
             results.append(result)
+            if claim is not None:
+                claimed.append((len(results) - 1, claim[0], gap, claim[1]))
 
-        has_failed_task = any(r.status == JobTaskStatus.FAILED for r in results)
+        limite = asyncio.Semaphore(_COLETAS_EM_PARALELO)
+
+        async def _com_limite(
+            gap: CoverageGap, country: Country
+        ) -> tuple[uuid.UUID | None, IngestionRunStatus | None, str | None]:
+            async with limite:
+                return await self._collect(gap, country)
+
+        coletas = await asyncio.gather(*(_com_limite(gap, country) for _i, _task, gap, country in claimed))
+        for (indice, task, gap, _country), (run_id, status, erro) in zip(claimed, coletas, strict=True):
+            results[indice] = await self._record(task, gap, run_id, status, erro)
+            await self._session.commit()
+
+        finais = [r for r in results if r is not None]
+        has_failed_task = any(r.status == JobTaskStatus.FAILED for r in finais)
         await self._job_repo.finalize_job(job, has_failed_task=has_failed_task)
         await self._session.commit()
-        return job_id, results
+        return job_id, finais
 
-    async def _process_gap(self, job_id: uuid.UUID, gap: CoverageGap, *, stale: bool) -> JobTaskResult:
+    async def _process_gap(
+        self, job_id: uuid.UUID, gap: CoverageGap, *, stale: bool
+    ) -> tuple[JobTaskResult | None, tuple[JobTask, Country] | None]:
+        """Settle the gap without collecting: skipped, attached to a collection
+        in flight, or claimed. A claimed gap comes back as its task and its
+        country, for `_collect` and `_record` to finish."""
         if not gap.force and not stale:
             task = await self._job_repo.mark_skipped(
                 job_id=job_id,
@@ -158,7 +195,7 @@ class CoverageService:
                 indicator_code=gap.indicator_code,
                 period_key=gap.period_key,
             )
-            return job_task_to_result(task)
+            return job_task_to_result(task), None
 
         active = await self._job_repo.find_active_task(
             source=gap.source.value,
@@ -172,7 +209,7 @@ class CoverageService:
                 f"Gap already in flight, attaching to task {active.id}: "
                 f"{gap.source.value}/{gap.country}/{gap.indicator_code}"
             )
-            return job_task_to_result(active)
+            return job_task_to_result(active), None
 
         claimed_task = await self._job_repo.create_task(
             job_id=job_id,
@@ -193,7 +230,7 @@ class CoverageService:
                 period_key=gap.period_key,
             )
             if attached is not None:
-                return job_task_to_result(attached)
+                return job_task_to_result(attached), None
             # It must have finished in that same window — treat as covered.
             skipped = await self._job_repo.mark_skipped(
                 job_id=job_id,
@@ -203,18 +240,21 @@ class CoverageService:
                 indicator_code=gap.indicator_code,
                 period_key=gap.period_key,
             )
-            return job_task_to_result(skipped)
+            return job_task_to_result(skipped), None
 
-        return await self._dispatch_and_poll(claimed_task, gap)
-
-    async def _dispatch_and_poll(self, task: JobTask, gap: CoverageGap) -> JobTaskResult:
         country = await self._country_repo.get_by_iso3(gap.country)
         if country is None:
             await self._job_repo.mark_failed(
-                task, error_message=f"Unknown country {gap.country} (not in canonical countries table)"
+                claimed_task, error_message=f"Unknown country {gap.country} (not in canonical countries table)"
             )
-            return job_task_to_result(task)
+            return job_task_to_result(claimed_task), None
+        return None, (claimed_task, country)
 
+    async def _collect(
+        self, gap: CoverageGap, country: Country
+    ) -> tuple[uuid.UUID | None, IngestionRunStatus | None, str | None]:
+        """Dispatch the gap to its source and wait for the run: (run id, final
+        status, error). No session here — this is what runs concurrently."""
         try:
             ingestion_run_id = await self._collection_client.dispatch(
                 CollectionRequest(
@@ -224,12 +264,30 @@ class CoverageService:
                     collection_params=gap.collection_params,
                 )
             )
-            await self._job_repo.mark_running(task, ingestion_run_id=ingestion_run_id)
+        except MarketMindCoreError as exc:
+            return None, None, str(exc)
+        try:
             status = await self._collection_client.poll_until_done(gap.source, ingestion_run_id)
         except MarketMindCoreError as exc:
-            await self._job_repo.mark_failed(task, error_message=str(exc))
-            return job_task_to_result(task)
+            return ingestion_run_id, None, str(exc)
+        return ingestion_run_id, status, None
 
+    async def _record(
+        self,
+        task: JobTask,
+        gap: CoverageGap,
+        ingestion_run_id: uuid.UUID | None,
+        status: IngestionRunStatus | None,
+        erro: str | None,
+    ) -> JobTaskResult:
+        # The run id is written once the run is over, not when it starts: the
+        # task stays PENDING while the source works, which `find_active_task`
+        # treats as in flight all the same.
+        if ingestion_run_id is not None:
+            await self._job_repo.mark_running(task, ingestion_run_id=ingestion_run_id)
+        if erro is not None:
+            await self._job_repo.mark_failed(task, error_message=erro)
+            return job_task_to_result(task)
         if status != IngestionRunStatus.SUCCESS:
             await self._job_repo.mark_failed(
                 task, error_message=f"{gap.source.value} ingestion run ended with status={status.value}"
@@ -240,6 +298,9 @@ class CoverageService:
         # stamped its own last_checked_at, and that is now the only record —
         # which is the point: one fact, one place.
         await self._job_repo.mark_done(task)
+        if gap.source == DataSource.PYTRENDS:
+            # What the demand indicators read just changed under them.
+            forget_demand_rows()
         return job_task_to_result(task)
 
 

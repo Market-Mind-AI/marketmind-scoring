@@ -14,6 +14,7 @@ single row with a 90-day TTL (see COUNTRY_LEVEL_PERIOD_KEY and
 settings.country_indicator_ttl_days).
 """
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass
@@ -327,25 +328,58 @@ class AnalysisService:
 
         mercados = await self.vocabulario(entity, marca)
         missing = [c for c in countries if not _has_terms(mercados.get(c))]
+        candidatos_atuais = await self.candidatos_de_referencia(entity, marca)
+        pedir_candidatos = com_candidatos and not candidatos_atuais
+        supported = [c.iso3 for c in await self._country_repo.list_all()] if pedir_candidatos else []
+
+        # The two model calls at once. Neither needs the other's answer — both
+        # are written from the product alone — and in series they were the
+        # first 75 to 100 seconds of every analysis of a new product (35 s + 40
+        # s for the air fryer, 47 s + 54 s for the circular saw, 29/10/2026).
+        # Only the HTTP runs concurrently; the session is touched afterwards,
+        # one write at a time.
+        async def _vocabulario() -> Any:
+            if not missing:
+                return None
+            # Sem dica de idioma. Pedir que o modelo DIGA o idioma e ao
+            # mesmo tempo dizer a ele qual é fecha um círculo: a resposta
+            # passa a ser o que mandamos, e a tabela que mandávamos é
+            # justamente a que deixou de existir.
+            #
+            # A MARCA vai junto quando existe, e é ela que muda o que o
+            # modelo escreve: "juan valdez café" em vez de "café". Sem isso
+            # a análise de marca mediria a categoria.
+            return await self._enrichment_client.localized_markets(
+                product_name=product_name,
+                brand=nome_marca,
+                category=entity.category,
+                countries=[(iso3, None) for iso3 in missing],
+                defining_attributes=entity.defining_attributes,
+                antagonist_products=entity.antagonist_products,
+            )
+
+        async def _candidatos() -> Any:
+            if not pedir_candidatos:
+                return None
+            # A marca vai junto, como no vocabulário: onde o café é mais
+            # procurado não é onde a Juan Valdez é mais procurada, e os
+            # termos de cada candidato têm de nomear a marca para medirem a
+            # demanda DELA.
+            return await self._reference_market_client.candidates(
+                product_name=product_name,
+                brand=nome_marca,
+                category=entity.category,
+                supported_countries=supported,
+            )
+
+        markets, cands = await asyncio.gather(_vocabulario(), _candidatos(), return_exceptions=True)
+
         if missing:
-            try:
-                # Sem dica de idioma. Pedir que o modelo DIGA o idioma e ao
-                # mesmo tempo dizer a ele qual é fecha um círculo: a resposta
-                # passa a ser o que mandamos, e a tabela que mandávamos é
-                # justamente a que deixou de existir.
-                #
-                # A MARCA vai junto quando existe, e é ela que muda o que o
-                # modelo escreve: "juan valdez café" em vez de "café". Sem isso
-                # a análise de marca mediria a categoria.
-                fill = [(iso3, None) for iso3 in missing]
-                markets = await self._enrichment_client.localized_markets(
-                    product_name=product_name,
-                    brand=nome_marca,
-                    category=entity.category,
-                    countries=fill,
-                    defining_attributes=entity.defining_attributes,
-                    antagonist_products=entity.antagonist_products,
-                )
+            if isinstance(markets, EnrichmentError):
+                logger.warning(f"Background localized_markets enrichment failed, using deterministic fallback: {markets}")
+            elif isinstance(markets, BaseException):
+                raise markets
+            elif markets is not None:
                 incoming = {
                     m.country: _market_to_dict(m)
                     for m in markets
@@ -354,8 +388,6 @@ class AnalysisService:
                 if incoming:
                     await self._gravar_vocabulario(entity, marca, incoming)
                     mercados.update(incoming)
-            except EnrichmentError as exc:
-                logger.warning(f"Background localized_markets enrichment failed, using deterministic fallback: {exc}")
             # Deterministic fallback so coverage/compute never strand a country.
             still_missing = [c for c in countries if not _has_terms(mercados.get(c))]
             if still_missing:
@@ -363,31 +395,22 @@ class AnalysisService:
                 await self._gravar_vocabulario(entity, marca, reserva)
                 mercados.update(reserva)
 
-        candidatos_atuais = await self.candidatos_de_referencia(entity, marca)
-        if com_candidatos and not candidatos_atuais:
-            try:
-                supported = [c.iso3 for c in await self._country_repo.list_all()]
+        if pedir_candidatos:
+            if isinstance(cands, ReferenceMarketError):
+                logger.warning(f"Background reference-market candidates unavailable: {cands}")
+            elif isinstance(cands, BaseException):
+                raise cands
+            elif cands is not None:
                 supported_set = set(supported)
                 candidates: list[dict[str, Any]] = []
                 seen: set[str] = set()
-                # A marca vai junto, como no vocabulário: onde o café é mais
-                # procurado não é onde a Juan Valdez é mais procurada, e os
-                # termos de cada candidato têm de nomear a marca para medirem a
-                # demanda DELA.
-                for cand in await self._reference_market_client.candidates(
-                    product_name=product_name,
-                    brand=nome_marca,
-                    category=entity.category,
-                    supported_countries=supported,
-                ):
+                for cand in cands:
                     entry = _market_to_dict(cand)
                     if cand.country in supported_set and cand.country not in seen and _has_terms(entry):
                         candidates.append({"country": cand.country, **entry})
                         seen.add(cand.country)
                 if candidates:
                     await self._gravar_candidatos(entity, marca, candidates)
-            except ReferenceMarketError as exc:
-                logger.warning(f"Background reference-market candidates unavailable: {exc}")
 
     async def _insumos(
         self, entity: Any, iso3: str, marca: Any | None, *, candidate_market: dict[str, Any] | None = None

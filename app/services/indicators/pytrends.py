@@ -337,6 +337,17 @@ def _same_query(
     bassi", "picanha wagyu" and "picanha angus" — four different products, all
     reported at 3,600 — were read as one search.
     """
+    # One matcher per keyword, not one per pair. SequenceMatcher indexes its
+    # SECOND sequence on construction (the b2j table), and that index was being
+    # rebuilt for every member compared: 4.7 million constructions, 92 of the
+    # 160 seconds this function took to measure the air fryer's ruler on
+    # 29/10/2026. The keyword is the second sequence and stays; each member is
+    # swapped in as the first, which costs nothing to set. The two bounds are
+    # symmetric (lengths, and a multiset of characters). `ratio()` is not quite
+    # — its block matching breaks ties by position — so the few pairs that pass
+    # both bounds are measured in the original order, and the answer is the
+    # same as before to the row.
+    bounds = SequenceMatcher(None, "", norm)
     for seen_norm, seen_tokens in members:
         if tokens and (tokens == seen_tokens or tokens <= seen_tokens or seen_tokens <= tokens):
             return True
@@ -348,11 +359,11 @@ def _same_query(
         # bounds first is the documented way to use SequenceMatcher and it costs
         # nothing in accuracy — an upper bound below the threshold cannot become
         # a real ratio above it.
-        matcher = SequenceMatcher(None, norm, seen_norm)
+        bounds.set_seq1(seen_norm)
         if (
-            matcher.real_quick_ratio() >= _NEAR_VARIANT_RATIO
-            and matcher.quick_ratio() >= _NEAR_VARIANT_RATIO
-            and matcher.ratio() >= _NEAR_VARIANT_RATIO
+            bounds.real_quick_ratio() >= _NEAR_VARIANT_RATIO
+            and bounds.quick_ratio() >= _NEAR_VARIANT_RATIO
+            and SequenceMatcher(None, norm, seen_norm).ratio() >= _NEAR_VARIANT_RATIO
         ):
             return True
     return False
@@ -504,24 +515,61 @@ async def _demand_rows(
     Ou seja, série vazia sempre significa "estes termos não têm volume aqui",
     nunca "o dado veio truncado".
     """
+    # The same question is asked many times per analysis with the same answer:
+    # three indicators per country read these rows, and the demand ruler reads
+    # every reference market's rows each time it is measured — before the
+    # candidates are collected, after, when the champion is crowned. For the
+    # air fryer on 29/10/2026 that was fifty readings of eight markets, each
+    # one fetching up to 8 MB from the collector and grouping thousands of
+    # keywords: 160 of the 188 seconds one measurement of the ruler took. The
+    # answer only changes when a demand collection lands, and the service that
+    # dispatches those forgets this cache when one does (`forget_demand_rows`);
+    # the TTL is for the pod that did not dispatch it, should there be one.
+    chave = (
+        location,
+        tuple(search_terms),
+        tuple(seed_terms or ()),
+        tuple(outras_marcas or ()),
+        tuple(excluded_terms or ()),
+        expandir,
+    )
+    guardado = _demand_rows_cache.get(chave)
+    if guardado is not None and guardado[0] > datetime.now(UTC):
+        return guardado[1], guardado[2]
+
     approved = await _fetch_approved_raw(search_terms, location)
     # The words the curation asked for. Every related keyword carries one by
     # construction, so they are exactly the words that prove nothing about two
     # keywords being the same search — see _dedup_volume_rows.
     product_tokens = frozenset().union(*(query_words(t) for t in search_terms)) if search_terms else frozenset()
     if not search_terms or not expandir:
-        return await asyncio.to_thread(_dedup_volume_rows, approved, product_tokens), 0
-    seed_label = ", ".join(seed_terms or search_terms[:20])
-    related = await _fetch_related_rows(seed_label, location)
-    expansao = _select_expansion(related, search_terms, outras_marcas, excluded_terms)
-    # Off the event loop. Grouping two thousand keywords is the only CPU-bound
-    # stretch in this service, it runs three times per country, and while it
-    # ran nothing else could be served — including the liveness probe, which
-    # times out at five seconds and had Kubernetes restarting the pod
-    # mid-analysis. A thread does not make it parallel (the GIL is still there),
-    # it makes it INTERRUPTIBLE, which is the property that was missing.
-    rows = await asyncio.to_thread(_dedup_volume_rows, approved + expansao, product_tokens)
-    return rows, len(expansao)
+        rows, expansion_count = await asyncio.to_thread(_dedup_volume_rows, approved, product_tokens), 0
+    else:
+        seed_label = ", ".join(seed_terms or search_terms[:20])
+        related = await _fetch_related_rows(seed_label, location)
+        expansao = _select_expansion(related, search_terms, outras_marcas, excluded_terms)
+        # Off the event loop. Grouping two thousand keywords is the only CPU-bound
+        # stretch in this service, it runs three times per country, and while it
+        # ran nothing else could be served — including the liveness probe, which
+        # times out at five seconds and had Kubernetes restarting the pod
+        # mid-analysis. A thread does not make it parallel (the GIL is still there),
+        # it makes it INTERRUPTIBLE, which is the property that was missing.
+        rows = await asyncio.to_thread(_dedup_volume_rows, approved + expansao, product_tokens)
+        expansion_count = len(expansao)
+    _demand_rows_cache[chave] = (datetime.now(UTC) + _DEMAND_ROWS_TTL, rows, expansion_count)
+    return rows, expansion_count
+
+
+_DEMAND_ROWS_TTL = timedelta(minutes=15)
+_demand_rows_cache: dict[tuple[Any, ...], tuple[datetime, list[tuple[str, float, list[tuple[int, int, float]]]], int]] = {}
+
+
+def forget_demand_rows() -> None:
+    """What is stored changed — a demand collection landed — so every reading
+    of it is stale. Cleared whole: a collection is rare and a reading cheap
+    enough to redo once, and keying it by location would need the ISO2 the
+    collection used, which the gap that dispatched it does not carry."""
+    _demand_rows_cache.clear()
 
 
 async def compute_trend_score(
