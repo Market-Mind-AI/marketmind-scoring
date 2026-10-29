@@ -161,10 +161,10 @@ class ProductIdentification(BaseModel):
     )
     product_name: str = Field(
         description=(
-            "Commonly-searched canonical product name in plain ASCII, built as model + type + generic name "
+            "Commonly-searched canonical product name, built as model + type + generic name "
             "(only the parts that exist). No brand, certification, breed/percentage, size, or parenthetical "
             "translations. "
-            "Strip accents/diacritics (e.g. 'Jamon Iberico', not 'Jamón Ibérico'). Empty when product_found=false."
+            "Keep its accents and correct spelling (e.g. 'Jamón Ibérico'). Empty when product_found=false."
         )
     )
     category: str | None = Field(
@@ -230,8 +230,8 @@ _INSTRUCTIONS = (
     "models and types, and other products sharing its name). A named model is described as it really is: "
     "when the input gives it a type or attribute that model does not have, keep the model and correct the "
     "attribute, never invent a version of the model that does not exist. "
-    "`product_name`: model + type + generic name (only the parts that exist), commonly-searched, plain "
-    "ASCII, no brand/size/certification ('Jamon Iberico', not 'Jamón Ibérico'). "
+    "`product_name`: model + type + generic name (only the parts that exist), commonly-searched, with "
+    "its accents and correct spelling, no brand/size/certification ('Jamón Ibérico'). "
     "`category`: one level broader, always in English (e.g. 'Charcuterie', 'Kitchen Appliances'); an "
     "ACCESSORY, part, consumable, service or content FOR another product gets its OWN category "
     "('Kitchen Accessories', 'Spare Parts', 'Cookbooks', 'Services'), never the category of the product "
