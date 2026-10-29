@@ -711,7 +711,9 @@ class ExplanationClient:
                         {
                             "code": code.value,
                             "label": catalog.label(code.value),
-                            "value": float(iv.raw_value),
+                            # Uma casa, como as notas: o frontend imprime o
+                            # número como chega (22,5148381063601 % do PIB).
+                            "value": round(float(iv.raw_value), 1),
                             "context": iv.notes,
                         }
                     )
