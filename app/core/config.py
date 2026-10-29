@@ -169,11 +169,13 @@ class Settings(BaseSettings):
     # justamente o único indicador que muda de mês para mês, e era o único que
     # nunca se renovava.
     #
-    # 30 dias porque é a cadência do próprio dado: o volume do Google Ads é
-    # mensal, e o gap já nasce com `period_key` do mês corrente. Recoletar antes
-    # disso paga por número que não mudou -- e aqui se paga por chamada, ao
-    # contrário das fontes macro.
-    demand_stale_after_days: int = 30
+    # Um semestre, decisão do usuário. Era 30 dias, a cadência do volume
+    # mensal do Google Ads, e em 29/10/2026 todo o vocabulário da air fryer
+    # coletado entre 21 e 28/09 venceu no mesmo dia: a análise pagou de novo
+    # 12 coletas de dado que já estava no banco e levou 11 minutos. A série
+    # de 12 meses de um dado com até seis meses ainda diz o tamanho e a
+    # tendência do mercado; pagar por chamada para trocá-la todo mês não.
+    demand_stale_after_days: int = 182
 
     # Por quanto tempo o vocabulário de busca de um produto num país fica
     # fixo. Cada identificação devolve uma lista de termos um pouco diferente,
@@ -186,7 +188,7 @@ class Settings(BaseSettings):
     # Um semestre porque o vocabulário muda devagar — o modo como se procura
     # um produto não muda de um mês para o outro — e porque termos fixos
     # também deixam a nota estável: mesmo produto, mesmos termos, mesma nota.
-    # Os VOLUMES continuam com a janela de 30 dias acima; o que fica fixo é a
+    # Os VOLUMES têm a janela própria acima; o que fica fixo aqui é a
     # lista de palavras cujo volume se mede.
     search_terms_ttl_days: int = 182
 

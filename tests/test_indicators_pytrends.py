@@ -816,21 +816,21 @@ def _relacionada(volume: int, *, dias: int) -> dict:
 async def test_related_keywords_collected_long_ago_count_as_absent() -> None:
     """Relacionadas são demanda, e demanda muda de mês para mês. Sem idade, um
     conjunto de sementes estável mantinha para sempre as relacionadas da
-    primeira coleta — e o intent score sai delas, então a análise de setembro
-    usaria a intenção de janeiro sem nada indicar."""
+    primeira coleta — e o intent score sai delas. A janela é de um semestre."""
     with patch(
         "app.services.indicators.pytrends.pytrends_stored_related",
-        AsyncMock(return_value=[_relacionada(900, dias=45)]),
+        AsyncMock(return_value=[_relacionada(900, dias=200)]),
     ):
         assert await pytrends_indicators.related_rows_exist(["air fryer"], "ES") is False
 
 
 async def test_recent_related_keywords_are_not_recollected() -> None:
     """O outro lado, que é o que custa: dentro do prazo não se pergunta à
-    DataForSEO, que cobra por chamada."""
+    DataForSEO, que cobra por chamada. 45 dias ainda é dentro: em 29/10/2026
+    a air fryer pagou de novo tudo o que tinha coletado entre 21 e 28/09."""
     with patch(
         "app.services.indicators.pytrends.pytrends_stored_related",
-        AsyncMock(return_value=[_relacionada(900, dias=3)]),
+        AsyncMock(return_value=[_relacionada(900, dias=45)]),
     ):
         assert await pytrends_indicators.related_rows_exist(["air fryer"], "ES") is True
 
