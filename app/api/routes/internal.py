@@ -239,8 +239,8 @@ async def read_report(request_id: uuid.UUID, session: AsyncSession = Depends(get
 
     analysis_request = await _load(session, request_id)
     breakdown = await _load_breakdown(session, analysis_request)
-    brand, category_title = await _identidade(session, analysis_request)
-    return _status_payload(analysis_request, breakdown, brand, category_title)
+    brand, category_title, product = await _identidade(session, analysis_request)
+    return _status_payload(analysis_request, breakdown, brand, category_title, product)
 
 
 @router.patch(

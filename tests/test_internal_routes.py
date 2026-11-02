@@ -590,3 +590,27 @@ def test_running_without_a_body_still_works(client: TestClient) -> None:
     ]
 
     assert client.post(f"/internal/analyses/{request_id}/running", headers=_HEADERS).json()["status"] == "running"
+
+
+def test_the_report_names_the_brand_the_analysis_was_for(client: TestClient) -> None:
+    """A marca é do pedido, não da entidade: desde a partição de 24/09/2026 o
+    produto é gravado sem marca. Lida da entidade, "Tomatin whisky" chegava ao
+    relatório como "whisky" (02/11/2026)."""
+    request_id = _registrar(
+        client,
+        {
+            "countries": ["ESP"],
+            "canonical_title": f"whisky {uuid.uuid4().hex[:6]}",
+            "brand": "Tomatin",
+            "category": "Spirits",
+            "estimated_price": 30.0,
+            "price_currency": "USD",
+        },
+        headers=_HEADERS,
+    ).json()["request_id"]
+
+    relatorio = client.get(f"/internal/analyses/{request_id}/report", headers=_HEADERS).json()
+
+    assert relatorio["brand"] == "Tomatin"
+    assert relatorio["product"]["estimated_price"] == 30.0
+    assert relatorio["product"]["price_currency"] == "USD"

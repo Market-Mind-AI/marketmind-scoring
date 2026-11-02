@@ -13,7 +13,7 @@ from app.db.models.brand import Brand
 from app.db.session import async_session_factory, get_session
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.product_repository import ProductRepository
-from app.schemas.analyze import AnalysisStatusResponse, AnalyzeAcceptedResponse, AnalyzeRequest
+from app.schemas.analyze import AnalysisStatusResponse, AnalyzeAcceptedResponse, AnalyzeRequest, ProductFacts
 from app.services.analysis_service import AnalysisService
 from app.services.presentation import display_order, headline_country, present_rows
 from app.utils.language import analysis_language
@@ -64,27 +64,42 @@ async def _load_breakdown(session: AsyncSession, analysis_request: AnalysisReque
     )
 
 
-async def _identidade(session: AsyncSession, analysis_request: AnalysisRequest) -> tuple[str | None, str | None]:
-    """(marca, título da categoria) da entidade analisada.
+async def _identidade(
+    session: AsyncSession, analysis_request: AnalysisRequest
+) -> tuple[str | None, str | None, ProductFacts | None]:
+    """(marca, título da categoria, o que se sabe do produto) da análise.
 
-    O `canonical_title` gravado na análise já carrega a marca ("Cardhu single
-    malt Scotch whisky"), mas o relatório precisa das duas partes separadas —
-    para exibir "Cardhu · single malt Scotch whisky" e para dar nome ao sinal de
-    contexto `category_volume_score` do breakdown — e fatiar string para obter
-    isso seria frágil. Lido da entidade, que é onde a partição vive.
+    A marca é a DA ANÁLISE. Desde a partição de 24/09/2026 a entidade é o
+    produto sem marca e a marca fica no pedido (`brand_name`); lida da
+    entidade ela vinha nula, e "Tomatin whisky" aparecia no relatório só como
+    "whisky" (02/11/2026). A da entidade fica como último recurso, para
+    produtos de antes da partição.
+
+    O resto — categoria, preço, atributos — é o que a identificação gravou do
+    produto, para o relatório dizer o que exatamente foi analisado.
     """
     if analysis_request.entity_key is None:
-        return None, None
+        return analysis_request.brand_name, None, None
     repo = ProductRepository(session)
     entity = await repo.get_by_entity_key(analysis_request.entity_key)
     if entity is None:
-        return None, None
-    marca = await repo.get_brand(entity.brand_key)
+        return analysis_request.brand_name, None, None
+    marca = analysis_request.brand_name
+    if marca is None and entity.brand_key is not None:
+        da_entidade = await repo.get_brand(entity.brand_key)
+        marca = da_entidade.name if da_entidade is not None else None
     familia = await repo.get_by_entity_key(entity.generic_entity_key) if entity.generic_entity_key else None
-    return (
-        marca.name if marca is not None else None,
-        familia.canonical_title if familia is not None else None,
+    # O preço do pedido é o que a pessoa confirmou na revisão; o da entidade,
+    # o que a identificação estimou.
+    preco = analysis_request.estimated_price if analysis_request.estimated_price is not None else entity.estimated_price
+    moeda = analysis_request.price_currency if analysis_request.estimated_price is not None else entity.price_currency
+    produto = ProductFacts(
+        category=entity.category,
+        estimated_price=float(preco) if preco is not None else None,
+        price_currency=moeda,
+        defining_attributes=list(entity.defining_attributes or []),
     )
+    return marca, familia.canonical_title if familia is not None else None, produto
 
 
 def _status_payload(
@@ -92,6 +107,7 @@ def _status_payload(
     breakdown: dict[str, Any] | None,
     brand: str | None = None,
     category_title: str | None = None,
+    product: ProductFacts | None = None,
 ) -> AnalysisStatusResponse:
     pedidos = list(analysis_request.countries or [])
     idioma = analysis_language(analysis_request.language)
@@ -107,6 +123,7 @@ def _status_payload(
         canonical_title=analysis_request.canonical_title,
         brand=brand,
         category_title=category_title,
+        product=product,
         user_prompt=analysis_request.user_prompt,
         result=result,
         display_order=display_order(result, pedidos) if result else [],
@@ -176,8 +193,8 @@ async def get_analysis(
     response.headers["Cache-Control"] = "no-store"
 
     breakdown = await _load_breakdown(session, analysis_request)
-    brand, category_title = await _identidade(session, analysis_request)
-    return _status_payload(analysis_request, breakdown, brand, category_title)
+    brand, category_title, product = await _identidade(session, analysis_request)
+    return _status_payload(analysis_request, breakdown, brand, category_title, product)
 
 
 @router.get(

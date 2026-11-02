@@ -56,6 +56,13 @@ class AnalyzeAcceptedResponse(BaseModel):
     status: str  # "pending"
 
 
+class ProductFacts(BaseModel):
+    category: str | None = None
+    estimated_price: float | None = None
+    price_currency: str | None = None
+    defining_attributes: list[str] = []
+
+
 class AnalysisStatusResponse(BaseModel):
     request_id: uuid.UUID
     status: str  # "pending" | "running" | "done" | "failed"
@@ -70,6 +77,9 @@ class AnalysisStatusResponse(BaseModel):
     canonical_title: str | None
     brand: str | None = None
     category_title: str | None = None
+    # O que a identificação gravou do produto, para o cabeçalho do relatório
+    # dizer o que exatamente foi analisado. Nulo sem produto resolvido.
+    product: ProductFacts | None = None
     user_prompt: str | None = None  # the buyer's free-text prompt/question, echoed back for the UI
     # Cada linha traz `requested`, `is_champion`, `mos_display`,
     # `mos_band_key` e `mos_band_label` (app/services/presentation.py).
