@@ -36,10 +36,19 @@ def log_claude_usage(model: str, site: str | None, raw_usage: Any) -> None:
 
 
 class ClaudeProvider(LLMProvider):
-    def __init__(self, model: str, api_key: str, workspace_id: str | None = None, cache_ttl: str = "1h") -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        workspace_id: str | None = None,
+        cache_ttl: str = "1h",
+        effort: str | None = None,
+    ) -> None:
         super().__init__(model)
         # See settings.llm_prompt_cache_ttl for why an hour is the default.
         self._cache_control = {"type": "ephemeral", "ttl": cache_ttl}
+        # Per-site effort (settings.<site>_llm_effort); None sends nothing.
+        self._effort = effort
         if not api_key:
             raise LLMError("ANTHROPIC_API_KEY is not configured (required for the 'claude' LLM provider)")
         # An organisation-scoped key has to say which workspace to bill and
@@ -81,6 +90,8 @@ class ClaudeProvider(LLMProvider):
             "max_tokens": 16000,
             "messages": [{"role": "user", "content": content}],
         }
+        if self._effort:
+            kwargs["output_config"] = {"effort": self._effort}
         # The stable instructions carry the cache breakpoint; the per-request
         # tail goes after it. Every call here is one-shot and ends in unique
         # content (the product, the evidence packet, a photo), so the automatic

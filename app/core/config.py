@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     reference_market_llm_model: str = "claude-opus-5"
     explanation_llm_provider: str = "claude"
     explanation_llm_model: str = "claude-opus-5"
+    # Effort per site (Claude only): low | medium | high | xhigh | max. Empty
+    # sends nothing, which on Opus 5 means adaptive thinking at `high` — the
+    # behaviour until 2026-11-02. Lower effort thinks less before answering,
+    # which is most of the wait on these one-shot calls.
+    vision_llm_effort: str = ""
+    enrichment_llm_effort: str = ""
+    reference_market_llm_effort: str = ""
+    explanation_llm_effort: str = ""
+    catalog_match_llm_effort: str = ""
     #   - catalog_match: decide se o texto consultado é o mesmo produto de
     #     alguma entidade do catálogo, quando alias exato e trigram falham.
     #     Substituiu o passo de embedding (2026-08-14). Medido contra os 89

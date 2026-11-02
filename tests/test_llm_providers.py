@@ -144,3 +144,17 @@ async def test_a_text_sink_receives_the_text_while_it_is_written() -> None:
 
     assert seen == ["Spain ", "Spain leads."]
     assert answer == "Spain leads."
+
+
+async def test_an_effort_goes_out_only_when_the_site_sets_one() -> None:
+    """Sem esforço configurado nada é enviado — o Opus 5 fica no padrão, como
+    antes de 02/11/2026. Com esforço, vai em `output_config`, onde a API o lê."""
+    sem = ClaudeProvider("claude-opus-5", "sk-ant-test")
+    sem._client.messages = _Messages()  # type: ignore[assignment]
+    await sem.complete(user="Explain")
+    assert "output_config" not in sem._client.messages.sent
+
+    com = ClaudeProvider("claude-opus-5", "sk-ant-test", effort="low")
+    com._client.messages = _Messages()  # type: ignore[assignment]
+    await com.complete(user="Explain")
+    assert com._client.messages.sent["output_config"] == {"effort": "low"}

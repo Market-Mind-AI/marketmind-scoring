@@ -13,14 +13,14 @@ from app.services.llm.traced import TracedProvider
 def resolve_llm(*, provider: str, model: str, site: str | None = None) -> LLMProvider:
     """``site`` names the call site in the trace; without it, or without
     tracing configured, the bare provider comes back."""
-    resolved = _build(provider, model)
+    resolved = _build(provider, model, getattr(settings, f"{site}_llm_effort", "") if site else "")
     resolved.site = site
     if site and observability.tracing_enabled():
         return TracedProvider(resolved, site)
     return resolved
 
 
-def _build(provider: str, model: str) -> LLMProvider:
+def _build(provider: str, model: str, effort: str = "") -> LLMProvider:
     code = provider.strip().lower()
     if code == "claude":
         return ClaudeProvider(
@@ -28,6 +28,7 @@ def _build(provider: str, model: str) -> LLMProvider:
             settings.anthropic_api_key,
             settings.anthropic_workspace_id,
             cache_ttl=settings.llm_prompt_cache_ttl,
+            effort=effort or None,
         )
     if code == "gpt":
         return GptProvider(model, settings.openai_api_key)
