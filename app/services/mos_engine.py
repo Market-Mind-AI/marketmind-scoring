@@ -43,6 +43,9 @@ class MosEngine:
         self._country_repo = CountryRepository(session)
         self._vector_builder = CountryVectorBuilder(session)
         self._explanation_repo = MetricExplanationRepository(session)
+        # Every country's vector for one period, read once per compute_mos —
+        # see _classical_comparison.
+        self._populacao: tuple[str, list[tuple[str, dict[IndicatorDimension, float]]]] | None = None
 
     async def compute_mos(
         self,
@@ -56,6 +59,9 @@ class MosEngine:
         if entity is None:
             raise EntityNotFoundError(f"Entity {entity_key} not found")
 
+        # Read afresh on every call: the indicators behind it may have been
+        # computed since the last one.
+        self._populacao = None
         results = [
             await self._compute_one(entity_key, country_iso3, period_key, brand_key)
             for country_iso3 in countries
@@ -179,13 +185,11 @@ class MosEngine:
         country/period, using pymcdm's relative ideal/anti-ideal derived from
         the reference-country population. Never raises — any failure just
         means no comparison data this time (never blocks the real MOS)."""
-        countries = await self._country_repo.list_all()
         rows: list[list[float]] = []
         target_index: int | None = None
-        for country in countries:
-            if country.iso3 == country_iso3:
+        for iso3, vector in await self._population(period_key):
+            if iso3 == country_iso3:
                 continue
-            vector = await self._vector_builder.full_vector(country.iso3, period_key)
             if all(d in vector for d in _ALL_DIMENSIONS):
                 rows.append([vector[d] for d in _ALL_DIMENSIONS])
 
@@ -206,3 +210,19 @@ class MosEngine:
 
         library_topsis = scores[target_index]
         return library_topsis, library_topsis * 100
+
+    async def _population(self, period_key: str) -> list[tuple[str, dict[IndicatorDimension, float]]]:
+        """Every country's vector for the period, in list_all order.
+
+        It is the same population for every country of one compute_mos call —
+        only the country being scored is left out of it — and it was being
+        rebuilt for each of them: two queries per country in the table, for
+        every country scored. On 02/11/2026 that was 7.6 of the 16 seconds
+        the champion's candidates took to score."""
+        if self._populacao is None or self._populacao[0] != period_key:
+            countries = await self._country_repo.list_all()
+            self._populacao = (
+                period_key,
+                [(c.iso3, await self._vector_builder.full_vector(c.iso3, period_key)) for c in countries],
+            )
+        return self._populacao[1]
